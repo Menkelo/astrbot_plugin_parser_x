@@ -27,6 +27,7 @@ class CacheCleaner:
         self.timezone = (
             zoneinfo.ZoneInfo(tz) if tz else zoneinfo.ZoneInfo("Asia/Shanghai")
         )
+
         self.scheduler = AsyncIOScheduler(timezone=self.timezone)
         self.scheduler.start()
 
@@ -36,12 +37,17 @@ class CacheCleaner:
 
     def register_task(self):
         try:
-            self.trigger = CronTrigger.from_crontab(self.clean_cron)
+            self.trigger = CronTrigger.from_crontab(
+                self.clean_cron,
+                timezone=self.timezone,
+            )
             self.scheduler.add_job(
                 func=self._clean_plugin_cache,
                 trigger=self.trigger,
                 name=f"{self.JOBNAME}_scheduler",
                 max_instances=1,
+                coalesce=True,
+                misfire_grace_time=60,
             )
         except Exception as e:
             logger.error(f"[{self.JOBNAME}] Cron 格式错误：{e}")
@@ -50,12 +56,20 @@ class CacheCleaner:
         """删除并重建缓存目录"""
         loop = asyncio.get_running_loop()
         try:
-            await loop.run_in_executor(None, shutil.rmtree, self.cache_dir)
+            await loop.run_in_executor(
+                None,
+                lambda: shutil.rmtree(self.cache_dir, ignore_errors=True),
+            )
             self.cache_dir.mkdir(parents=True, exist_ok=True)
             logger.info("Cache directory cleaned and recreated.")
         except Exception:
             logger.exception("Error while cleaning cache directory.")
 
     async def stop(self):
-        self.scheduler.remove_all_jobs()
+        try:
+            self.scheduler.remove_all_jobs()
+            if self.scheduler.running:
+                self.scheduler.shutdown(wait=False)
+        except Exception:
+            logger.exception(f"[{self.JOBNAME}] 停止时发生异常")
         logger.info(f"[{self.JOBNAME}] 已停止")

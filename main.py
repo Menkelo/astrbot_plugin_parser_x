@@ -3,7 +3,6 @@ nest_asyncio.apply()
 
 import asyncio
 import re
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from astrbot.api import logger
@@ -56,7 +55,6 @@ class ParserPlugin(Star):
         super().__init__(context)
         self.context = context
         self.config = config
-        self._executor = ThreadPoolExecutor(max_workers=2)
 
         self.data_dir: Path = StarTools.get_data_dir("astrbot_plugin_r_parser")
         config["data_dir"] = str(self.data_dir)
@@ -82,7 +80,6 @@ class ParserPlugin(Star):
         for parser in unique_parsers:
             await parser.close_session()
         await self.cleaner.stop()
-        self._executor.shutdown(wait=False)
 
     def _register_parser(self):
         all_subclass = BaseParser.get_all_subclass()
@@ -117,6 +114,8 @@ class ParserPlugin(Star):
             return cont, None, None
         except DownloadException as e:
             return cont, None, f"[下载失败: {e}]"
+        except ParseException as e:
+            return cont, None, f"[{e}]"
         except Exception as e:
             logger.error(f"下载未知错误: {e}")
             return cont, None, "[下载错误]"
@@ -174,10 +173,12 @@ class ParserPlugin(Star):
             segs = []
             for cont in result.contents:
                 path, error = path_map.get(id(cont), (None, None))
+
                 if error:
                     if show_download_fail_tip:
-                        segs.append(Plain(f"\n{error}"))
+                        segs.append(Plain(error.strip()))
                     continue
+
                 if path:
                     if seg := self._convert_to_seg(cont, path):
                         segs.append(seg)
@@ -189,7 +190,6 @@ class ParserPlugin(Star):
                     await event.send(event.plain_result(msg.strip()))
                 return
 
-            # 关键：允许 parser 强制直发媒体（用于空间渲染图）
             force_direct_media = bool(result.extra.get("force_direct_media", False))
             if force_direct_media:
                 for seg in segs:
@@ -197,6 +197,7 @@ class ParserPlugin(Star):
                 return
 
             has_video = any(isinstance(c, (VideoContent, DynamicContent)) for c in result.contents)
+
             if has_video:
                 media_count = sum(1 for s in segs if isinstance(s, (Video, Image, File, Record)))
                 if media_count >= 2:
@@ -237,7 +238,6 @@ class ParserPlugin(Star):
                             event.plain_result(f"⚠️ 媒体发送失败\n🔗 原链接: {result.url or '未知'}")
                         )
             else:
-                # 关键：非视频场景，单媒体直发，避免默认转发
                 if len(segs) == 1:
                     await event.send(event.chain_result([segs[0]]))
                     return
@@ -251,9 +251,11 @@ class ParserPlugin(Star):
         async def process_comment_content():
             if not result.comment_contents:
                 return
+
             tasks = [self._download_content(c) for c in result.comment_contents]
             download_results = await asyncio.gather(*tasks)
             path_map = {id(c): (p, err) for c, p, err in download_results}
+
             segs = []
             for cont in result.comment_contents:
                 path, _ = path_map.get(id(cont), (None, None))
@@ -317,23 +319,27 @@ class ParserPlugin(Star):
         if not matches:
             return
 
-        if self.config.get("arbiter", True) and isinstance(event, AiocqhttpMessageEvent):
+        if isinstance(event, AiocqhttpMessageEvent):
             if hasattr(event.message_obj, "message_id"):
                 asyncio.create_task(
                     self.arbiter.notify(event.bot, event.message_obj.message_id)
                 )
 
-        matches.sort(key=lambda x: x[0])
-        seen = set()
+        matches.sort(key=lambda x: (x[0], -len(x[1])))
+        processed_parsers: set[int] = set()
 
         for _, keyword, searched in matches:
-            dedup_key = (keyword, searched.group(0), searched.start())
-            if dedup_key in seen:
+            parser = self.parser_map.get(keyword)
+            if parser is None:
                 continue
-            seen.add(dedup_key)
+
+            pid = id(parser)
+            if pid in processed_parsers:
+                continue
+            processed_parsers.add(pid)
 
             try:
-                parse_res = await self.parser_map[keyword].parse(keyword, searched)
+                parse_res = await parser.parse(keyword, searched)
                 await self._send_parse_result(event, parse_res)
             except SizeLimitException as e:
                 await event.send(event.plain_result(f"⚠️ {e}"))

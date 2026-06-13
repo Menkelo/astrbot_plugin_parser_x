@@ -5,9 +5,9 @@
         "type": "list",
         "default": []
     },
-    "arbiter": {
-        "description": "响应提示",
-        "hint": "开启后，当 Bot 识别到链接并开始解析时，会对消息贴表情（仅 OneBot V11 有效），作为视觉反馈",
+    "bili_comment": {
+        "description": "B站评论区",
+        "hint": "开启后解析B站视频时会额外生成评论区截图卡片；关闭后只发送视频内容",
         "type": "bool",
         "default": true
     },
@@ -36,6 +36,17 @@
                     "step": 10
                 },
                 "default": 90
+            },
+            "video_codec": {
+                "description": "视频编码选择",
+                "hint": "影响B站视频流选择。auto：智能选择较优编码；hevc：推荐，体积较小，现代设备支持较好；avc：兼容性最好，几乎所有设备可播放，但文件较大。",
+                "type": "string",
+                "options": [
+                    "auto",
+                    "hevc",
+                    "avc"
+                ],
+                "default": "hevc"
             }
         }
     },

@@ -92,12 +92,12 @@ class KuaiShouParser(BaseParser):
             title = "快手视频"
             if match := re.search(r'"caption":"([^"]+)"', response_text):
                 try: title = match.group(1).encode('utf-8').decode('unicode_escape')
-                except: pass
+                except Exception: pass
             
             author = "快手用户"
             if match := re.search(r'"userName":"([^"]+)"', response_text):
                 try: author = match.group(1).encode('utf-8').decode('unicode_escape')
-                except: pass
+                except Exception: pass
                 
             # 提纯：手动设置为 None
             cover = None

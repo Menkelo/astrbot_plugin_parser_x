@@ -1,5 +1,6 @@
 import json
 import re
+import time
 from typing import Any, ClassVar
 
 from msgspec import Struct, convert, field
@@ -12,20 +13,30 @@ from .base import BaseParser, ParseException, Platform, handle
 
 
 class XiaoHongShuParser(BaseParser):
-    # 平台信息
     platform: ClassVar[Platform] = Platform(name="xiaohongshu", display_name="小红书")
 
     def __init__(self, config: AstrBotConfig, downloader: Downloader):
         super().__init__(config, downloader)
+
+        self._page_cache_ttl = int(config.get("xhs_cache_ttl", 120))
+        self._page_cache: dict[str, tuple[float, str, str]] = {}
+        self._redirect_cache: dict[str, tuple[float, str]] = {}
+
         explore_headers = {
             "accept": (
                 "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,"
                 "image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"
-            )
+            ),
+            "referer": "https://www.xiaohongshu.com/",
+            "sec-fetch-site": "same-origin",
+            "sec-fetch-mode": "navigate",
+            "sec-fetch-dest": "document",
         }
         self.headers.update(explore_headers)
+
         discovery_headers = {
             "origin": "https://www.xiaohongshu.com",
+            "referer": "https://www.xiaohongshu.com/",
             "x-requested-with": "XMLHttpRequest",
             "sec-fetch-site": "same-origin",
             "sec-fetch-mode": "cors",
@@ -33,129 +44,239 @@ class XiaoHongShuParser(BaseParser):
         }
         self.ios_headers.update(discovery_headers)
 
+    # region cache
+
+    def _cache_get_page(self, url: str) -> tuple[str, str] | None:
+        item = self._page_cache.get(url)
+        if not item:
+            return None
+
+        ts, final_url, html = item
+        if time.time() - ts > self._page_cache_ttl:
+            self._page_cache.pop(url, None)
+            return None
+
+        return final_url, html
+
+    def _cache_set_page(self, url: str, final_url: str, html: str):
+        self._page_cache[url] = (time.time(), final_url, html)
+        # 按插入顺序淘汰最旧项，避免一次性 clear 造成缓存抖动（命中率骤降）
+        while len(self._page_cache) > 128:
+            self._page_cache.pop(next(iter(self._page_cache)), None)
+
+    def _cache_get_redirect(self, url: str) -> str | None:
+        item = self._redirect_cache.get(url)
+        if not item:
+            return None
+
+        ts, final_url = item
+        if time.time() - ts > self._page_cache_ttl:
+            self._redirect_cache.pop(url, None)
+            return None
+
+        return final_url
+
+    def _cache_set_redirect(self, url: str, final_url: str):
+        self._redirect_cache[url] = (time.time(), final_url)
+        while len(self._redirect_cache) > 256:
+            self._redirect_cache.pop(next(iter(self._redirect_cache)), None)
+
+    # endregion
+
+    @staticmethod
+    def _uniq_urls(urls: list[str]) -> list[str]:
+        seen = set()
+        out = []
+
+        for u in urls:
+            if not isinstance(u, str) or not u:
+                continue
+
+            u = u.replace("&amp;", "&")
+            if u not in seen:
+                seen.add(u)
+                out.append(u)
+
+        return out
+
+    async def _fetch_html(
+        self,
+        url: str,
+        *,
+        headers: dict[str, str],
+        timeout: int = 10,
+    ) -> tuple[str, str]:
+        cached = self._cache_get_page(url)
+        if cached:
+            return cached
+
+        resp = await self.http_get(
+            url,
+            headers=headers,
+            allow_redirects=True,
+            timeout=timeout,
+        )
+
+        html = resp.text or ""
+        final_url = str(resp.url)
+
+        if resp.status_code >= 400:
+            raise ParseException(f"小红书页面请求失败: HTTP {resp.status_code}")
+
+        if not html:
+            raise ParseException("小红书页面为空")
+
+        self._cache_set_page(url, final_url, html)
+        return final_url, html
+
     @handle("xhslink.com", r"xhslink\.com/[A-Za-z0-9._?%&+=/#@-]*")
     async def _parse_short_link(self, searched: re.Match[str]):
         url = f"https://{searched.group(0)}"
-        return await self.parse_with_redirect(url, self.ios_headers)
+
+        final_url = self._cache_get_redirect(url)
+        if not final_url:
+            final_url = await self.get_final_url(url, headers=self.ios_headers)
+            self._cache_set_redirect(url, final_url)
+
+        if final_url == url:
+            raise ParseException(f"小红书短链跳转失败: {url}")
+
+        keyword, matched = self.search_url(final_url)
+        return await self.parse(keyword, matched)
 
     @handle(
         "hongshu.com/explore",
-        r"explore/(?P<xhs_id>[0-9a-zA-Z]+)\?[A-Za-z0-9._%&+=/#@-]*",
+        r"explore/(?P<xhs_id>[0-9a-zA-Z]+)(?:\?[A-Za-z0-9._%&+=/#@-]*)?",
     )
     async def _parse_explore(self, searched: re.Match[str]):
-        url = f"https://www.xiaohongshu.com/{searched.group(0)}"
+        route = searched.group(0)
+        url = f"https://www.xiaohongshu.com/{route}"
         xhs_id = searched.group("xhs_id")
         return await self.parse_explore(url, xhs_id)
 
     @handle(
         "hongshu.com/discovery/item/",
-        r"discovery/item/(?P<xhs_id>[0-9a-zA-Z]+)\?[A-Za-z0-9._%&+=/#@-]*",
+        r"discovery/item/(?P<xhs_id>[0-9a-zA-Z]+)(?:\?[A-Za-z0-9._%&+=/#@-]*)?",
     )
     async def _parse_discovery(self, searched: re.Match[str]):
         route = searched.group(0)
-        explore_route = route.replace("discovery/item", "explore", 1)
         xhs_id = searched.group("xhs_id")
 
+        # discovery 优先转 explore，通常更稳更快
+        explore_route = route.replace("discovery/item", "explore", 1)
+        explore_url = f"https://www.xiaohongshu.com/{explore_route}"
+
         try:
-            return await self.parse_explore(f"https://www.xiaohongshu.com/{explore_route}", xhs_id)
-        except ParseException:
-            logger.debug("parse_explore failed, fallback to parse_discovery")
-            return await self.parse_discovery(f"https://www.xiaohongshu.com/{route}", xhs_id)
+            return await self.parse_explore(explore_url, xhs_id)
+        except ParseException as e:
+            logger.debug(f"parse_explore failed, fallback to discovery: {e}")
+            return await self.parse_discovery(
+                f"https://www.xiaohongshu.com/{route}",
+                xhs_id,
+            )
 
     async def parse_explore(self, url: str, xhs_id: str):
-        # 修复：curl_cffi get
-        resp = await self.client.get(url, headers=self.headers)
-        html = resp.text
-        logger.debug(f"url: {resp.url} | status: {resp.status_code}")
+        final_url, html = await self._fetch_html(
+            url,
+            headers=self.headers,
+            timeout=10,
+        )
+        logger.debug(f"[XHS] explore url: {final_url}")
 
         json_obj = self._extract_initial_state_json(html)
 
-        note_data = json_obj.get("note", {}).get("noteDetailMap", {}).get(xhs_id, {}).get("note", {})
+        note_data = (
+            json_obj.get("note", {})
+            .get("noteDetailMap", {})
+            .get(xhs_id, {})
+            .get("note", {})
+        )
+
+        if not note_data:
+            # 有时候 key 不是 xhs_id，直接取第一个 note
+            detail_map = json_obj.get("note", {}).get("noteDetailMap", {})
+            if isinstance(detail_map, dict) and detail_map:
+                first_key = next(iter(detail_map))
+                note_data = detail_map.get(first_key, {}).get("note", {})
+
         if not note_data:
             raise ParseException("can't find note detail in json_obj")
 
-        return self._process_explore_data(note_data)
+        return self._process_explore_data(note_data, final_url)
 
     async def parse_discovery(self, url: str, xhs_id: str | None = None):
-        # 修复：curl_cffi get
-        resp = await self.client.get(
+        final_url, html = await self._fetch_html(
             url,
             headers=self.ios_headers,
-            allow_redirects=True,
+            timeout=10,
         )
-        html = resp.text
+        logger.debug(f"[XHS] discovery url: {final_url}")
 
         json_obj = self._extract_initial_state_json(html)
-        
-        # 1. Try noteData (Discovery style)
+
         note_data = json_obj.get("noteData", {}).get("data", {}).get("noteData", {})
         if note_data:
             preload_data = json_obj.get("noteData", {}).get("normalNotePreloadData", {})
-            return self._process_discovery_data(note_data, preload_data)
+            return self._process_discovery_data(note_data, preload_data, final_url)
 
-        # 2. Try note.noteDetailMap (Explore style)
         note_container = json_obj.get("note", {})
         detail_map = note_container.get("noteDetailMap", {})
-        
-        # 2.1 Try exact ID
+
         if xhs_id:
             note_data = detail_map.get(xhs_id, {}).get("note", {})
             if note_data:
-                return self._process_explore_data(note_data)
-        
-        # 2.2 Try first item in detailMap
+                return self._process_explore_data(note_data, final_url)
+
         if detail_map:
             first_key = next(iter(detail_map))
             note_data = detail_map[first_key].get("note", {})
             if note_data:
-                logger.debug(f"Found note data in noteDetailMap using key: {first_key}")
-                return self._process_explore_data(note_data)
+                return self._process_explore_data(note_data, final_url)
 
-        # 3. Try note.firstNote
-        note_data = note_container.get("firstNote", {})
+        note_data = note_container.get("firstNote", {}) or note_container.get("note", {})
         if note_data:
-             return self._process_explore_data(note_data)
+            return self._process_explore_data(note_data, final_url)
 
-        # 4. Try note.note
-        note_data = note_container.get("note", {})
-        if note_data:
-             return self._process_explore_data(note_data)
-
-        # Debug logging
         logger.warning(f"XHS Parse Failed. Keys in json_obj: {list(json_obj.keys())}")
-        if "note" in json_obj:
-            logger.warning(f"Keys in json_obj['note']: {list(json_obj['note'].keys())}")
-            
         raise ParseException("解析异常: can't find noteData in noteData.data or noteDetailMap")
 
-    def _process_explore_data(self, note_data: dict):
-        """处理 Explore 风格的数据结构"""
+    def _process_explore_data(self, note_data: dict, final_url: str | None = None):
         class Image(Struct):
-            urlDefault: str
+            urlDefault: str | None = None
+            urlPre: str | None = None
+            url: str | None = None
 
         class User(Struct):
             nickname: str
-            avatar: str
+            avatar: str | None = None
 
         class NoteDetail(Struct):
+            # msgspec 限制：必填字段必须在有默认值字段之前
             type: str
-            title: str
-            desc: str
             user: User
+
+            title: str = ""
+            desc: str = ""
             imageList: list[Image] = field(default_factory=list)
             video: Video | None = None
+            time: int | None = None
 
             @property
             def nickname(self) -> str:
                 return self.user.nickname
 
             @property
-            def avatar_url(self) -> str:
+            def avatar_url(self) -> str | None:
                 return self.user.avatar
 
             @property
             def image_urls(self) -> list[str]:
-                return [item.urlDefault for item in self.imageList]
+                urls = []
+                for item in self.imageList:
+                    u = item.urlDefault or item.urlPre or item.url
+                    if u:
+                        urls.append(u)
+                return XiaoHongShuParser._uniq_urls(urls)
 
             @property
             def video_url(self) -> str | None:
@@ -166,6 +287,7 @@ class XiaoHongShuParser(BaseParser):
         note_detail = convert(note_data, type=NoteDetail)
 
         contents = []
+
         if video_url := note_detail.video_url:
             cover_url = note_detail.image_urls[0] if note_detail.image_urls else None
             contents.append(self.create_video_content(video_url, cover_url))
@@ -180,31 +302,45 @@ class XiaoHongShuParser(BaseParser):
             text=note_detail.desc,
             author=author,
             contents=contents,
+            timestamp=note_detail.time // 1000 if note_detail.time else None,
+            url=final_url,
         )
 
-    def _process_discovery_data(self, note_data: dict, preload_data: dict):
-        """处理 Discovery 风格的数据结构"""
+    def _process_discovery_data(
+        self,
+        note_data: dict,
+        preload_data: dict,
+        final_url: str | None = None,
+    ):
         class Image(Struct):
-            url: str
+            url: str | None = None
             urlSizeLarge: str | None = None
+            urlDefault: str | None = None
 
         class User(Struct):
             nickName: str
-            avatar: str
+            avatar: str | None = None
 
         class NoteData(Struct):
+            # msgspec 限制：必填字段必须在有默认值字段之前
             type: str
-            title: str
-            desc: str
             user: User
-            time: int
-            lastUpdateTime: int
-            imageList: list[Image] = []
+
+            title: str = ""
+            desc: str = ""
+            time: int = 0
+            lastUpdateTime: int = 0
+            imageList: list[Image] = field(default_factory=list)
             video: Video | None = None
 
             @property
             def image_urls(self) -> list[str]:
-                return [item.url for item in self.imageList]
+                urls = []
+                for item in self.imageList:
+                    u = item.urlSizeLarge or item.urlDefault or item.url
+                    if u:
+                        urls.append(u)
+                return XiaoHongShuParser._uniq_urls(urls)
 
             @property
             def video_url(self) -> str | None:
@@ -213,24 +349,37 @@ class XiaoHongShuParser(BaseParser):
                 return self.video.video_url
 
         class NormalNotePreloadData(Struct):
-            title: str
-            desc: str
-            imagesList: list[Image] = []
+            title: str = ""
+            desc: str = ""
+            imagesList: list[Image] = field(default_factory=list)
 
             @property
             def image_urls(self) -> list[str]:
-                return [item.urlSizeLarge or item.url for item in self.imagesList]
+                urls = []
+                for item in self.imagesList:
+                    u = item.urlSizeLarge or item.urlDefault or item.url
+                    if u:
+                        urls.append(u)
+                return XiaoHongShuParser._uniq_urls(urls)
 
         note_data_obj = convert(note_data, type=NoteData)
 
         contents = []
+
         if video_url := note_data_obj.video_url:
             if preload_data:
                 preload_obj = convert(preload_data, type=NormalNotePreloadData)
                 img_urls = preload_obj.image_urls
             else:
                 img_urls = note_data_obj.image_urls
-            contents.append(self.create_video_content(video_url, img_urls[0] if img_urls else None))
+
+            contents.append(
+                self.create_video_content(
+                    video_url,
+                    img_urls[0] if img_urls else None,
+                )
+            )
+
         elif img_urls := note_data_obj.image_urls:
             contents.extend(self.create_image_contents(img_urls))
 
@@ -239,12 +388,14 @@ class XiaoHongShuParser(BaseParser):
             author=self.create_author(note_data_obj.user.nickName, note_data_obj.user.avatar),
             contents=contents,
             text=note_data_obj.desc,
-            timestamp=note_data_obj.time // 1000,
+            timestamp=note_data_obj.time // 1000 if note_data_obj.time else None,
+            url=final_url,
         )
 
     def _extract_initial_state_json(self, html: str) -> dict[str, Any]:
         pattern = r"window\.__INITIAL_STATE__=(.*?)</script>"
-        matched = re.search(pattern, html)
+        matched = re.search(pattern, html, re.DOTALL)
+
         if not matched:
             raise ParseException("小红书分享链接失效或内容已删除")
 
@@ -266,15 +417,100 @@ class Media(Struct):
 class Video(Struct):
     media: Media
 
+    @staticmethod
+    def _score_video_url(url: str) -> tuple[int, int]:
+        """
+        分数越小越优先。
+        优先低清/轻量 URL，避免默认拿 masterUrl / m3u8 拖慢。
+        """
+        u = url.lower()
+
+        quality_score = 50
+
+        if any(k in u for k in ("360", "ld", "low", "lowest")):
+            quality_score = 10
+        elif any(k in u for k in ("480", "sd", "standard")):
+            quality_score = 20
+        elif any(k in u for k in ("540",)):
+            quality_score = 25
+        elif any(k in u for k in ("720", "hd")):
+            quality_score = 40
+        elif any(k in u for k in ("1080", "fhd", "uhd", "2k", "4k")):
+            quality_score = 90
+
+        # masterUrl / m3u8 作为最后选择
+        type_score = 0
+        if "master" in u or ".m3u8" in u:
+            type_score = 50
+
+        return quality_score, type_score
+
+    @classmethod
+    def _collect_urls_from_stream_item(cls, item: dict[str, Any]) -> list[str]:
+        urls: list[str] = []
+
+        # 优先收集轻量/直链类字段
+        for key in (
+            "url",
+            "playUrl",
+            "play_url",
+            "streamUrl",
+            "stream_url",
+            "mainUrl",
+            "main_url",
+        ):
+            val = item.get(key)
+            if isinstance(val, str) and val:
+                urls.append(val)
+
+        # backup 也可能是直接可播地址
+        for key in ("backupUrls", "backup_urls", "backupUrl", "backup_url"):
+            val = item.get(key)
+            if isinstance(val, list):
+                for u in val:
+                    if isinstance(u, str) and u:
+                        urls.append(u)
+            elif isinstance(val, str) and val:
+                urls.append(val)
+
+        # 最后才放 masterUrl
+        val = item.get("masterUrl")
+        if isinstance(val, str) and val:
+            urls.append(val)
+
+        seen = set()
+        uniq = []
+        for u in urls:
+            if u not in seen:
+                seen.add(u)
+                uniq.append(u)
+
+        uniq.sort(key=cls._score_video_url)
+        return uniq
+
     @property
     def video_url(self) -> str | None:
         stream = self.media.stream
-        if stream.h265:
-            return stream.h265[0]["masterUrl"]
-        elif stream.h264:
-            return stream.h264[0]["masterUrl"]
-        elif stream.av1:
-            return stream.av1[0]["masterUrl"]
-        elif stream.h266:
-            return stream.h266[0]["masterUrl"]
-        return None
+
+        # h264 优先，兼容性最好；之后再考虑 h265/av1/h266
+        groups = [
+            stream.h264 or [],
+            stream.h265 or [],
+            stream.av1 or [],
+            stream.h266 or [],
+        ]
+
+        all_urls: list[str] = []
+
+        for group in groups:
+            for item in group:
+                if not isinstance(item, dict):
+                    continue
+                all_urls.extend(self._collect_urls_from_stream_item(item))
+
+        if not all_urls:
+            return None
+
+        all_urls = list(dict.fromkeys(all_urls))
+        all_urls.sort(key=self._score_video_url)
+        return all_urls[0]

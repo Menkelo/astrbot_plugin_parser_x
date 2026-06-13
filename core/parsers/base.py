@@ -1,17 +1,18 @@
 import asyncio
+import json as _json
 import socket
 from abc import ABC
 from asyncio import Task
 from collections.abc import Callable, Coroutine
 from pathlib import Path
 from re import Match, Pattern, compile
-from typing import TYPE_CHECKING, Any, ClassVar, TypeVar, List, Dict
+from typing import Any, ClassVar, TypeVar
 
 import aiohttp
 from curl_cffi.requests import AsyncSession
 from typing_extensions import Unpack
-from astrbot.api import logger
 
+from astrbot.api import logger
 from astrbot.core.config.astrbot_config import AstrBotConfig
 
 from ..constants import ANDROID_HEADER, COMMON_HEADER, IOS_HEADER
@@ -29,6 +30,7 @@ from ..data import (
 )
 from ..download import Downloader
 from ..exception import ParseException
+from ..utils import maybe_close_session
 
 T = TypeVar("T", bound="BaseParser")
 HandlerFunc = Callable[[T, Match[str]], Coroutine[Any, Any, ParseResult]]
@@ -37,19 +39,52 @@ KeyPatterns = list[tuple[str, Pattern[str]]]
 _PARSER_META = "_parser_meta"
 
 
+class HttpResponseAdapter:
+    """
+    统一 curl_cffi / aiohttp fallback 的响应对象。
+
+    兼容字段：
+    - status_code
+    - headers
+    - url
+    - content
+    - text
+    - json()
+    """
+
+    def __init__(
+        self,
+        *,
+        status_code: int,
+        headers: dict[str, str],
+        url: str,
+        content: bytes,
+    ):
+        self.status_code = status_code
+        self.headers = headers
+        self.url = url
+        self.content = content
+        self.text = content.decode(errors="ignore")
+
+    def json(self):
+        return _json.loads(self.text)
+
+
 def handle(keyword: str, pattern: str):
-    """娉ㄥ唽澶勭悊鍣ㄨ�楗板櫒"""
+    """注册处理器装饰器"""
+
     def decorator(func: HandlerFunc[T]) -> HandlerFunc[T]:
         if not hasattr(func, _PARSER_META):
             setattr(func, _PARSER_META, [])
         meta = getattr(func, _PARSER_META)
         meta.append((keyword, compile(pattern)))
         return func
+
     return decorator
 
 
 class BaseParser:
-    """鎵€鏈夊钩鍙� Parser 鐨勬娊璞″熀绫�"""
+    """所有平台 Parser 的抽象基类"""
 
     _registry: ClassVar[list[type["BaseParser"]]] = []
     platform: ClassVar[Platform]
@@ -72,6 +107,7 @@ class BaseParser:
 
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
+
         if ABC not in cls.__bases__:
             BaseParser._registry.append(cls)
 
@@ -104,14 +140,14 @@ class BaseParser:
 
     async def close_session(self) -> None:
         if self._session:
-            self._session.close()
+            await maybe_close_session(self._session)
             self._session = None
 
     async def parse(self, keyword: str, searched: Match[str]) -> ParseResult:
-        """瑙ｆ瀽 URL 鎻愬彇淇℃伅"""
+        """解析 URL 提取信息"""
         method_name = self._dispatch_map.get(keyword)
         if not method_name:
-            raise ParseException(f"鏈�壘鍒板叧閿�瘝 {keyword} 瀵瑰簲鐨勫�鐞嗘柟娉�")
+            raise ParseException(f"未找到关键词 {keyword} 对应的处理方法")
 
         handler = getattr(self, method_name)
         return await handler(searched)
@@ -123,7 +159,8 @@ class BaseParser:
     ) -> ParseResult:
         redirect_url = await self.get_redirect_url(url, headers=headers or self.headers)
         if redirect_url == url:
-            raise ParseException(f"鏃犳硶閲嶅畾鍚� URL: {url}")
+            raise ParseException(f"无法重定向 URL: {url}")
+
         keyword, searched = self.search_url(redirect_url)
         return await self.parse(keyword, searched)
 
@@ -134,7 +171,8 @@ class BaseParser:
                 continue
             if searched := pattern.search(url):
                 return keyword, searched
-        raise ParseException(f"鏃犳硶鍖归厤 {url}")
+
+        raise ParseException(f"无法匹配 {url}")
 
     @classmethod
     def result(cls, **kwargs: Unpack[ParseResultKwargs]) -> ParseResult:
@@ -150,16 +188,16 @@ class BaseParser:
         timeout: int = 15,
     ):
         """
-        缁熶竴 GET 璇锋眰鍏ュ彛:
-        1) 浼樺厛 curl_cffi锛堝甫閲嶈瘯锛�
-        2) 澶辫触鍚庨檷绾� aiohttp锛堝己鍒禝Pv4 + 閲嶈瘯锛�
-        杩斿洖瀵硅薄鍏煎�瀛楁�: status_code / headers / url / text / content
+        统一 GET 请求入口：
+        1. 优先 curl_cffi，支持 TLS 指纹；
+        2. 失败后 aiohttp fallback，强制 IPv4；
+        3. 返回对象统一支持 status_code / headers / url / text / content / json()。
         """
         headers = headers or self.headers
         retries = 3
 
-        # 绗�竴灞傦細curl_cffi 閲嶈瘯
         last_curl_err: Exception | None = None
+
         for i in range(retries):
             try:
                 return await self.client.get(
@@ -175,55 +213,54 @@ class BaseParser:
                 if i < retries - 1:
                     await asyncio.sleep(0.25 * (i + 1))
 
-        logger.warning(f"curl_cffi GET澶辫触锛屽皾璇昦iohttp鍏滃簳: {last_curl_err}")
+        logger.warning(f"curl_cffi GET失败，尝试aiohttp兜底: {last_curl_err}")
 
-        # 绗�簩灞傦細aiohttp 寮哄埗 IPv4 + 閲嶈瘯
         last_aio_err: Exception | None = None
-        for i in range(retries):
-            conn = aiohttp.TCPConnector(
-                ssl=False,
-                family=socket.AF_INET,   # 寮哄埗 IPv4
-                ttl_dns_cache=300,
-                use_dns_cache=True,
-            )
-            timeout_conf = aiohttp.ClientTimeout(
-                total=timeout,
-                connect=min(10, timeout),
-                sock_connect=min(10, timeout),
-                sock_read=timeout,
-            )
 
-            try:
-                async with aiohttp.ClientSession(
-                    connector=conn,
-                    timeout=timeout_conf,
-                    headers=headers,
-                ) as session:
-                    async with session.get(
-                        url,
-                        params=params,
-                        allow_redirects=allow_redirects,
-                    ) as resp:
-                        body = await resp.read()
+        timeout_conf = aiohttp.ClientTimeout(
+            total=timeout,
+            connect=min(10, timeout),
+            sock_connect=min(10, timeout),
+            sock_read=timeout,
+        )
+        conn = aiohttp.TCPConnector(
+            ssl=False,
+            family=socket.AF_INET,
+            ttl_dns_cache=300,
+            use_dns_cache=True,
+        )
 
-                        class _Resp:
-                            def __init__(self, _resp, _body: bytes):
-                                self.status_code = _resp.status
-                                self.headers = dict(_resp.headers)
-                                self.url = str(_resp.url)
-                                self.content = _body
-                                self.text = _body.decode(errors="ignore")
+        try:
+            # 单个 ClientSession/Connector 复用整个重试循环，
+            # 避免每次重试都重建连接器与会话造成额外握手开销。
+            async with aiohttp.ClientSession(
+                connector=conn,
+                timeout=timeout_conf,
+                headers=headers,
+            ) as session:
+                for i in range(retries):
+                    try:
+                        async with session.get(
+                            url,
+                            params=params,
+                            allow_redirects=allow_redirects,
+                        ) as resp:
+                            body = await resp.read()
+                            return HttpResponseAdapter(
+                                status_code=resp.status,
+                                headers=dict(resp.headers),
+                                url=str(resp.url),
+                                content=body,
+                            )
 
-                        return _Resp(resp, body)
+                    except Exception as e:
+                        last_aio_err = e
+                        if i < retries - 1:
+                            await asyncio.sleep(0.35 * (i + 1))
+        finally:
+            await conn.close()
 
-            except Exception as e:
-                last_aio_err = e
-                if i < retries - 1:
-                    await asyncio.sleep(0.35 * (i + 1))
-            finally:
-                await conn.close()
-
-        raise ParseException(f"HTTP GET澶辫触(curl+aiohttp): {last_aio_err or last_curl_err}")
+        raise ParseException(f"HTTP GET失败(curl+aiohttp): {last_aio_err or last_curl_err}")
 
     async def get_redirect_url(
         self,
@@ -231,6 +268,7 @@ class BaseParser:
         headers: dict[str, str] | None = None,
     ) -> str:
         headers = headers or COMMON_HEADER.copy()
+
         try:
             resp = await self.http_get(
                 url,
@@ -238,11 +276,14 @@ class BaseParser:
                 allow_redirects=False,
                 timeout=15,
             )
+
             if resp.status_code >= 400:
                 raise ParseException(f"redirect check {resp.status_code}")
+
             return resp.headers.get("Location", url)
+
         except Exception as e:
-            raise ParseException(f"閲嶅畾鍚戞�娴嬪け璐�: {e}")
+            raise ParseException(f"重定向检测失败: {e}")
 
     async def get_final_url(
         self,
@@ -250,6 +291,7 @@ class BaseParser:
         headers: dict[str, str] | None = None,
     ) -> str:
         headers = headers or COMMON_HEADER.copy()
+
         try:
             resp = await self.http_get(
                 url,
@@ -261,11 +303,24 @@ class BaseParser:
         except Exception:
             return url
 
-    async def get_search_data(self, keyword: str) -> List[Dict[str, Any]]:
+    async def get_search_data(self, keyword: str) -> list[dict[str, Any]]:
         """
-        鎼滅储鎺ュ彛锛岃繑鍥炴爣鍑嗗寲鐨勭粨鏋滃垪琛�
+        搜索接口，返回标准化结果列表。
         """
         return []
+
+    def _as_bool(self, val: Any, default: bool = False) -> bool:
+        if isinstance(val, bool):
+            return val
+        if isinstance(val, (int, float)):
+            return bool(val)
+        if isinstance(val, str):
+            s = val.strip().lower()
+            if s in {"1", "true", "yes", "on"}:
+                return True
+            if s in {"0", "false", "no", "off", ""}:
+                return False
+        return default
 
     def create_author(
         self,
@@ -274,7 +329,20 @@ class BaseParser:
         description: str | None = None,
         ext_headers: dict[str, str] | None = None,
     ):
-        return Author(name=name, avatar=None, description=description)
+        """
+        默认不下载头像，保持轻量。
+        如需下载头像，可在配置中增加：
+        download_author_avatar: true
+        """
+        avatar = None
+
+        if avatar_url and self._as_bool(self.config.get("download_author_avatar", False), False):
+            avatar = self.downloader.download_img(
+                avatar_url,
+                ext_headers=ext_headers or self.headers,
+            )
+
+        return Author(name=name, avatar=avatar, description=description)
 
     def create_video_content(
         self,
@@ -285,9 +353,18 @@ class BaseParser:
     ):
         if isinstance(url_or_task, str):
             url_or_task = self.downloader.download_video(
-                url_or_task, ext_headers=ext_headers or self.headers
+                url_or_task,
+                ext_headers=ext_headers or self.headers,
             )
-        return VideoContent(url_or_task, None, duration)
+
+        cover_task = None
+        if cover_url and self._as_bool(self.config.get("download_video_cover", False), False):
+            cover_task = self.downloader.download_img(
+                cover_url,
+                ext_headers=ext_headers or self.headers,
+            )
+
+        return VideoContent(url_or_task, cover_task, duration)
 
     def create_image_contents(
         self,
@@ -295,9 +372,14 @@ class BaseParser:
         ext_headers: dict[str, str] | None = None,
     ):
         contents: list[ImageContent] = []
+
         for url in image_urls:
-            task = self.downloader.download_img(url, ext_headers=ext_headers or self.headers)
+            task = self.downloader.download_img(
+                url,
+                ext_headers=ext_headers or self.headers,
+            )
             contents.append(ImageContent(task))
+
         return contents
 
     def create_dynamic_contents(
@@ -306,9 +388,14 @@ class BaseParser:
         ext_headers: dict[str, str] | None = None,
     ):
         contents: list[DynamicContent] = []
+
         for url in dynamic_urls:
-            task = self.downloader.download_video(url, ext_headers=ext_headers or self.headers)
+            task = self.downloader.download_video(
+                url,
+                ext_headers=ext_headers or self.headers,
+            )
             contents.append(DynamicContent(task))
+
         return contents
 
     def create_audio_content(
@@ -318,8 +405,10 @@ class BaseParser:
     ):
         if isinstance(url_or_task, str):
             url_or_task = self.downloader.download_audio(
-                url_or_task, ext_headers=self.headers
+                url_or_task,
+                ext_headers=self.headers,
             )
+
         return AudioContent(url_or_task, duration)
 
     def create_graphics_content(
@@ -329,7 +418,11 @@ class BaseParser:
         alt: str | None = None,
         ext_headers: dict[str, str] | None = None,
     ):
-        image_task = self.downloader.download_img(image_url, ext_headers=ext_headers or self.headers)
+        image_task = self.downloader.download_img(
+            image_url,
+            ext_headers=ext_headers or self.headers,
+        )
+
         return GraphicsContent(image_task, text, alt)
 
     def create_file_content(
@@ -340,6 +433,9 @@ class BaseParser:
     ):
         if isinstance(url_or_task, str):
             url_or_task = self.downloader.download_file(
-                url_or_task, ext_headers=ext_headers or self.headers, file_name=name
+                url_or_task,
+                ext_headers=ext_headers or self.headers,
+                file_name=name,
             )
-        return FileContent(url_or_task)
+
+        return FileContent(url_or_task, name=name)

@@ -1,6 +1,8 @@
 import asyncio
 import hashlib
+import inspect
 import json
+import re
 import shutil
 from collections import OrderedDict
 from pathlib import Path
@@ -11,6 +13,16 @@ from astrbot.api import logger
 
 K = TypeVar("K")
 V = TypeVar("V")
+
+
+async def maybe_close_session(session: Any) -> None:
+    """兼容同步 / 异步 close 的 Session。"""
+    if session is None:
+        return
+
+    ret = session.close()
+    if inspect.isawaitable(ret):
+        await ret
 
 
 class LimitedSizeDict(OrderedDict[K, V]):
@@ -25,20 +37,24 @@ class LimitedSizeDict(OrderedDict[K, V]):
 
 
 async def safe_unlink(path: Path):
-    if path.exists():
-        try:
-            if path.is_dir():
-                await asyncio.to_thread(shutil.rmtree, path, ignore_errors=True)
-            else:
-                await asyncio.to_thread(path.unlink, missing_ok=True)
-        except Exception as e:
-            logger.warning(f"删除 {path} 失败: {e}")
+    """
+    安全删除文件或目录。
+    """
+    try:
+        if path.is_dir():
+            await asyncio.to_thread(shutil.rmtree, path, ignore_errors=True)
+        else:
+            await asyncio.to_thread(path.unlink, missing_ok=True)
+    except Exception as e:
+        logger.warning(f"删除 {path} 失败: {e}")
 
 
 async def exec_ffmpeg_cmd(cmd: list[str]) -> None:
     try:
         process = await asyncio.create_subprocess_exec(
-            *cmd, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE
+            *cmd,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
         )
         _, stderr = await process.communicate()
         return_code = process.returncode
@@ -46,39 +62,41 @@ async def exec_ffmpeg_cmd(cmd: list[str]) -> None:
         raise RuntimeError("ffmpeg 未安装或无法找到可执行文件")
 
     if return_code != 0:
-        error_msg = stderr.decode().strip()
-        # 忽略非致命警告
-        if "Error" in error_msg or "Invalid" in error_msg or "No such file" in error_msg:
-             logger.warning(f"ffmpeg 错误: {error_msg}")
-             if return_code != 0:
-                 raise RuntimeError(f"ffmpeg 执行失败: {error_msg}")
+        error_msg = stderr.decode(errors="ignore").strip()
+        logger.warning(f"ffmpeg 错误: {error_msg}")
+        raise RuntimeError(f"ffmpeg 执行失败: {error_msg}")
 
 
 async def merge_av(v_path: Path, a_path: Path, output_path: Path) -> None:
     """
-    极速合并音视频：使用流复制 (Stream Copy)
+    极速合并音视频：使用流复制 Stream Copy。
     """
-    # === 关键修复：合并前检查文件是否存在 ===
     if not v_path.exists() or v_path.stat().st_size == 0:
         raise FileNotFoundError(f"视频源文件缺失或为空: {v_path}")
+
     if not a_path.exists() or a_path.stat().st_size == 0:
         raise FileNotFoundError(f"音频源文件缺失或为空: {a_path}")
-        
+
     logger.debug(f"⚡ 极速合并: {v_path.name} + {a_path.name}")
+
     cmd = [
-        "ffmpeg", "-y",
-        "-i", str(v_path),
-        "-i", str(a_path),
-        "-c", "copy",
-        "-strict", "experimental",
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(v_path),
+        "-i",
+        str(a_path),
+        "-c",
+        "copy",
+        "-strict",
+        "experimental",
         str(output_path),
     ]
     await exec_ffmpeg_cmd(cmd)
-    
-    # 确认合并成功
+
     if not output_path.exists() or output_path.stat().st_size == 0:
         raise RuntimeError("ffmpeg 合并未生成有效文件")
-        
+
     await asyncio.gather(safe_unlink(v_path), safe_unlink(a_path))
     logger.debug(f"✅ 合并完成: {output_path.name} ({fmt_size(output_path)})")
 
@@ -90,58 +108,89 @@ def fmt_size(file_path: Path) -> str:
         return "未知大小"
 
 
+def sanitize_filename(name: str, max_len: int = 80) -> str:
+    """
+    清洗文件名，兼容 Windows/Linux。
+    """
+    name = re.sub(r'[\\/:*?"<>|\r\n\t]+', "_", name)
+    name = name.strip().strip(".")
+    if not name:
+        name = "file"
+
+    if len(name) > max_len:
+        name = name[:max_len].rstrip("._- ")
+
+    return name or "file"
+
+
 def generate_file_name(url: str, suffix: str | None = None) -> str:
+    """
+    根据 URL 生成稳定、安全、低冲突的缓存文件名。
+
+    特点：
+    - 使用 URL path 中的文件名；
+    - 自动清洗非法字符；
+    - 自动追加 URL hash，避免同名覆盖；
+    - 支持强制后缀。
+    """
+    digest = hashlib.md5(url.encode()).hexdigest()[:8]
+
     try:
-        # 修复：仅使用路径部分，去除 ?query 参数
         parsed = urlparse(url)
-        path = parsed.path
-        name = Path(path).name
-        
-        # 再次防御，防止文件名中包含 url 编码字符
+        name = Path(parsed.path).name
+
         if "%" in name:
             import urllib.parse
+
             name = urllib.parse.unquote(name)
-            
+
         if not name or name == "/":
-            name = hashlib.md5(url.encode()).hexdigest()[:16]
-            
-        # 确保有后缀
-        if not suffix:
-            if "." not in name:
-                suffix = ".unknown"
-            else:
-                suffix = ""
-                
-        # 移除原有的扩展名（如果我们需要强制指定后缀）
-        if suffix and name.endswith(suffix):
-            pass # 已经有后缀了
-        elif suffix:
-            # 简单拼接，避免 .m4s.mp4 这种奇怪组合，虽然不影响 ffmpeg 但不好看
-            if name.endswith(".m4s"):
-                name = name[:-4]
-            name += suffix
-            
-        return name
+            name = f"file_{digest}"
+
+        path_obj = Path(name)
+        stem = path_obj.stem or "file"
+        ext = path_obj.suffix
+
+        stem = sanitize_filename(stem)
+
+        if suffix:
+            ext = suffix
+        elif not ext:
+            ext = ".unknown"
+
+        ext = sanitize_filename(ext, max_len=16)
+        if ext and not ext.startswith("."):
+            ext = "." + ext
+
+        return f"{stem}_{digest}{ext}"
+
     except Exception:
-        return f"{hashlib.md5(url.encode()).hexdigest()[:16]}{suffix or ''}"
+        return f"{digest}{suffix or '.unknown'}"
 
 
 def ck2dict(cookies_str: str) -> dict[str, str]:
     res = {}
-    if not cookies_str: return res
+    if not cookies_str:
+        return res
+
     for cookie in cookies_str.split(";"):
         if "=" in cookie:
             name, value = cookie.strip().split("=", 1)
             res[name] = value
+
     return res
 
 
 def extract_json_url(data: dict | str) -> str | None:
     if isinstance(data, str):
-        try: data = json.loads(data)
-        except Exception: return None
-    if not isinstance(data, dict): return None
-    
+        try:
+            data = json.loads(data)
+        except Exception:
+            return None
+
+    if not isinstance(data, dict):
+        return None
+
     meta: dict[str, Any] | None = data.get("meta")
     if meta:
         keys_to_check = [
@@ -151,37 +200,40 @@ def extract_json_url(data: dict | str) -> str | None:
             ("music", "jumpUrl"),
             ("music", "musicUrl"),
         ]
+
         for key1, key2 in keys_to_check:
             val = meta.get(key1, {}).get(key2)
             if val and isinstance(val, str):
                 val = val.replace("&amp;", "&")
                 if "http" in val:
-                    import re
                     if m := re.search(r'https?://[^\s,"]+', val):
                         return m.group(0)
-    
+
     found_url = _recursive_find_xhs_url(data)
     if found_url:
         return found_url.replace("&amp;", "&")
-        
+
     return None
+
 
 def _recursive_find_xhs_url(obj: Any) -> str | None:
     if isinstance(obj, str):
         if "xhslink.com" in obj or "xiaohongshu.com" in obj:
-            import re
-            if m := re.search(r'https?://[a-zA-Z0-9./?=&_-]+(?:xhslink\.com|xiaohongshu\.com)[a-zA-Z0-9./?=&_-]*', obj):
+            if m := re.search(
+                r'https?://[a-zA-Z0-9./?=&_%#@:-]*(?:xhslink\.com|xiaohongshu\.com)[a-zA-Z0-9./?=&_%#@:-]*',
+                obj,
+            ):
                 return m.group(0)
         return None
-    
+
     if isinstance(obj, dict):
         for v in obj.values():
             if res := _recursive_find_xhs_url(v):
                 return res
-    
+
     if isinstance(obj, list):
         for v in obj:
             if res := _recursive_find_xhs_url(v):
                 return res
-                
+
     return None

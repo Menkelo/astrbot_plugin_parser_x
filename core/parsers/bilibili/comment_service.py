@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import re
+import time
 from pathlib import Path
 
 from msgspec import json as msgjson
@@ -58,6 +59,42 @@ class BiliCommentService:
     def client(self):
         return self.parser.client
 
+    @staticmethod
+    def _neutralize_at_text(text: str) -> str:
+        if not text:
+            return text
+        return text.replace("@", "＠")
+
+    @staticmethod
+    def _format_ts(ts: int | None) -> str | None:
+        if not ts:
+            return None
+        try:
+            ts = int(ts)
+            if ts > 10_000_000_000:
+                ts //= 1000
+            return time.strftime("%Y-%m-%d %H:%M", time.localtime(ts))
+        except Exception:
+            return None
+
+    @staticmethod
+    def _is_bili_default_avatar(url: str | None) -> bool:
+        if not url:
+            return True
+
+        u = str(url).lower()
+
+        markers = [
+            "noface",
+            "no_face",
+            "member/noface",
+            "bili_default",
+            "default",
+            "akari.jpg",
+        ]
+
+        return any(m in u for m in markers)
+
     def _is_ad_like_text(self, text: str) -> bool:
         if not text:
             return False
@@ -103,7 +140,6 @@ class BiliCommentService:
                 self._qr_detect_cache[img_url] = has_qr
                 return has_qr
             except Exception:
-                # 未安装 cv2 / 解析失败时，降级为不过滤
                 self._qr_detect_cache[img_url] = False
                 return False
 
@@ -117,11 +153,9 @@ class BiliCommentService:
         pic_url: str | None,
         qr_check_counter: list[int],
     ) -> bool:
-        # 第一层：文本广告/引流过滤
         if self.enable_text_ad_filter and self._is_ad_like_text(message):
             return True
 
-        # 第二层：二维码图片过滤
         if (
             self.enable_qr_filter
             and pic_url
@@ -141,10 +175,9 @@ class BiliCommentService:
         *,
         video_title: str,
         video_cover: str | None,
+        video_author: str | None = None,
+        video_timestamp: int | None = None,
     ) -> list[ImageContent]:
-        """
-        抓取评论并返回 [ImageContent(...)]，渲染采用延迟任务，不阻塞主流程。
-        """
         url = "https://api.bilibili.com/x/v2/reply/main"
         strict_list = []
         relaxed_list = []
@@ -152,7 +185,9 @@ class BiliCommentService:
 
         next_cursor = 0
         is_end = False
-        max_pages = 5
+
+        # 为了跳过默认头像后还能补满评论，多翻几页
+        max_pages = 10
 
         qr_check_counter = [0]
 
@@ -169,7 +204,12 @@ class BiliCommentService:
             }
 
             try:
-                resp = await self.client.get(url, params=params, headers=self.headers, timeout=5)
+                resp = await self.client.get(
+                    url,
+                    params=params,
+                    headers=self.headers,
+                    timeout=5,
+                )
                 if resp.status_code != 200:
                     break
 
@@ -191,8 +231,10 @@ class BiliCommentService:
 
                     content = item.get("content", {})
                     member = item.get("member", {})
+
                     raw_msg = content.get("message") or ""
                     message = re.sub(r"\[.*?\]", "", raw_msg).strip()
+                    message = self._neutralize_at_text(message)
 
                     pics = content.get("pictures") or []
                     pic_url = pics[0].get("img_src") if pics else None
@@ -203,36 +245,57 @@ class BiliCommentService:
                     if await self._should_skip_comment(message, pic_url, qr_check_counter):
                         continue
 
+                    avatar = member.get("avatar", "")
+
+                    # 核心：不显示小电视，不显示纯色块，默认头像评论直接跳过
+                    if self._is_bili_default_avatar(avatar):
+                        continue
+
                     data_obj = {
-                        "avatar": member.get("avatar", ""),
-                        "uname": member.get("uname", ""),
+                        "avatar": avatar,
+                        "uname": self._neutralize_at_text(member.get("uname", "")),
                         "message": message,
                         "pic": pic_url,
+                        "comment_time": self._format_ts(item.get("ctime")),
                     }
 
-                    if "@" in message:
+                    if "＠" in message:
                         relaxed_list.append(data_obj)
                     else:
                         strict_list.append(data_obj)
 
+                    if len(strict_list) >= self.comment_limit:
+                        break
+
             except Exception as e:
-                logger.warning(f"[Bilibili] 评论抓取错误: {e}")
+                logger.debug(f"[Bilibili] 评论抓取错误 oid={oid}: {e}")
                 break
 
         if len(strict_list) < self.comment_limit:
             need = self.comment_limit - len(strict_list)
             strict_list.extend(relaxed_list[:need])
 
-        comments_data = strict_list[:self.comment_limit]
+        comments_data = strict_list[: self.comment_limit]
         if not comments_data:
             return []
 
+        video_time_text = self._format_ts(video_timestamp)
+
         c_hash = hashlib.md5(
-            f"{comments_data[0]}{self.comment_limit}_relax".encode()
+            (
+                f"{comments_data[0]}"
+                f"{self.comment_limit}"
+                f"{video_title}"
+                f"{video_cover}"
+                f"{video_author}"
+                f"{video_timestamp}"
+                f"_skip_default_avatar_v1"
+            ).encode()
         ).hexdigest()[:8]
+
         out_path = self.cache_dir / f"bili_comments_merged_{oid}_{c_hash}.png"
 
-        if out_path.exists():
+        if out_path.exists() and out_path.stat().st_size > 0:
             return [ImageContent(out_path)]
 
         async def _render_then_return():
@@ -241,11 +304,16 @@ class BiliCommentService:
                 comments=comments_data,
                 video_title=video_title,
                 video_cover=video_cover,
+                video_author=video_author,
+                video_time=video_time_text,
             )
             return out_path
 
         return [
             ImageContent(
-                asyncio.create_task(_render_then_return(), name=f"bili_comment_render_{oid}")
+                asyncio.create_task(
+                    _render_then_return(),
+                    name=f"bili_comment_render_{oid}",
+                )
             )
         ]

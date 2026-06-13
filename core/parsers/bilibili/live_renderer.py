@@ -28,10 +28,14 @@ class BiliLiveRenderer:
         status_text = "直播中" if live_status == 1 else "未开播"
 
         cover_html = (
-            f'<img class="cover live-cover" src="{cover}">' if cover else '<div class="cover ph"></div>'
+            f'<img class="cover live-cover" src="{cover}">'
+            if cover
+            else '<div class="cover ph"></div>'
         )
         avatar_html = (
-            f'<img class="avatar" src="{avatar}">' if avatar else '<div class="avatar ph"></div>'
+            f'<img class="avatar" src="{avatar}">'
+            if avatar
+            else '<div class="avatar ph"></div>'
         )
 
         html = f"""
@@ -49,7 +53,6 @@ class BiliLiveRenderer:
               background: #fff; border-radius: 16px; overflow: hidden;
               box-shadow: 0 10px 30px rgba(31,35,41,.08), 0 2px 8px rgba(31,35,41,.05);
             }}
-
             .cover-wrap {{
               width: 100%;
               aspect-ratio: 16 / 9;
@@ -82,7 +85,6 @@ class BiliLiveRenderer:
             .ph {{
               background: linear-gradient(135deg, #eef1f4, #e5e9ef);
             }}
-
             .body {{
               padding: 14px 16px 16px;
             }}
@@ -154,31 +156,37 @@ class BiliLiveRenderer:
 
         async with async_playwright() as p:
             browser = await p.chromium.launch()
-            page = await browser.new_page(viewport={"width": 748, "height": 10}, device_scale_factor=2)
-            await page.set_content(html, wait_until="networkidle")
+            try:
+                page = await browser.new_page(
+                    viewport={"width": 748, "height": 10},
+                    device_scale_factor=2,
+                )
+                await page.set_content(html, wait_until="domcontentloaded")
+                await page.wait_for_timeout(300)
 
-            await page.evaluate(
-                """
-                () => {
-                  const imgs = document.querySelectorAll('img.live-cover');
-                  for (const img of imgs) {
-                    const apply = () => {
-                      const w = img.naturalWidth || 0;
-                      const h = img.naturalHeight || 0;
-                      if (!w || !h) return;
-                      const r = w / h;
-                      if (r < 1.2) img.classList.add('is-portrait');
-                      else if (r > 2.2) img.classList.add('is-ultrawide');
-                    };
-                    if (img.complete) apply();
-                    else img.addEventListener('load', apply, { once: true });
-                  }
-                }
-                """
-            )
+                await page.evaluate(
+                    """
+                    () => {
+                      const imgs = document.querySelectorAll('img.live-cover');
+                      for (const img of imgs) {
+                        const apply = () => {
+                          const w = img.naturalWidth || 0;
+                          const h = img.naturalHeight || 0;
+                          if (!w || !h) return;
+                          const r = w / h;
+                          if (r < 1.2) img.classList.add('is-portrait');
+                          else if (r > 2.2) img.classList.add('is-ultrawide');
+                        };
+                        if (img.complete) apply();
+                        else img.addEventListener('load', apply, { once: true });
+                      }
+                    }
+                    """
+                )
 
-            await page.wait_for_timeout(80)
-            height = await page.evaluate("document.body.scrollHeight")
-            await page.set_viewport_size({"width": 748, "height": height})
-            await page.screenshot(path=str(out_path), full_page=True)
-            await browser.close()
+                await page.wait_for_timeout(120)
+                height = await page.evaluate("document.body.scrollHeight")
+                await page.set_viewport_size({"width": 748, "height": height})
+                await page.screenshot(path=str(out_path), full_page=True)
+            finally:
+                await browser.close()

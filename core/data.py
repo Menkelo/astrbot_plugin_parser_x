@@ -169,12 +169,11 @@ class ParseResult:
         return None
 
     @property
-    def formatted_datetime(self, fmt: str = "%Y-%m-%d %H:%M:%S") -> str | None:
-        return (
-            datetime.fromtimestamp(self.timestamp).strftime(fmt)
-            if self.timestamp is not None
-            else None
-        )
+    def formatted_datetime(self) -> str | None:
+        # 作为 property 无法接收格式参数，固定使用标准格式。
+        if self.timestamp is None:
+            return None
+        return datetime.fromtimestamp(self.timestamp).strftime("%Y-%m-%d %H:%M:%S")
 
     def __repr__(self) -> str:
         return (
