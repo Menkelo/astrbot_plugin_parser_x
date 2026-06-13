@@ -129,6 +129,10 @@ class KuaiShouParser(BaseParser):
             contents.extend(
                 self.create_image_contents(img_urls, ext_headers=self.ios_headers)
             )
+        elif single_image_url := photo.single_image_url:
+            contents.extend(
+                self.create_image_contents([single_image_url], ext_headers=self.ios_headers)
+            )
 
         author = self.create_author(
             photo.name, photo.head_url, ext_headers=self.ios_headers
@@ -173,6 +177,8 @@ class Photo(Struct):
     head_url: str | None = field(default=None, name="headUrl")
     cover_urls: list[CdnUrl] = field(name="coverUrls", default_factory=list)
     main_mv_urls: list[CdnUrl] = field(name="mainMvUrls", default_factory=list)
+    single_picture: bool = field(default=False, name="singlePicture")
+    photo_type: str = field(default="", name="photoType")
     ext_params: ExtParams = field(name="ext_params", default_factory=ExtParams)
 
     @property
@@ -190,6 +196,12 @@ class Photo(Struct):
     @property
     def img_urls(self):
         return self.ext_params.atlas.img_urls
+
+    @property
+    def single_image_url(self):
+        if self.single_picture or self.photo_type == "SINGLE_PICTURE":
+            return self.cover_url
+        return None
 
 
 class TusjohData(Struct):
