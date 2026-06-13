@@ -2,6 +2,7 @@ import json
 import re
 import time
 from typing import Any, ClassVar
+from urllib.parse import unquote
 
 from msgspec import Struct, convert, field
 
@@ -99,6 +100,28 @@ class XiaoHongShuParser(BaseParser):
 
         return out
 
+    @staticmethod
+    def _unwrap_sec_redirect(url: str) -> str:
+        """
+        小红书安全中转页：
+            https://www.xiaohongshu.com/404/sec_xxx?source=xhs_sec_server&originalUrl=<URL编码真实地址>
+        真实笔记地址（含 xsec_token）被编码塞进 originalUrl 参数里。这里取出并解码一次返回；
+        非该形态则原样返回。用 unquote（而非 parse_qs/unquote_plus），避免把 token 里的 '+' 误转成空格。
+        """
+        marker = "originalUrl="
+        idx = url.find(marker)
+        if idx == -1:
+            return url
+
+        raw = url[idx + len(marker):]
+        # originalUrl 内部的 & 都是 %26，遇到字面 & 即为外层下一个参数，截断即可
+        amp = raw.find("&")
+        if amp != -1:
+            raw = raw[:amp]
+
+        decoded = unquote(raw)
+        return decoded or url
+
     async def _fetch_html(
         self,
         url: str,
@@ -136,6 +159,8 @@ class XiaoHongShuParser(BaseParser):
         final_url = self._cache_get_redirect(url)
         if not final_url:
             final_url = await self.get_final_url(url, headers=self.ios_headers)
+            # 解包 /404/sec 安全中转页，取出 originalUrl 真实笔记地址（保留 xsec_token）
+            final_url = self._unwrap_sec_redirect(final_url)
             self._cache_set_redirect(url, final_url)
 
         if final_url == url:
