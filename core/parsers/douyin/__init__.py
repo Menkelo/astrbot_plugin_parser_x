@@ -411,10 +411,13 @@ class DouyinParser(BaseParser):
 
         last_err: Exception | None = None
 
+        # www.douyin.com 反爬较重、经常拿不到 _ROUTER_DATA（甚至超时），
+        # 之前被排在第一个尝试，导致每次解析都先在它身上空耗一轮。
+        # 这里优先更稳定的移动端分享域名(m / iesdouyin)，www 降为最后兜底。
         for url in (
-            f"https://www.douyin.com/{ty}/{vid}",
             self._build_m_douyin_url(ty, vid),
             self._build_iesdouyin_url(ty, vid),
+            f"https://www.douyin.com/{ty}/{vid}",
         ):
             try:
                 if self._is_live_url(url):

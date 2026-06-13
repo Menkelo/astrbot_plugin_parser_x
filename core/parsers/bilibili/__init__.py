@@ -639,19 +639,21 @@ class BilibiliParser(BaseParser):
         url += f"?p={page_info.index + 1}" if page_info.index > 0 else ""
 
         # === B站评论区总开关 ===
-        # 开启：正常抓取并渲染评论区
-        # 关闭：直接返回空评论区，减少请求和渲染耗时
+        # 开启：在后台异步抓取并渲染评论区，不阻塞主视频解析与发送
+        # 关闭：直接跳过，减少请求和渲染耗时
+        comment_task: asyncio.Task | None = None
         if self.enable_comment_card:
-            task_comments = self.comment_service.build_comment_image_content(
-                video_info.aid,
-                1,
-                video_title=page_info.title,
-                video_cover=self.norm_bili_img(page_info.cover),
-                video_author=video_info.owner.name,
-                video_timestamp=self.norm_bili_ts(page_info.timestamp),
+            comment_task = asyncio.create_task(
+                self.comment_service.build_comment_image_content(
+                    video_info.aid,
+                    1,
+                    video_title=page_info.title,
+                    video_cover=self.norm_bili_img(page_info.cover),
+                    video_author=video_info.owner.name,
+                    video_timestamp=self.norm_bili_ts(page_info.timestamp),
+                ),
+                name=f"bili_comments_{video_info.aid}",
             )
-        else:
-            task_comments = asyncio.sleep(0, result=[])
 
         stream_task = self._get_stream_ladders_with_qn_fallback(
             video,
@@ -659,10 +661,9 @@ class BilibiliParser(BaseParser):
             f"{video_info.bvid}:{page_info.index}",
         )
 
-        (video_ladders, a_candidates, play_url_data), comment_imgs = await asyncio.gather(
-            stream_task,
-            task_comments,
-        )
+        # 评论区抓取(最多翻 10 页 + 二维码识别)此前会卡住整个解析返回，
+        # 现在只等取流即可返回，评论区改到发送阶段与视频并行处理。
+        video_ladders, a_candidates, play_url_data = await stream_task
 
         if not video_ladders:
             logger.warning(
@@ -762,7 +763,7 @@ class BilibiliParser(BaseParser):
             text=text,
             author=author,
             contents=[video_content],
-            comment_contents=comment_imgs,
+            extra={"comment_task": comment_task} if comment_task else {},
         )
 
     async def parse_dynamic(self, dynamic_id: int):

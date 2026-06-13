@@ -249,6 +249,16 @@ class ParserPlugin(Star):
                     await event.send(event.chain_result([nodes]))
 
         async def process_comment_content():
+            # 评论区在解析阶段被放到后台任务(避免抓取/二维码识别阻塞主视频)，
+            # 这里与主视频发送并行地等待它完成。
+            comment_task = result.extra.get("comment_task")
+            if comment_task is not None:
+                try:
+                    result.comment_contents = await comment_task
+                except Exception as e:
+                    logger.warning(f"评论区生成失败: {e}")
+                    return
+
             if not result.comment_contents:
                 return
 
