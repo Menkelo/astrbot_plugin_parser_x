@@ -1,0 +1,181 @@
+from html import escape
+from pathlib import Path
+
+from playwright.async_api import async_playwright
+
+
+class TextCardRenderer:
+    async def render_text_card(
+        self,
+        out_path: Path,
+        *,
+        platform_name: str,
+        author_name: str | None,
+        title: str | None,
+        text: str,
+        timestamp_text: str | None = None,
+        url: str | None = None,
+    ):
+        author_html = (
+            f'<div class="author">{escape(author_name)}</div>' if author_name else ""
+        )
+        title_html = f'<div class="title">{escape(title)}</div>' if title else ""
+        time_html = (
+            f'<div class="time">{escape(timestamp_text)}</div>' if timestamp_text else ""
+        )
+        url_html = f'<div class="url">{escape(url)}</div>' if url else ""
+
+        html = f"""
+        <!doctype html>
+        <html>
+        <head>
+          <meta charset="utf-8"/>
+          <style>
+            * {{
+              box-sizing: border-box;
+            }}
+
+            html {{
+              margin: 0;
+              padding: 0;
+              width: 760px;
+              background: #f3f5f8;
+            }}
+
+            body {{
+              margin: 0;
+              padding: 26px;
+              width: 760px;
+              font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+              background: #f3f5f8;
+              color: #20242c;
+              overflow-x: hidden;
+            }}
+
+            .card {{
+              width: 708px;
+              background: #fff;
+              border: 1px solid #e7ebf0;
+              border-radius: 16px;
+              padding: 24px;
+              box-shadow: 0 10px 30px rgba(32, 36, 44, .08);
+            }}
+
+            .meta {{
+              display: flex;
+              align-items: flex-start;
+              justify-content: space-between;
+              gap: 16px;
+            }}
+
+            .platform {{
+              display: inline-flex;
+              align-items: center;
+              min-height: 24px;
+              padding: 3px 9px;
+              border-radius: 999px;
+              background: #eef5ff;
+              color: #2b65b1;
+              font-size: 13px;
+              font-weight: 750;
+              line-height: 1.2;
+            }}
+
+            .time {{
+              color: #8c95a3;
+              font-size: 13px;
+              line-height: 1.45;
+              text-align: right;
+              flex: 1;
+              word-break: break-word;
+            }}
+
+            .author {{
+              margin-top: 16px;
+              color: #20242c;
+              font-size: 21px;
+              font-weight: 850;
+              line-height: 1.35;
+              word-break: break-word;
+            }}
+
+            .title {{
+              margin-top: 14px;
+              color: #20242c;
+              font-size: 19px;
+              font-weight: 800;
+              line-height: 1.45;
+              word-break: break-word;
+            }}
+
+            .text {{
+              margin-top: 18px;
+              color: #303744;
+              font-size: 18px;
+              line-height: 1.78;
+              white-space: pre-wrap;
+              word-break: break-word;
+            }}
+
+            .url {{
+              margin-top: 20px;
+              padding-top: 14px;
+              border-top: 1px solid #edf0f4;
+              color: #87909d;
+              font-size: 12px;
+              line-height: 1.55;
+              word-break: break-all;
+            }}
+
+            .footer {{
+              margin-top: 12px;
+              color: #9aa2ad;
+              font-size: 12px;
+              line-height: 1.4;
+            }}
+          </style>
+        </head>
+        <body>
+          <div class="card">
+            <div class="meta">
+              <div class="platform">{escape(platform_name)}</div>
+              {time_html}
+            </div>
+            {author_html}
+            {title_html}
+            <div class="text">{escape(text)}</div>
+            {url_html}
+            <div class="footer">Menkelo/astrbot_plugin_r_parser</div>
+          </div>
+        </body>
+        </html>
+        """
+
+        async with async_playwright() as p:
+            browser = await p.chromium.launch()
+            try:
+                page = await browser.new_page(
+                    viewport={"width": 760, "height": 10},
+                    device_scale_factor=2,
+                )
+
+                await page.set_content(html, wait_until="domcontentloaded")
+                await page.wait_for_load_state("load")
+                await page.wait_for_timeout(120)
+
+                height = await page.evaluate(
+                    """
+                    () => Math.max(
+                      document.body.scrollHeight,
+                      document.documentElement.scrollHeight
+                    )
+                    """
+                )
+
+                await page.set_viewport_size({"width": 760, "height": height})
+                await page.wait_for_timeout(60)
+
+                await page.screenshot(path=str(out_path), full_page=True)
+
+            finally:
+                await browser.close()

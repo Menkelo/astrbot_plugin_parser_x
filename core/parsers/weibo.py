@@ -1,4 +1,5 @@
 import re
+from html import unescape
 from re import Match
 from typing import ClassVar
 from email.utils import parsedate_to_datetime
@@ -61,6 +62,7 @@ class WeiboParser(BaseParser):
         
         text = re.sub(r"<br\s*/?>", "\n", text)
         text = re.sub(r"<[^>]+>", "", text)
+        text = unescape(text).strip()
         
         timestamp = None
         if created_at := data.get("created_at"):

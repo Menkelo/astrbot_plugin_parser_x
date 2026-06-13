@@ -2,6 +2,7 @@ import nest_asyncio
 nest_asyncio.apply()
 
 import asyncio
+import hashlib
 import re
 from pathlib import Path
 
@@ -47,6 +48,7 @@ from .core.exception import (
     ZeroSizeException,
 )
 from .core.parsers import BaseParser
+from .core.text_renderer import TextCardRenderer
 from .core.utils import extract_json_url, exec_ffmpeg_cmd
 
 
@@ -68,6 +70,7 @@ class ParserPlugin(Star):
         self.downloader = Downloader(config)
         self.arbiter = EmojiLikeArbiter()
         self.cleaner = CacheCleaner(self.context, self.config)
+        self.text_renderer = TextCardRenderer()
 
     # region 生命周期
 
@@ -136,6 +139,64 @@ class ParserPlugin(Star):
                 return File(name=path.name, file=str(path))
         return None
 
+    def _format_text_fallback(self, result: ParseResult) -> str:
+        parts = []
+        if result.header:
+            parts.append(result.header)
+        if result.text and result.text.strip():
+            parts.append(result.text.strip())
+        if result.url:
+            parts.append(result.url)
+        return "\n\n".join(parts).replace("@", "@\u200b")
+
+    async def _ensure_text_only_content(self, result: ParseResult) -> bool:
+        if result.contents:
+            return False
+
+        text = (result.text or "").strip()
+        if not text:
+            return False
+
+        author_name = result.author.name if result.author else None
+        platform_name = result.platform.display_name or result.platform.name
+        title = (result.title or "").strip() or None
+        timestamp_text = result.formatted_datetime
+
+        digest = hashlib.md5(
+            "\n".join(
+                [
+                    result.platform.name,
+                    author_name or "",
+                    title or "",
+                    timestamp_text or "",
+                    result.url or "",
+                    text,
+                    "text_card_v1",
+                ]
+            ).encode("utf-8")
+        ).hexdigest()[:12]
+
+        platform_slug = re.sub(
+            r"[^A-Za-z0-9_-]+", "_", result.platform.name or "text"
+        ).strip("_")
+        if not platform_slug:
+            platform_slug = "text"
+
+        out_path = self.cache_dir / f"text_card_{platform_slug}_{digest}.png"
+        if not out_path.exists():
+            await self.text_renderer.render_text_card(
+                out_path=out_path,
+                platform_name=platform_name,
+                author_name=author_name,
+                title=title,
+                text=text,
+                timestamp_text=timestamp_text,
+                url=result.url,
+            )
+
+        result.contents = [ImageContent(out_path)]
+        return True
+
     async def _transcode_to_h264(self, input_path: Path) -> Path:
         output_path = input_path.with_name(f"{input_path.stem}_h264.mp4")
         logger.info(f"正在转码视频为 H.264 (极速模式): {input_path.name} -> {output_path.name}")
@@ -164,7 +225,16 @@ class ParserPlugin(Star):
 
         async def process_main_content():
             if not result.contents:
-                return
+                try:
+                    await self._ensure_text_only_content(result)
+                except Exception as e:
+                    logger.warning(f"text-only render failed: {e}")
+                    if result.text and result.text.strip():
+                        await event.send(event.plain_result(self._format_text_fallback(result)))
+                    return
+
+                if not result.contents:
+                    return
 
             tasks = [self._download_content(c) for c in result.contents]
             download_results = await asyncio.gather(*tasks)
