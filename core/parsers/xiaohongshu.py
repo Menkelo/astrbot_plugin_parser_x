@@ -122,6 +122,38 @@ class XiaoHongShuParser(BaseParser):
         decoded = unquote(raw)
         return decoded or url
 
+    @staticmethod
+    def _debug_note_locations(json_obj: dict) -> str:
+        """调试用：定向汇总 note 可能所在的几个位置（仅键名/类型，不打印大段内容）。"""
+        try:
+            note_obj = json_obj.get("note") if isinstance(json_obj.get("note"), dict) else {}
+            detail_map = (
+                note_obj.get("noteDetailMap")
+                if isinstance(note_obj.get("noteDetailMap"), dict)
+                else {}
+            )
+            sample: dict = {}
+            if detail_map:
+                first = next(iter(detail_map.values()))
+                if isinstance(first, dict):
+                    sample["entry_keys"] = list(first.keys())
+                    inner = first.get("note")
+                    if isinstance(inner, dict):
+                        sample["note_keys"] = list(inner.keys())
+                        sample["type"] = inner.get("type")
+            note_data_obj = (
+                json_obj.get("noteData") if isinstance(json_obj.get("noteData"), dict) else {}
+            )
+            return (
+                f"top={list(json_obj.keys())}, "
+                f"note_keys={list(note_obj.keys())}, "
+                f"detailMap_ids={list(detail_map.keys())}, "
+                f"noteData_keys={list(note_data_obj.keys())}, "
+                f"sample={sample}"
+            )
+        except Exception as e:
+            return f"<shape error: {e}>"
+
     async def _fetch_html(
         self,
         url: str,
@@ -225,6 +257,9 @@ class XiaoHongShuParser(BaseParser):
                 note_data = detail_map.get(first_key, {}).get("note", {})
 
         if not note_data:
+            logger.warning(
+                f"[XHS] explore 未找到 note (xhs_id={xhs_id}): {self._debug_note_locations(json_obj)}"
+            )
             raise ParseException("can't find note detail in json_obj")
 
         return self._process_explore_data(note_data, final_url)
@@ -262,7 +297,9 @@ class XiaoHongShuParser(BaseParser):
         if note_data:
             return self._process_explore_data(note_data, final_url)
 
-        logger.warning(f"XHS Parse Failed. Keys in json_obj: {list(json_obj.keys())}")
+        logger.warning(
+            f"[XHS] discovery 未找到 note (xhs_id={xhs_id}): {self._debug_note_locations(json_obj)}"
+        )
         raise ParseException("解析异常: can't find noteData in noteData.data or noteDetailMap")
 
     def _process_explore_data(self, note_data: dict, final_url: str | None = None):
