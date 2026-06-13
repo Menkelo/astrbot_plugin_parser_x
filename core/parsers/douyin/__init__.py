@@ -400,6 +400,20 @@ class DouyinParser(BaseParser):
 
         raise ParseException(f"短链解析失败，无法识别最终链接: {final_url}")
 
+    @handle(
+        "modal_id",
+        r"(?:https?://)?(?:www\.)?douyin\.com/\S*[?&]modal_id=(?P<vid>\d+)",
+    )
+    async def _parse_modal(self, searched: re.Match[str]):
+        # www.douyin.com/jingxuan?modal_id=xxx 这类"精选/弹窗"链接：
+        # 视频 ID 在 query 的 modal_id 里，路径不是 /video/ 或 /note/，
+        # 此前所有 handler 都匹配不上 → 整条消息被静默忽略、无任何响应。
+        # 直接取出 ID，走稳定的 m / iesdouyin 解析路径。
+        vid = searched.group("vid")
+        if not vid:
+            raise ParseException("未能从链接中提取抖音视频 ID(modal_id)")
+        return await self._parse_by_id_fallback(vid)
+
     @handle("douyin", r"douyin\.com/(?P<ty>video|note)/(?P<vid>\d+)")
     @handle("iesdouyin", r"iesdouyin\.com/share/(?P<ty>slides|video|note)/(?P<vid>\d+)")
     @handle("m.douyin", r"m\.douyin\.com/share/(?P<ty>slides|video|note)/(?P<vid>\d+)")
