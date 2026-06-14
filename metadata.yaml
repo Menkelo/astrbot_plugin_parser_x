@@ -1,7 +1,7 @@
 name: astrbot_plugin_r_parser
 display_name: R-Parser
 desc: 一个面向B站、抖音、快手、微博、小红书的链接解析插件，支持自动识别消息中的链接并提取视频、图片、图文、B站动态与B站直播内容
-version: 1.4.1
+version: 1.4.2
 author: Menkelo
 support_platforms:
   - aiocqhttp

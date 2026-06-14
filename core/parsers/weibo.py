@@ -83,15 +83,12 @@ class WeiboParser(BaseParser):
         
         contents = []
 
-        page_info = data.get("page_info", {})
-        if page_info and page_info.get("type") == "video":
-            media_info = page_info.get("media_info", {})
-            video_url = (
-                media_info.get("mp4_720p_mp4") or 
-                media_info.get("mp4_hd_url") or 
-                media_info.get("mp4_sd_url") or
-                media_info.get("stream_url")
-            )
+        page_info = data.get("page_info") or {}
+        if isinstance(page_info, dict) and page_info.get("type") == "video":
+            media_info = page_info.get("media_info") or {}
+            if not isinstance(media_info, dict):
+                media_info = {}
+            video_url = self._pick_video_url(page_info)
             if video_url:
                 duration = media_info.get("duration", 0)
                 
@@ -103,15 +100,12 @@ class WeiboParser(BaseParser):
                 # 提纯：不下载封面
                 contents.append(VideoContent(video_task, None, duration=duration))
 
-        if "pics" in data:
-            for pic in data["pics"]:
-                url = self._pick_static_pic_url(pic)
-                if url:
-                    img_task = self.downloader.download_img(
-                        url, 
-                        ext_headers=self.headers
-                    )
-                    contents.append(ImageContent(img_task))
+        for url in self._collect_static_pic_urls(data):
+            img_task = self.downloader.download_img(
+                url,
+                ext_headers=self.headers,
+            )
+            contents.append(ImageContent(img_task))
 
         # 移除了评论区抓取逻辑
 
@@ -144,6 +138,111 @@ class WeiboParser(BaseParser):
             url=original_url,
             extra=extra,
         )
+
+    @staticmethod
+    def _pick_video_url(page_info: dict) -> str | None:
+        if not isinstance(page_info, dict):
+            return None
+
+        media_info = page_info.get("media_info") or {}
+        urls = page_info.get("urls") or {}
+
+        if not isinstance(media_info, dict):
+            media_info = {}
+        if not isinstance(urls, dict):
+            urls = {}
+
+        candidates = (
+            urls.get("mp4_720p_mp4"),
+            urls.get("mp4_hd_mp4"),
+            urls.get("mp4_ld_mp4"),
+            media_info.get("mp4_720p_mp4"),
+            media_info.get("mp4_hd_url"),
+            media_info.get("mp4_sd_url"),
+            media_info.get("stream_url_hd"),
+            media_info.get("stream_url"),
+        )
+        for url in candidates:
+            if isinstance(url, str) and url:
+                return url
+        return None
+
+    @classmethod
+    def _collect_static_pic_urls(cls, data: dict) -> list[str]:
+        if not isinstance(data, dict):
+            return []
+
+        pid_to_url: dict[str, str] = {}
+        ordered_pids: list[str] = []
+        raw_urls: list[str] = []
+
+        def add_pid(pid: str | None) -> None:
+            if isinstance(pid, str) and pid and pid not in ordered_pids:
+                ordered_pids.append(pid)
+
+        pics = data.get("pics")
+        if isinstance(pics, list):
+            for pic in pics:
+                if not isinstance(pic, dict) or cls._is_video_pic(pic):
+                    continue
+
+                pid = pic.get("pid")
+                add_pid(pid)
+
+                url = normalize_image_url(cls._pick_static_pic_url(pic))
+                if not url:
+                    continue
+                if isinstance(pid, str) and pid:
+                    pid_to_url[pid] = url
+                else:
+                    raw_urls.append(url)
+
+        pic_infos = data.get("pic_infos")
+        if isinstance(pic_infos, dict):
+            for pid, pic in pic_infos.items():
+                if not isinstance(pic, dict) or cls._is_video_pic(pic):
+                    continue
+
+                pid_str = str(pid)
+                add_pid(pid_str)
+
+                url = normalize_image_url(cls._pick_static_pic_url(pic))
+                if url:
+                    pid_to_url[pid_str] = url
+
+        pic_ids = data.get("pic_ids")
+        if isinstance(pic_ids, list):
+            for pid in pic_ids:
+                if isinstance(pid, str):
+                    add_pid(pid)
+
+        urls: list[str] = []
+        seen: set[str] = set()
+
+        for pid in ordered_pids:
+            url = pid_to_url.get(pid) or cls._build_pic_url_from_pid(pid)
+            if not url or url in seen:
+                continue
+            seen.add(url)
+            urls.append(url)
+
+        for url in raw_urls:
+            if url and url not in seen:
+                seen.add(url)
+                urls.append(url)
+
+        return urls
+
+    @staticmethod
+    def _is_video_pic(pic: dict) -> bool:
+        pic_type = str(pic.get("type") or "").lower()
+        return pic_type == "video" or pic_type.endswith("_video")
+
+    @staticmethod
+    def _build_pic_url_from_pid(pid: str) -> str | None:
+        if not re.fullmatch(r"[0-9a-zA-Z]+", pid or ""):
+            return None
+        return f"https://wx1.sinaimg.cn/mw2000/{pid}.jpg"
 
     @staticmethod
     def _pick_static_pic_url(pic: dict) -> str | None:
