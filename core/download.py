@@ -84,6 +84,10 @@ class Downloader:
             http_version=CurlHttpVersion.V1_1,
         )
 
+    @staticmethod
+    def _ensure_parent_dir(file_path: Path) -> None:
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+
     @auto_task
     async def streamd(
         self,
@@ -97,6 +101,7 @@ class Downloader:
             file_name = generate_file_name(url)
 
         file_path = self.cache_dir / file_name
+        self._ensure_parent_dir(file_path)
 
         if file_path.exists():
             if file_path.stat().st_size < 100:
@@ -328,6 +333,7 @@ class Downloader:
             sock_connect=20,
             sock_read=120,
         )
+        self._ensure_parent_dir(file_path)
 
         async with aiohttp.ClientSession(
             headers=headers,
@@ -344,6 +350,7 @@ class Downloader:
 
                 chunk_size = 256 * 1024
 
+                self._ensure_parent_dir(file_path)
                 with self.get_progress_bar(file_name, content_length) as bar:
                     async with aiofiles.open(file_path, "wb") as f:
                         downloaded = 0
@@ -370,6 +377,7 @@ class Downloader:
         headers: dict,
     ) -> Path:
         await safe_unlink(file_path)
+        self._ensure_parent_dir(file_path)
 
         opts = {
             "quiet": True,
@@ -409,6 +417,7 @@ class Downloader:
 
     async def _save_response_to_file(self, response, file_path, file_name, limit_mb):
         content_length = int(response.headers.get("Content-Length", 0))
+        self._ensure_parent_dir(file_path)
 
         if content_length and (content_length / 1024 / 1024) > limit_mb:
             raise SizeLimitException(
