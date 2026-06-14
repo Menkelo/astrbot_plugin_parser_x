@@ -1,3 +1,10 @@
+# [v1.3.5] - 小红书静图误判修复
+
+* 收窄小红书动态图视频 URL 判断，不再把普通 `xhscdn.com` 静态图链接当作 live photo 视频。
+* 保留 `sns-video`、`.mp4`、`livePhotoVideoKey` 等明确动态图视频特征识别。
+
+---
+
 # [v1.3.4] - Live Photo 媒体修复
 
 * B 站 opus / 动态支持读取相册图片中的 `live_url`，动态图不再按静态图发送。

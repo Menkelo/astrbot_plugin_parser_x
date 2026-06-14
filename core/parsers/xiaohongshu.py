@@ -129,7 +129,6 @@ class XiaoHongShuParser(BaseParser):
             token in u
             for token in (
                 "sns-video",
-                "xhscdn.com",
                 ".mp4",
                 ".m3u8",
                 "mime_type=video",
