@@ -17,7 +17,7 @@ class CacheCleaner:
     """
 
     JOBNAME = "CacheCleaner"
-    MAX_AGE_SECONDS = 48 * 60 * 60
+    MAX_AGE_SECONDS = 24 * 60 * 60
 
     def __init__(self, context: Context, config: AstrBotConfig):
         # 内嵌清理周期：每天凌晨 2:30
