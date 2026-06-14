@@ -13,7 +13,7 @@ from astrbot.core.config.astrbot_config import AstrBotConfig
 from ..data import Platform, VideoContent, ImageContent
 from ..download import Downloader
 from ..text_renderer import TextCardRenderer
-from ..utils import image_to_data_uri
+from ..utils import image_to_data_uri, normalize_image_url
 from .base import BaseParser, handle, ParseException
 
 
@@ -62,11 +62,11 @@ class WeiboParser(BaseParser):
         
         user = data.get("user", {})
         author_name = user.get("screen_name", "微博用户")
-        author_avatar = self._norm_img(
+        author_avatar = normalize_image_url(
             user.get("avatar_hd")
             or user.get("avatar_large")
             or user.get("profile_image_url", "")
-        )
+        ) or ""
         
         text = data.get("text", "")
         if data.get("isLongText") and "longText" in data:
@@ -233,18 +233,6 @@ class WeiboParser(BaseParser):
 
         return ImageContent(out_path)
 
-    @staticmethod
-    def _norm_img(url: str | None) -> str:
-        if not url:
-            return ""
-
-        url = str(url).strip()
-        if url.startswith("//"):
-            return "https:" + url
-        if url.startswith("http://"):
-            return "https://" + url[len("http://") :]
-        return url
-
     async def _img_to_data_uri(
         self,
         url: str | None,
@@ -255,7 +243,6 @@ class WeiboParser(BaseParser):
             url,
             headers=self.headers,
             referer="https://m.weibo.cn/",
-            normalizer=self._norm_img,
             max_bytes=max_bytes,
             timeout=10,
             debug_label="[Weibo] image",

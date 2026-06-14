@@ -8,7 +8,7 @@ from pathlib import Path
 from astrbot.api import logger
 
 from ...data import ImageContent
-from ...utils import image_to_data_uri
+from ...utils import cached_image_to_data_uri, normalize_image_url
 from ..base import ParseException
 
 
@@ -103,23 +103,6 @@ class BiliSpaceService:
         return last
 
     @staticmethod
-    def _norm_cover(url: str | None) -> str | None:
-        if not url:
-            return None
-
-        url = str(url).strip()
-        if not url:
-            return None
-
-        if url.startswith("//"):
-            return f"https:{url}"
-
-        if url.startswith("http://"):
-            return "https://" + url[len("http://") :]
-
-        return url
-
-    @staticmethod
     def _fmt_date(ts) -> str | None:
         try:
             ts = int(ts)
@@ -149,29 +132,17 @@ class BiliSpaceService:
         """
         将 B站头像/封面转 data URI，避免 Playwright 直接加载远程图失败。
         """
-        img_url = self._norm_cover(img_url)
-        if not img_url:
-            return None
-
-        if img_url in self._img_data_uri_cache:
-            return self._img_data_uri_cache[img_url]
-
-        if len(self._img_data_uri_cache) > 512:
-            self._img_data_uri_cache.clear()
-
         referer = f"https://space.bilibili.com/{mid}"
-        data_uri = await image_to_data_uri(
+        return await cached_image_to_data_uri(
+            self._img_data_uri_cache,
             self.parser.http_get,
             img_url,
             headers=self._headers(mid),
             referer=referer,
-            normalizer=None,
             max_bytes=max_bytes,
             timeout=12,
             debug_label="[Bilibili-space] image",
         )
-        self._img_data_uri_cache[img_url] = data_uri
-        return data_uri
 
     def _to_work(self, v: dict) -> dict | None:
         if not isinstance(v, dict):
@@ -193,7 +164,7 @@ class BiliSpaceService:
 
         return {
             "title": v.get("title") or "未命名稿件",
-            "cover": self._norm_cover(v.get("pic") or v.get("cover")),
+            "cover": normalize_image_url(v.get("pic") or v.get("cover")),
             "url": url,
             "ts": int(ts) if str(ts).isdigit() else 0,
             "date": self._fmt_date(ts),
@@ -242,7 +213,7 @@ class BiliSpaceService:
             c = data.get("card") or {}
 
             profile["name"] = c.get("name") or profile["name"]
-            profile["avatar"] = self._norm_cover(c.get("face"))
+            profile["avatar"] = normalize_image_url(c.get("face"))
             profile["sign"] = c.get("sign") or ""
             profile["level"] = (c.get("level_info") or {}).get("current_level")
 

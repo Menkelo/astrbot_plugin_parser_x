@@ -101,7 +101,6 @@ class Downloader:
             file_name = generate_file_name(url)
 
         file_path = self.cache_dir / file_name
-        self._ensure_parent_dir(file_path)
 
         if file_path.exists():
             if file_path.stat().st_size < 100:
@@ -333,7 +332,6 @@ class Downloader:
             sock_connect=20,
             sock_read=120,
         )
-        self._ensure_parent_dir(file_path)
 
         async with aiohttp.ClientSession(
             headers=headers,
@@ -592,6 +590,7 @@ class Downloader:
             file_stem = Path(generate_file_name(url)).stem
 
         video_path = self.cache_dir / f"{file_stem}.mp4"
+        self._ensure_parent_dir(video_path)
 
         if video_path.exists() and video_path.stat().st_size > 100:
             return video_path
@@ -626,6 +625,7 @@ class Downloader:
             file_stem = Path(generate_file_name(url)).stem
 
         audio_path = self.cache_dir / f"{file_stem}.m4a"
+        self._ensure_parent_dir(audio_path)
 
         if audio_path.exists() and audio_path.stat().st_size > 100:
             return audio_path

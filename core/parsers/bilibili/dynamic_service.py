@@ -10,7 +10,7 @@ from bilibili_api.exceptions import ResponseCodeException
 from astrbot.api import logger
 
 from ...data import ImageContent, MediaContent
-from ...utils import image_to_data_uri
+from ...utils import cached_image_to_data_uri, normalize_image_url
 from ..base import ParseException
 
 
@@ -20,23 +20,6 @@ class BiliDynamicService:
         self._img_data_uri_cache: dict[str, str | None] = {}
 
     # region 通用工具
-
-    @staticmethod
-    def norm_img(url: str | None) -> str | None:
-        if not url:
-            return None
-
-        url = str(url).strip()
-        if not url:
-            return None
-
-        if url.startswith("//"):
-            return "https:" + url
-
-        if url.startswith("http://"):
-            return "https://" + url[len("http://") :]
-
-        return url
 
     @staticmethod
     def norm_ts(ts) -> int | None:
@@ -290,7 +273,7 @@ class BiliDynamicService:
         uniq = []
 
         for u in image_urls:
-            u = cls.norm_img(u)
+            u = normalize_image_url(u)
             if not u:
                 continue
             if u not in seen:
@@ -311,30 +294,18 @@ class BiliDynamicService:
         """
         将 B站图片转 data URI，避免 Playwright 渲染时头像加载失败。
         """
-        img_url = self.norm_img(img_url)
-        if not img_url:
-            return None
-
-        if img_url in self._img_data_uri_cache:
-            return self._img_data_uri_cache[img_url]
-
-        if len(self._img_data_uri_cache) > 512:
-            self._img_data_uri_cache.clear()
-
         headers = self.parser.headers.copy()
         headers["Cache-Control"] = "no-cache"
-        data_uri = await image_to_data_uri(
+        return await cached_image_to_data_uri(
+            self._img_data_uri_cache,
             self.parser.http_get,
             img_url,
             headers=headers,
             referer=referer,
-            normalizer=None,
             max_bytes=max_bytes,
             timeout=10,
             debug_label="[Bilibili] dynamic image",
         )
-        self._img_data_uri_cache[img_url] = data_uri
-        return data_uri
 
     async def _fetch_dynamic_raw(self, dynamic_id: int) -> dict:
         raw_dynamic = None
@@ -403,7 +374,7 @@ class BiliDynamicService:
 
         module_author = modules.get("module_author") or {}
         author_name = module_author.get("name") or "B站用户"
-        author_avatar = self.norm_img(module_author.get("face"))
+        author_avatar = normalize_image_url(module_author.get("face"))
 
         pub_ts = self.norm_ts(module_author.get("pub_ts"))
         time_text = self.fmt_time(pub_ts)

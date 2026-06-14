@@ -6,7 +6,7 @@ import json
 import mimetypes
 import re
 import shutil
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, MutableMapping
 from collections import OrderedDict
 from pathlib import Path
 from typing import Any, TypeVar
@@ -95,6 +95,43 @@ async def image_to_data_uri(
     except Exception as e:
         logger.debug(f"{debug_label} data URI failed: {url} | {e}")
         return None
+
+
+async def cached_image_to_data_uri(
+    cache: MutableMapping[str, str | None],
+    http_get: Callable[..., Awaitable[Any]],
+    img_url: str | None,
+    *,
+    headers: dict[str, str] | None = None,
+    referer: str | None = None,
+    normalizer: Callable[[str | None], str | None] | None = normalize_image_url,
+    max_bytes: int = 4 * 1024 * 1024,
+    timeout: int = 10,
+    debug_label: str = "image",
+    max_entries: int = 512,
+) -> str | None:
+    url = normalizer(img_url) if normalizer else img_url
+    if not url:
+        return None
+
+    if url in cache:
+        return cache[url]
+
+    if len(cache) > max_entries:
+        cache.clear()
+
+    data_uri = await image_to_data_uri(
+        http_get,
+        url,
+        headers=headers,
+        referer=referer,
+        normalizer=None,
+        max_bytes=max_bytes,
+        timeout=timeout,
+        debug_label=debug_label,
+    )
+    cache[url] = data_uri
+    return data_uri
 
 
 class LimitedSizeDict(OrderedDict[K, V]):
