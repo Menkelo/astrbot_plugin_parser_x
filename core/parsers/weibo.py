@@ -199,13 +199,8 @@ class WeiboParser(BaseParser):
 
         out: list[tuple[str, float | int]] = []
         seen: set[str] = set()
-        for video_url, duration, key in items:
-            # 保留 page_info 和 pics 中的不同媒体位；兜底对象再按 key 去重。
-            dedupe_key = (
-                key
-                if key.startswith(("page_info", "pic:"))
-                else cls._normalize_video_url_key(video_url)
-            )
+        for video_url, duration, _key in items:
+            dedupe_key = cls._normalize_video_url_key(video_url)
             if dedupe_key in seen:
                 continue
             seen.add(dedupe_key)
