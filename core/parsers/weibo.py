@@ -82,7 +82,6 @@ class WeiboParser(BaseParser):
                 pass
         
         contents = []
-        image_urls: list[str] = []
 
         page_info = data.get("page_info", {})
         if page_info and page_info.get("type") == "video":
@@ -108,7 +107,6 @@ class WeiboParser(BaseParser):
             for pic in data["pics"]:
                 url = self._pick_static_pic_url(pic)
                 if url:
-                    image_urls.append(url)
                     img_task = self.downloader.download_img(
                         url, 
                         ext_headers=self.headers
@@ -130,7 +128,6 @@ class WeiboParser(BaseParser):
                     author_avatar=text_card_avatar,
                     text=text,
                     timestamp=timestamp,
-                    image_urls=[],
                 )
                 contents.append(text_card)
             except Exception as e:
@@ -140,7 +137,6 @@ class WeiboParser(BaseParser):
         original_url = f"https://weibo.com/{user.get('id')}/{bid}"
 
         return self.result(
-            title="微博正文",
             text=text,
             author=author,
             contents=contents,
@@ -209,7 +205,6 @@ class WeiboParser(BaseParser):
         author_avatar: str | None,
         text: str,
         timestamp: int | None,
-        image_urls: list[str],
     ) -> ImageContent:
         avatar_digest = (
             hashlib.md5(author_avatar.encode("utf-8")).hexdigest()
@@ -224,7 +219,6 @@ class WeiboParser(BaseParser):
                     avatar_digest,
                     self._fmt_time(timestamp) or "",
                     text,
-                    "|".join(image_urls),
                     "weibo_text_card_v3",
                 ]
             ).encode("utf-8")

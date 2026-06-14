@@ -1,33 +1,7 @@
 from random import choice
 from typing import Any
-from urllib.parse import parse_qs, urlparse
 
 from msgspec import Struct, field
-
-
-def _stable_video_key_from_url(url: str) -> str:
-    """
-    从 URL 提取稳定去重 key，尽量忽略 host/query 噪音。
-    """
-    try:
-        p = urlparse(url)
-        q = parse_qs(p.query)
-
-        for k in ("video_id", "vid", "item_id", "aweme_id"):
-            vals = q.get(k) or []
-            if vals and vals[0]:
-                return f"{k}:{vals[0]}"
-
-        path = p.path.rstrip("/")
-        if path:
-            last = path.split("/")[-1]
-            if last:
-                return f"path:{last}"
-
-        return f"url:{url}"
-
-    except Exception:
-        return f"url:{url}"
 
 
 class Avatar(Struct):
@@ -80,34 +54,6 @@ class VideoData(Struct):
         if not self.images:
             return []
         return [choice(img.url_list) for img in self.images if img.url_list]
-
-    @property
-    def dynamic_video_items(self) -> list[tuple[str, str]]:
-        """
-        返回 [(dedupe_key, url), ...]
-        """
-        if not self.images:
-            return []
-
-        out: list[tuple[str, str]] = []
-
-        for idx, img in enumerate(self.images):
-            if not img.video or not img.video.play_addr or not img.video.play_addr.url_list:
-                continue
-
-            raw_url = next(
-                (u for u in img.video.play_addr.url_list if isinstance(u, str) and u),
-                None,
-            )
-            if not raw_url:
-                continue
-
-            url = raw_url.replace("playwm", "play")
-            uri = img.video.play_addr.uri
-            key = f"uri:{uri}" if uri else f"idx:{idx}:{url}"
-            out.append((key, url))
-
-        return out
 
     @property
     def video_url(self) -> str | None:

@@ -261,8 +261,7 @@ class DouyinParser(BaseParser):
         contents = []
         image_urls = meta.image_urls or extract_static_image_urls_deep(aweme)
 
-        # 图文 / live photo 作品会带 images，同时可能把动图播放地址塞进顶层 video。
-        # 当前策略回退为静态图，避免把无声/不可直连的动图视频当普通视频下载。
+        # 图文作品优先发送静态图片，避免把无声或不可直连的图文视频误当普通视频下载。
         if self._has_image_album(aweme) and image_urls:
             contents.extend(
                 self._create_image_contents_with_headers(
