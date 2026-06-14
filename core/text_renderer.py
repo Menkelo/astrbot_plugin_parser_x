@@ -76,8 +76,9 @@ class TextCardRenderer:
               min-height: 24px;
               padding: 3px 9px;
               border-radius: 999px;
-              background: #edf8ff;
-              color: #6aa9e9;
+              background: #f6fbff;
+              border: 1px solid #e2f1ff;
+              color: #8ebfe9;
               font-size: 13px;
               font-weight: 750;
               line-height: 1.2;
@@ -122,15 +123,6 @@ class TextCardRenderer:
               word-break: break-word;
             }}
 
-            .title {{
-              margin-top: 14px;
-              color: #20242c;
-              font-size: 19px;
-              font-weight: 800;
-              line-height: 1.45;
-              word-break: break-word;
-            }}
-
             .text {{
               margin-top: 18px;
               color: #303744;
@@ -138,16 +130,6 @@ class TextCardRenderer:
               line-height: 1.78;
               white-space: pre-wrap;
               word-break: break-word;
-            }}
-
-            .url {{
-              margin-top: 20px;
-              padding-top: 14px;
-              border-top: 1px solid #edf0f4;
-              color: #87909d;
-              font-size: 12px;
-              line-height: 1.55;
-              word-break: break-all;
             }}
 
             .footer {{

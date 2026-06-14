@@ -1,8 +1,10 @@
+import base64
+import mimetypes
 import re
+from email.utils import parsedate_to_datetime
 from html import unescape
 from re import Match
 from typing import ClassVar
-from email.utils import parsedate_to_datetime
 
 from astrbot.api import logger
 from astrbot.core.config.astrbot_config import AstrBotConfig
@@ -54,7 +56,11 @@ class WeiboParser(BaseParser):
         
         user = data.get("user", {})
         author_name = user.get("screen_name", "微博用户")
-        author_avatar = user.get("profile_image_url", "")
+        author_avatar = self._norm_img(
+            user.get("avatar_hd")
+            or user.get("avatar_large")
+            or user.get("profile_image_url", "")
+        )
         
         text = data.get("text", "")
         if data.get("isLongText") and "longText" in data:
@@ -107,6 +113,12 @@ class WeiboParser(BaseParser):
 
         # 移除了评论区抓取逻辑
 
+        extra = {}
+        if not contents:
+            text_card_avatar = await self._img_to_data_uri(author_avatar) or author_avatar
+            if text_card_avatar:
+                extra["text_card_avatar"] = text_card_avatar
+
         author = self.create_author(author_name, author_avatar, ext_headers=self.headers)
         original_url = f"https://weibo.com/{user.get('id')}/{bid}"
 
@@ -117,8 +129,65 @@ class WeiboParser(BaseParser):
             contents=contents,
             timestamp=timestamp,
             url=original_url,
-            extra={"text_card_avatar": author_avatar},
+            extra=extra,
         )
+
+    @staticmethod
+    def _norm_img(url: str | None) -> str:
+        if not url:
+            return ""
+
+        url = str(url).strip()
+        if url.startswith("//"):
+            return "https:" + url
+        if url.startswith("http://"):
+            return "https://" + url[len("http://") :]
+        return url
+
+    async def _img_to_data_uri(
+        self,
+        url: str | None,
+        max_bytes: int = 2 * 1024 * 1024,
+    ) -> str | None:
+        url = self._norm_img(url)
+        if not url:
+            return None
+
+        headers = self.headers.copy()
+        headers.update(
+            {
+                "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+                "Referer": "https://m.weibo.cn/",
+            }
+        )
+
+        try:
+            resp = await self.http_get(
+                url,
+                headers=headers,
+                allow_redirects=True,
+                timeout=10,
+            )
+            if resp.status_code >= 400:
+                return None
+
+            content = resp.content or b""
+            if not content or len(content) > max_bytes:
+                return None
+
+            content_type = (
+                (resp.headers.get("Content-Type", "") or "").split(";")[0].strip()
+            )
+            if not content_type.lower().startswith("image/"):
+                guessed, _ = mimetypes.guess_type(url)
+                content_type = guessed or "image/jpeg"
+
+            encoded = base64.b64encode(content).decode("ascii")
+            return f"data:{content_type};base64,{encoded}"
+
+        except Exception as e:
+            logger.debug(f"[Weibo] 头像转 data URI 失败: {url} | {e}")
+            return None
 
     async def _parse_with_ytdlp(self, url: str):
         if not url.startswith("http"):
