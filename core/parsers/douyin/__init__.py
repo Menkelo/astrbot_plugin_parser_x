@@ -36,7 +36,7 @@ class DouyinParser(BaseParser):
         if self.cookies:
             self._set_cookies(self.cookies)
 
-        self.enable_comment_card = bool(config.get("douyin_comment", True))
+        self.enable_comment_card = bool(config.get("douyin_comment", False))
         comment_conf = config.get("comment_filter", {})
         if not isinstance(comment_conf, dict):
             comment_conf = {}
