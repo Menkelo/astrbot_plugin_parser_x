@@ -1,10 +1,26 @@
+import re
 from html import escape
 from pathlib import Path
 
 from playwright.async_api import async_playwright
 
+HASHTAG_RE = re.compile(r"#[^#\s\r\n][^#\r\n]{0,60}?#")
+
 
 class TextCardRenderer:
+    @staticmethod
+    def _render_text_html(text: str) -> str:
+        parts: list[str] = []
+        last = 0
+
+        for match in HASHTAG_RE.finditer(text or ""):
+            parts.append(escape(text[last : match.start()]))
+            parts.append(f'<span class="hashtag">{escape(match.group(0))}</span>')
+            last = match.end()
+
+        parts.append(escape(text[last:]))
+        return "".join(parts)
+
     async def render_text_card(
         self,
         out_path: Path,
@@ -26,6 +42,7 @@ class TextCardRenderer:
         time_html = (
             f'<div class="time">{escape(timestamp_text)}</div>' if timestamp_text else ""
         )
+        text_html = self._render_text_html(text)
 
         html = f"""
         <!doctype html>
@@ -132,6 +149,11 @@ class TextCardRenderer:
               word-break: break-word;
             }}
 
+            .hashtag {{
+              color: #8ebfe9;
+              font-weight: 650;
+            }}
+
             .footer {{
               margin-top: 12px;
               color: #9aa2ad;
@@ -150,7 +172,7 @@ class TextCardRenderer:
               {avatar_html}
               {author_html}
             </div>
-            <div class="text">{escape(text)}</div>
+            <div class="text">{text_html}</div>
             <div class="footer">Menkelo/astrbot_plugin_r_parser</div>
           </div>
 
