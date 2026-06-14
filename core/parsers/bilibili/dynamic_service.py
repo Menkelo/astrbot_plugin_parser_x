@@ -144,41 +144,12 @@ class BiliDynamicService:
         return uniq
 
     @classmethod
-    def _dedupe_media_items(cls, media_items: list[tuple[str, str]]) -> list[tuple[str, str]]:
-        seen = set()
-        uniq: list[tuple[str, str]] = []
-
-        for media_type, url in media_items:
-            url = normalize_image_url(url)
-            if media_type not in {"image", "video"} or not url:
-                continue
-
-            key = (media_type, url)
-            if key not in seen:
-                seen.add(key)
-                uniq.append(key)
-
-        return uniq
-
-    @classmethod
-    def _pic_to_media_item(cls, pic: Any) -> tuple[str, str] | None:
+    def _pic_to_image_url(cls, pic: Any) -> str | None:
         if not isinstance(pic, dict):
             return None
 
-        live_url = cls._first_str(
-            pic.get("live_url"),
-            pic.get("liveUrl"),
-            pic.get("video_url"),
-            pic.get("videoUrl"),
-        )
-        if live_url:
-            return "video", live_url
-
         image_url = cls._first_str(pic.get("url"), pic.get("src"))
-        if image_url:
-            return "image", image_url
-
-        return None
+        return image_url or None
 
     @classmethod
     def extract_author_info(cls, modules: Any) -> tuple[str, str | None, int | None]:
@@ -510,15 +481,7 @@ class BiliDynamicService:
 
     @classmethod
     def extract_modules_list_image_urls(cls, modules: Any) -> list[str]:
-        return [
-            url
-            for media_type, url in cls.extract_modules_list_media_items(modules)
-            if media_type == "image"
-        ]
-
-    @classmethod
-    def extract_modules_list_media_items(cls, modules: Any) -> list[tuple[str, str]]:
-        media_items: list[tuple[str, str]] = []
+        image_urls: list[str] = []
 
         for module in cls._iter_modules(modules):
             module_type = module.get("module_type")
@@ -529,9 +492,9 @@ class BiliDynamicService:
                 pics = album.get("pics") or []
                 if isinstance(pics, list):
                     for pic in pics:
-                        item = cls._pic_to_media_item(pic)
-                        if item:
-                            media_items.append(item)
+                        image_url = cls._pic_to_image_url(pic)
+                        if image_url:
+                            image_urls.append(image_url)
 
             if module_type == "MODULE_TYPE_CONTENT":
                 content = module.get("module_content") or {}
@@ -546,45 +509,37 @@ class BiliDynamicService:
                         pics = pic_obj.get("pics") or []
                         if isinstance(pics, list):
                             for pic in pics:
-                                item = cls._pic_to_media_item(pic)
-                                if item:
-                                    media_items.append(item)
+                                image_url = cls._pic_to_image_url(pic)
+                                if image_url:
+                                    image_urls.append(image_url)
 
-        return media_items
+        return image_urls
 
     @classmethod
     def extract_dynamic_image_urls(cls, item: dict, modules: Any) -> list[str]:
-        return [
-            url
-            for media_type, url in cls.extract_dynamic_media_items(item, modules)
-            if media_type == "image"
-        ]
+        image_urls: list[str] = []
 
-    @classmethod
-    def extract_dynamic_media_items(cls, item: dict, modules: Any) -> list[tuple[str, str]]:
-        media_items: list[tuple[str, str]] = []
-
-        media_items.extend(cls.extract_modules_list_media_items(modules))
+        image_urls.extend(cls.extract_modules_list_image_urls(modules))
 
         if not isinstance(modules, dict):
-            return cls._dedupe_media_items(media_items)
+            return cls._dedupe_image_urls(image_urls)
 
         md = modules.get("module_dynamic") or {}
         if not isinstance(md, dict):
-            return cls._dedupe_media_items(media_items)
+            return cls._dedupe_image_urls(image_urls)
 
         major = md.get("major") or {}
         if not isinstance(major, dict):
-            return cls._dedupe_media_items(media_items)
+            return cls._dedupe_image_urls(image_urls)
 
         opus = major.get("opus") or {}
         if isinstance(opus, dict):
             pics = opus.get("pics") or []
             if isinstance(pics, list):
                 for p in pics:
-                    media_item = cls._pic_to_media_item(p)
-                    if media_item:
-                        media_items.append(media_item)
+                    image_url = cls._pic_to_image_url(p)
+                    if image_url:
+                        image_urls.append(image_url)
 
             content = opus.get("content") or {}
             paragraphs = content.get("paragraphs") or []
@@ -597,20 +552,20 @@ class BiliDynamicService:
                     pics2 = pic_obj.get("pics") or []
                     if isinstance(pics2, list):
                         for p in pics2:
-                            media_item = cls._pic_to_media_item(p)
-                            if media_item:
-                                media_items.append(media_item)
+                            image_url = cls._pic_to_image_url(p)
+                            if image_url:
+                                image_urls.append(image_url)
 
         archive = major.get("archive") or {}
         if isinstance(archive, dict):
             cover = archive.get("cover")
             if isinstance(cover, str) and cover:
-                media_items.append(("image", cover))
+                image_urls.append(cover)
 
         if isinstance(item, dict):
-            media_items.extend(cls.extract_modules_list_media_items(item.get("modules")))
+            image_urls.extend(cls.extract_modules_list_image_urls(item.get("modules")))
 
-        return cls._dedupe_media_items(media_items)
+        return cls._dedupe_image_urls(image_urls)
 
     # endregion
 
@@ -747,21 +702,15 @@ class BiliDynamicService:
 
         dynamic_title = self.extract_dynamic_title(item, modules)
         full_text = self.neutralize_at_text(self.extract_dynamic_text(item, modules))
-        media_items = self.extract_dynamic_media_items(item, modules)
+        image_urls = self.extract_dynamic_image_urls(item, modules)
 
         media_headers = self.parser.headers.copy()
         media_headers["Referer"] = f"https://www.bilibili.com/opus/{dynamic_id}"
-
-        full_media: list[MediaContent] = []
-        for media_type, media_url in media_items:
-            if media_type == "video":
-                full_media.extend(
-                    self.parser.create_dynamic_contents([media_url], ext_headers=media_headers)
-                )
-            else:
-                full_media.extend(
-                    self.parser.create_image_contents([media_url], ext_headers=media_headers)
-                )
+        full_images: list[MediaContent] = (
+            self.parser.create_image_contents(image_urls, ext_headers=media_headers)
+            if image_urls
+            else []
+        )
 
         author_avatar_data_uri = await self.img_to_data_uri(
             author_avatar,
@@ -771,8 +720,8 @@ class BiliDynamicService:
         digest = hashlib.md5(
             (
                 f"{dynamic_id}|{author_name}|{author_avatar}|"
-                f"{dynamic_title}|{full_text}|{media_items}|"
-                f"dyn_service_v5"
+                f"{dynamic_title}|{full_text}|{image_urls}|"
+                f"dyn_service_v6_static"
             ).encode()
         ).hexdigest()[:10]
 
@@ -789,7 +738,7 @@ class BiliDynamicService:
             )
 
         contents: list[MediaContent] = [ImageContent(out_path)]
-        contents.extend(full_media)
+        contents.extend(full_images)
 
         return self.parser.result(
             title=dynamic_title,

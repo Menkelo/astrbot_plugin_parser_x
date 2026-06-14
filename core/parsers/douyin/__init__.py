@@ -7,12 +7,10 @@ from astrbot.core.config.astrbot_config import AstrBotConfig
 
 from ...download import Downloader
 from ..base import BaseParser, ParseException, Platform, handle
-from .composer import DouyinMediaComposer
 from .extractor import (
-    extract_bgm_url,
     extract_id_from_query,
-    extract_mixed_image_dynamic_items,
     extract_router_data_json_str,
+    extract_static_image_urls_deep,
     pick_primary_aweme,
 )
 
@@ -25,7 +23,6 @@ class DouyinParser(BaseParser):
 
     def __init__(self, config: AstrBotConfig, downloader: Downloader):
         super().__init__(config, downloader)
-        self.composer = DouyinMediaComposer(downloader, config)
 
         self.cookies = ""
         ck_conf = config.get("cookies", {})
@@ -91,28 +88,6 @@ class DouyinParser(BaseParser):
         return out
 
     @staticmethod
-    def _extract_url_strings(value) -> list[str]:
-        out: list[str] = []
-
-        def walk(v):
-            if isinstance(v, str):
-                if v.startswith(("http://", "https://")):
-                    out.append(v)
-                return
-
-            if isinstance(v, list):
-                for item in v:
-                    walk(item)
-                return
-
-            if isinstance(v, dict):
-                for vv in v.values():
-                    walk(vv)
-
-        walk(value)
-        return out
-
-    @staticmethod
     def _is_audio_like_url(url: str) -> bool:
         low = (url or "").lower()
         return any(
@@ -146,264 +121,6 @@ class DouyinParser(BaseParser):
                 "is_play_url=1",
             )
         )
-
-    @staticmethod
-    def _is_image_like_url(url: str) -> bool:
-        low = (url or "").lower()
-
-        if not isinstance(url, str):
-            return False
-
-        if not url.startswith(("http://", "https://")):
-            return False
-
-        if DouyinParser._is_video_like_url(url):
-            return False
-
-        return any(
-            x in low
-            for x in (
-                ".jpg",
-                ".jpeg",
-                ".png",
-                ".webp",
-                ".avif",
-                ".heic",
-                "douyinpic",
-                "byteimg",
-                "tos-cn",
-                "p3-",
-                "p6-",
-                "p9-",
-                "p11-",
-                "p26-",
-                "image",
-                "img",
-            )
-        )
-
-    @staticmethod
-    def _is_bad_static_url(url: str) -> bool:
-        low = (url or "").lower()
-        return any(
-            x in low
-            for x in (
-                "avatar",
-                "music",
-                "webcast",
-                "user/profile",
-                "profile/avatar",
-            )
-        )
-
-    @staticmethod
-    def _image_quality_score(url: str) -> int:
-        low = (url or "").lower()
-        score = 0
-
-        if "origin" in low:
-            score += 50
-        if "large" in low:
-            score += 40
-        if "display" in low:
-            score += 30
-        if "douyinpic" in low:
-            score += 20
-        if "byteimg" in low:
-            score += 15
-        if "tos-cn" in low:
-            score += 10
-
-        if ".jpg" in low or ".jpeg" in low:
-            score += 30
-        if ".png" in low:
-            score += 25
-        if ".webp" in low:
-            score += 10
-
-        if "tplv-dy-lqen-new" in low:
-            score += 10
-
-        if "download_url_list" in low:
-            score -= 50
-        if "water" in low or "-water" in low:
-            score -= 50
-        if "thumb" in low or "thumbnail" in low:
-            score -= 10
-
-        return score
-
-    @staticmethod
-    def _looks_like_live_photo(aweme: dict) -> bool:
-        text_parts: list[str] = []
-
-        desc = aweme.get("desc")
-        if isinstance(desc, str):
-            text_parts.append(desc)
-
-        text_extra = aweme.get("text_extra") or []
-        if isinstance(text_extra, list):
-            for item in text_extra:
-                if isinstance(item, dict):
-                    for key in ("hashtag_name", "hashtagName", "tag_name", "tagName"):
-                        value = item.get(key)
-                        if isinstance(value, str):
-                            text_parts.append(value)
-
-        text = " ".join(text_parts).lower()
-        return any(
-            token in text
-            for token in ("实况", "live图", "live 图", "livephoto", "live photo")
-        )
-
-    def _repair_douyin_mixed_items(
-        self,
-        aweme: dict,
-        mixed_items: list[tuple[str, str, str]] | None,
-    ) -> list[tuple[str, str, str]]:
-        """
-        保守修复抖音静图 + 动图混合作品。
-
-        重点：
-        - 静图只从 images[i] 顶层 URL 字段取；
-        - 动图只从 images[i]["video"] 里取；
-        - 不从 cover / thumbnail / origin_cover 取静图，避免普通视频误判；
-        - 不再尝试伪动态图 / BGM / fake video。
-        """
-        repaired: list[tuple[str, str, str]] = []
-        seen: set[str] = set()
-
-        def add(t: str, k: str, u: str):
-            if not isinstance(u, str):
-                return
-
-            if not u.startswith(("http://", "https://")):
-                return
-
-            if t == "video":
-                u = u.replace("playwm", "play")
-
-            mark = f"{t}:{u}"
-            if mark in seen:
-                return
-
-            seen.add(mark)
-            repaired.append((t, k, u))
-
-        images = aweme.get("images") or []
-        if not isinstance(images, list) or not images:
-            return []
-
-        for idx, img in enumerate(images):
-            if not isinstance(img, dict):
-                continue
-
-            static_candidates: list[str] = []
-
-            for key in (
-                "url_list",
-                "urlList",
-                "download_url_list",
-                "downloadUrlList",
-                "origin_url_list",
-                "originUrlList",
-                "large_url_list",
-                "largeUrlList",
-                "display_url_list",
-                "displayUrlList",
-            ):
-                if key in img:
-                    static_candidates.extend(self._extract_url_strings(img.get(key)))
-
-            clean_static: list[str] = []
-
-            for u in static_candidates:
-                if not isinstance(u, str):
-                    continue
-
-                if self._is_bad_static_url(u):
-                    continue
-
-                if not self._is_image_like_url(u):
-                    continue
-
-                low = u.lower()
-                if "download_url_list" in low or "-water" in low or "water:" in low:
-                    continue
-
-                clean_static.append(u)
-
-            clean_static = self._dedupe_urls(clean_static)
-
-            if clean_static:
-                clean_static.sort(key=self._image_quality_score, reverse=True)
-                add("image", f"image:{idx}", clean_static[0])
-
-            video = img.get("video")
-            if not isinstance(video, dict):
-                continue
-
-            video_candidates: list[str] = []
-
-            for addr_key in (
-                "play_addr",
-                "playAddr",
-                "download_addr",
-                "downloadAddr",
-                "play_url",
-                "playUrl",
-                "bit_rate",
-                "bitRate",
-            ):
-                if addr_key in video:
-                    video_candidates.extend(self._extract_url_strings(video.get(addr_key)))
-
-            clean_video: list[str] = []
-
-            for u in video_candidates:
-                if not isinstance(u, str):
-                    continue
-
-                if not u.startswith(("http://", "https://")):
-                    continue
-
-                low = u.lower()
-
-                if any(
-                    x in low
-                    for x in (
-                        ".jpg",
-                        ".jpeg",
-                        ".png",
-                        ".webp",
-                        ".heic",
-                        ".avif",
-                    )
-                ):
-                    continue
-
-                if ".mp3" in low or "ies-music" in low:
-                    continue
-
-                clean_video.append(u.replace("playwm", "play"))
-
-            clean_video = self._dedupe_urls(clean_video)
-
-            if clean_video:
-                clean_video.sort(
-                    key=lambda u: (
-                        ("365yg.com" in u.lower()) * 30
-                        + ("v26-" in u.lower()) * 10
-                        + ("v5-" in u.lower()) * 8
-                        + ("api-play.amemv.com" in u.lower()) * 5
-                        - ("api.amemv.com" in u.lower()) * 5
-                    ),
-                    reverse=True,
-                )
-
-                add("video", f"video:{idx}", clean_video[0])
-
-        return repaired
 
     # 直播直链硬拦截
     @handle("live.douyin.com", r"(?:https?://)?live\.douyin\.com/[A-Za-z0-9_/?.=&%-]+")
@@ -529,99 +246,11 @@ class DouyinParser(BaseParser):
         aweme = pick_primary_aweme(targets, vid)
         meta = msgspec.convert(aweme, VideoData)
 
-        try:
-            raw_mixed_items = extract_mixed_image_dynamic_items(aweme)
-        except Exception as e:
-            logger.warning(f"[Douyin] extract_mixed_image_dynamic_items failed: {e}")
-            raw_mixed_items = []
-
-        mixed_items = self._repair_douyin_mixed_items(aweme, raw_mixed_items)
-
-        has_mixed_image = any(t == "image" for t, _, _ in mixed_items)
-        has_mixed_video = any(t == "video" for t, _, _ in mixed_items)
-        bgm_url = extract_bgm_url(aweme)
-
-        if has_mixed_image and not has_mixed_video and bgm_url and self._looks_like_live_photo(aweme):
-            image_entries = [
-                (key, item_url)
-                for item_type, key, item_url in mixed_items
-                if item_type == "image"
-            ]
-            contents = self.composer.build_image_audio_contents(
-                image_entries,
-                vid=vid,
-                audio_url=bgm_url,
-                ext_headers=self.ios_headers,
-            )
-
-            if contents:
-                author = self.create_author(
-                    meta.author.nickname,
-                    meta.avatar_url,
-                    ext_headers=self.ios_headers,
-                )
-                return self.result(
-                    title=meta.desc,
-                    author=author,
-                    contents=contents,
-                    timestamp=meta.create_time,
-                )
-
-        if mixed_items and (has_mixed_image or has_mixed_video):
-            contents = []
-            dyn_index = 0
-
-            sent_images: set[str] = set()
-            sent_videos: set[str] = set()
-
-            for item_type, key, item_url in mixed_items:
-                if item_type == "image":
-                    if item_url in sent_images:
-                        continue
-
-                    sent_images.add(item_url)
-                    contents.extend(
-                        self._create_image_contents_with_headers(
-                            [item_url],
-                            self.ios_headers,
-                        )
-                    )
-
-                elif item_type == "video":
-                    if key in sent_videos or item_url in sent_videos:
-                        continue
-
-                    sent_videos.add(key)
-                    sent_videos.add(item_url)
-                    dyn_index += 1
-
-                    contents.extend(
-                        self.composer.build_dynamic_contents_with_bgm(
-                            entries=[(key, item_url)],
-                            vid=f"{vid}_{dyn_index}",
-                            bgm_url=bgm_url,
-                            ext_headers=self.ios_headers,
-                        )
-                    )
-
-            if contents:
-                author = self.create_author(
-                    meta.author.nickname,
-                    meta.avatar_url,
-                    ext_headers=self.ios_headers,
-                )
-                return self.result(
-                    title=meta.desc,
-                    author=author,
-                    contents=contents,
-                    timestamp=meta.create_time,
-                )
-
         contents = []
 
         # 普通视频 / 普通图集兜底：
         # 优先视频，避免普通视频因为图片字段被误判成图集。
-        if meta.video_url:
+        if meta.video_url and self._is_video_like_url(meta.video_url):
             task = self.downloader.download_video(
                 meta.video_url,
                 video_name=f"douyin_{meta.id or vid}.mp4",
@@ -635,10 +264,11 @@ class DouyinParser(BaseParser):
                 )
             )
 
-        elif meta.images and meta.image_urls:
+        else:
+            image_urls = meta.image_urls or extract_static_image_urls_deep(aweme)
             contents.extend(
                 self._create_image_contents_with_headers(
-                    meta.image_urls,
+                    image_urls,
                     self.ios_headers,
                 )
             )
@@ -706,68 +336,21 @@ class DouyinParser(BaseParser):
 
             return valid[0]
 
-        def pick_best_video_url(urls: list[str]) -> str | None:
-            valid = [
-                u.replace("playwm", "play")
-                for u in urls
-                if isinstance(u, str)
-                and u.startswith(("http://", "https://"))
-            ]
-
-            if not valid:
-                return None
-
-            valid.sort(
-                key=lambda u: (
-                    ("365yg.com" in u.lower()) * 30
-                    + ("v26-" in u.lower()) * 10
-                    + ("v5-" in u.lower()) * 8
-                    + ("api-play.amemv.com" in u.lower()) * 5
-                    - ("api.amemv.com" in u.lower()) * 5
-                ),
-                reverse=True,
-            )
-
-            return valid[0]
-
         sent_images: set[str] = set()
-        sent_videos: set[str] = set()
-        dyn_index = 0
 
-        for idx, image in enumerate(slides.images or []):
-            has_dynamic_video = (
-                image.video
-                and image.video.play_addr
-                and image.video.play_addr.url_list
-            )
+        for image in slides.images or []:
+            image_url = pick_best_image_url(image.url_list or [])
+            if not image_url and image.video and image.video.cover:
+                image_url = pick_best_image_url(image.video.cover.url_list or [])
 
-            # 带 video 的节点不再发送 image.url_list，避免纯黑占位图。
-            if not has_dynamic_video:
-                image_url = pick_best_image_url(image.url_list or [])
-                if image_url and image_url not in sent_images:
-                    sent_images.add(image_url)
-                    contents.extend(
-                        self._create_image_contents_with_headers(
-                            [image_url],
-                            self.android_headers,
-                        )
+            if image_url and image_url not in sent_images:
+                sent_images.add(image_url)
+                contents.extend(
+                    self._create_image_contents_with_headers(
+                        [image_url],
+                        self.android_headers,
                     )
-
-            if has_dynamic_video:
-                video_url = pick_best_video_url(image.video.play_addr.url_list or [])
-
-                if video_url and video_url not in sent_videos:
-                    sent_videos.add(video_url)
-                    dyn_index += 1
-
-                    contents.extend(
-                        self.composer.build_dynamic_contents_with_bgm(
-                            entries=[(f"slides:{idx}:{video_url}", video_url)],
-                            vid=f"{video_id}_slides_{dyn_index}",
-                            bgm_url=None,
-                            ext_headers=self.android_headers,
-                        )
-                    )
+                )
 
         author = self.create_author(
             slides.name,
