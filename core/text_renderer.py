@@ -4,7 +4,12 @@ from pathlib import Path
 
 from playwright.async_api import async_playwright
 
-HASHTAG_RE = re.compile(r"#[^#\s\r\n][^#\r\n]{0,60}?#")
+RICH_TEXT_RE = re.compile(
+    r"(?P<topic>#[^#\s\r\n][^#\r\n]{0,60}?#)"
+    r"|(?P<mention>[@\uff20][\w\u4e00-\u9fff\u3400-\u4dbf.-]{1,32})"
+    r"|(?P<url>https?://[^\s<>()\"']+)"
+    r"|(?P<link>\u7f51\u9875\u94fe\u63a5|\u62bd\u5956\u8be6\u60c5)"
+)
 
 
 class TextCardRenderer:
@@ -13,9 +18,9 @@ class TextCardRenderer:
         parts: list[str] = []
         last = 0
 
-        for match in HASHTAG_RE.finditer(text or ""):
+        for match in RICH_TEXT_RE.finditer(text or ""):
             parts.append(escape(text[last : match.start()]))
-            parts.append(f'<span class="hashtag">{escape(match.group(0))}</span>')
+            parts.append(f'<span class="text-link">{escape(match.group(0))}</span>')
             last = match.end()
 
         parts.append(escape(text[last:]))
@@ -164,7 +169,7 @@ class TextCardRenderer:
               word-break: break-word;
             }}
 
-            .hashtag {{
+            .text-link {{
               color: #8ebfe9;
               font-weight: 650;
             }}

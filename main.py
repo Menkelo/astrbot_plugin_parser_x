@@ -176,7 +176,7 @@ class ParserPlugin(Star):
                     timestamp_text or "",
                     result.url or "",
                     text,
-                    "text_card_v5",
+                    "text_card_v6",
                 ]
             ).encode("utf-8")
         ).hexdigest()[:12]

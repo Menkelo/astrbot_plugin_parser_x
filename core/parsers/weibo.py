@@ -190,7 +190,7 @@ class WeiboParser(BaseParser):
                     self._fmt_time(timestamp) or "",
                     text,
                     "|".join(image_urls),
-                    "weibo_text_card_v2",
+                    "weibo_text_card_v3",
                 ]
             ).encode("utf-8")
         ).hexdigest()[:12]

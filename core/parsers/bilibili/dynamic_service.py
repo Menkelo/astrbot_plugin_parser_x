@@ -460,7 +460,7 @@ class BiliDynamicService:
             (
                 f"{dynamic_id}|{author_name}|{author_avatar}|"
                 f"{dynamic_title}|{full_text}|{image_urls}|"
-                f"dyn_service_v2"
+                f"dyn_service_v3"
             ).encode()
         ).hexdigest()[:10]
 
