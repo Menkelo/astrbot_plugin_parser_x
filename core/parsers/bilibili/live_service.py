@@ -261,7 +261,7 @@ class BiliLiveService:
             status_text = "直播中"
             user_time_text = f"开播时间 {start_time_text}" if start_time_text else None
         else:
-            status_text = "已结束"
+            status_text = "未开播"
             user_time_text = f"结束时间 {end_time_text}" if end_time_text else None
 
         digest = hashlib.md5(
