@@ -231,6 +231,12 @@ class ParserPlugin(Star):
 
         async def process_main_content():
             if not result.contents:
+                if result.extra.get("plain_text_only"):
+                    text = (result.text or "").strip()
+                    if text:
+                        await event.send(event.plain_result(text.replace("@", "@\u200b")))
+                    return
+
                 try:
                     await self._ensure_text_only_content(result)
                 except Exception as e:

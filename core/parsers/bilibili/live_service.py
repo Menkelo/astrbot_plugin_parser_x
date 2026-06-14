@@ -219,12 +219,19 @@ class BiliLiveService:
                 room_info = html_data.get("room_info") or {}
                 anchor_base = html_data.get("anchor_base") or {}
 
+        title = room_info.get("title") or "B站直播间"
+        if live_status != 1:
+            prompt = f"B站直播间未开播：{title}" if title else "B站直播间未开播"
+            return self.parser.result(
+                text=prompt,
+                extra={"plain_text_only": True},
+            )
+
         uid = anchor_base.get("uid") or room_info.get("uid")
         anchor_fallback = {}
         if uid and (not anchor_base.get("face") or not anchor_base.get("uname")):
             anchor_fallback = await self._fetch_anchor_info(uid, real_room_id)
 
-        title = room_info.get("title") or "B站直播间"
         uname = anchor_base.get("uname") or anchor_fallback.get("uname") or "B站主播"
         cover = room_info.get("cover") or room_info.get("user_cover") or room_info.get("keyframe")
         avatar = anchor_base.get("face") or anchor_fallback.get("face")
@@ -242,27 +249,8 @@ class BiliLiveService:
                 "startTime",
             ),
         )
-        end_time_text = self._pick_time_text(
-            [room_info, init_data],
-            (
-                "live_end_time",
-                "liveEndTime",
-                "end_time",
-                "endTime",
-                "stop_time",
-                "stopTime",
-                "last_end_time",
-                "lastEndTime",
-                "last_live_end_time",
-                "lastLiveEndTime",
-            ),
-        )
-        if live_status == 1:
-            status_text = "直播中"
-            user_time_text = f"开播时间 {start_time_text}" if start_time_text else None
-        else:
-            status_text = "未开播"
-            user_time_text = f"结束时间 {end_time_text}" if end_time_text else None
+        status_text = "直播中"
+        user_time_text = f"开播时间 {start_time_text}" if start_time_text else None
 
         digest = hashlib.md5(
             f"{real_room_id}|{title}|{uname}|{avatar}|{cover}|{live_status}|{user_time_text or ''}|live_service_v5".encode()
