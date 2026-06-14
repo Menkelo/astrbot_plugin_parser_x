@@ -1,6 +1,4 @@
-import base64
 import hashlib
-import mimetypes
 import re
 import time
 from email.utils import parsedate_to_datetime
@@ -15,6 +13,7 @@ from astrbot.core.config.astrbot_config import AstrBotConfig
 from ..data import Platform, VideoContent, ImageContent
 from ..download import Downloader
 from ..text_renderer import TextCardRenderer
+from ..utils import image_to_data_uri
 from .base import BaseParser, handle, ParseException
 
 
@@ -73,9 +72,7 @@ class WeiboParser(BaseParser):
         if data.get("isLongText") and "longText" in data:
              text = data["longText"].get("longTextContent", text)
         
-        text = re.sub(r"<br\s*/?>", "\n", text)
-        text = re.sub(r"<[^>]+>", "", text)
-        text = unescape(text).strip()
+        text = self._html_to_plain_text(text)
         
         timestamp = None
         if created_at := data.get("created_at"):
@@ -166,6 +163,34 @@ class WeiboParser(BaseParser):
         except Exception:
             return None
 
+    @staticmethod
+    def _html_to_plain_text(text: str | None) -> str:
+        if not text:
+            return ""
+
+        text = str(text)
+        text = re.sub(r"<br\s*/?>", "\n", text, flags=re.IGNORECASE)
+
+        def replace_img(match: re.Match[str]) -> str:
+            tag = match.group(0)
+            attr = re.search(
+                r"\b(?:alt|title)=([\"'])(.*?)\1",
+                tag,
+                flags=re.IGNORECASE | re.DOTALL,
+            )
+            if not attr:
+                return ""
+            return unescape(attr.group(2))
+
+        text = re.sub(
+            r"<img\b[^>]*>",
+            replace_img,
+            text,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        text = re.sub(r"<[^>]+>", "", text)
+        return unescape(text).strip()
+
     async def _render_text_card(
         self,
         *,
@@ -225,45 +250,16 @@ class WeiboParser(BaseParser):
         url: str | None,
         max_bytes: int = 2 * 1024 * 1024,
     ) -> str | None:
-        url = self._norm_img(url)
-        if not url:
-            return None
-
-        headers = self.headers.copy()
-        headers.update(
-            {
-                "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
-                "Referer": "https://m.weibo.cn/",
-            }
+        return await image_to_data_uri(
+            self.http_get,
+            url,
+            headers=self.headers,
+            referer="https://m.weibo.cn/",
+            normalizer=self._norm_img,
+            max_bytes=max_bytes,
+            timeout=10,
+            debug_label="[Weibo] image",
         )
-
-        try:
-            resp = await self.http_get(
-                url,
-                headers=headers,
-                allow_redirects=True,
-                timeout=10,
-            )
-            if resp.status_code >= 400:
-                return None
-
-            content = resp.content or b""
-            if not content or len(content) > max_bytes:
-                return None
-
-            content_type = (
-                (resp.headers.get("Content-Type", "") or "").split(";")[0].strip()
-            )
-            if not content_type.lower().startswith("image/"):
-                guessed, _ = mimetypes.guess_type(url)
-                content_type = guessed or "image/jpeg"
-
-            encoded = base64.b64encode(content).decode("ascii")
-            return f"data:{content_type};base64,{encoded}"
-
-        except Exception as e:
-            logger.debug(f"[Weibo] 头像转 data URI 失败: {url} | {e}")
-            return None
 
     async def _parse_with_ytdlp(self, url: str):
         if not url.startswith("http"):

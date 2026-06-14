@@ -4,6 +4,8 @@ from pathlib import Path
 
 from playwright.async_api import async_playwright
 
+from astrbot.api import logger
+
 RICH_TEXT_RE = re.compile(
     r"(?P<topic>#[^#\s\r\n][^#\r\n]{0,60}?#)"
     r"|(?P<mention>[@\uff20][\w\u4e00-\u9fff\u3400-\u4dbf.-]{1,32})"
@@ -13,6 +15,30 @@ RICH_TEXT_RE = re.compile(
 
 
 class TextCardRenderer:
+    _playwright_checked = False
+    _playwright_available: bool | None = None
+
+    @classmethod
+    async def check_available(cls) -> bool:
+        if cls._playwright_checked:
+            return cls._playwright_available is True
+
+        cls._playwright_checked = True
+        try:
+            async with async_playwright() as p:
+                browser = await p.chromium.launch()
+                await browser.close()
+        except Exception as e:
+            cls._playwright_available = False
+            logger.warning(
+                "Text card renderer unavailable; run `playwright install chromium` "
+                f"if text cards fail: {e}"
+            )
+            return False
+
+        cls._playwright_available = True
+        return True
+
     @staticmethod
     def _render_text_html(text: str) -> str:
         parts: list[str] = []
@@ -37,6 +63,9 @@ class TextCardRenderer:
         title: str | None = None,
         timestamp_text: str | None = None,
     ):
+        if not await self.check_available():
+            raise RuntimeError("Playwright Chromium is unavailable")
+
         avatar_html = (
             f'<img class="avatar" src="{escape(author_avatar)}" alt="">'
             if author_avatar

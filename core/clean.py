@@ -1,5 +1,5 @@
 import asyncio
-import shutil
+import time
 import zoneinfo
 from pathlib import Path
 
@@ -17,6 +17,7 @@ class CacheCleaner:
     """
 
     JOBNAME = "CacheCleaner"
+    MAX_AGE_SECONDS = 48 * 60 * 60
 
     def __init__(self, context: Context, config: AstrBotConfig):
         # 内嵌清理周期：每天凌晨 2:30
@@ -52,16 +53,52 @@ class CacheCleaner:
         except Exception as e:
             logger.error(f"[{self.JOBNAME}] Cron 格式错误：{e}")
 
+    def _clean_expired_files(self) -> tuple[int, int]:
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        cutoff = time.time() - self.MAX_AGE_SECONDS
+        removed_files = 0
+        removed_dirs = 0
+
+        for path in self.cache_dir.rglob("*"):
+            try:
+                if not path.is_file():
+                    continue
+                if path.stat().st_mtime > cutoff:
+                    continue
+                path.unlink()
+                removed_files += 1
+            except FileNotFoundError:
+                continue
+            except Exception as e:
+                logger.debug(f"[{self.JOBNAME}] skip cache file {path}: {e}")
+
+        dirs = sorted(
+            (p for p in self.cache_dir.rglob("*") if p.is_dir()),
+            key=lambda p: len(p.parts),
+            reverse=True,
+        )
+        for path in dirs:
+            try:
+                path.rmdir()
+                removed_dirs += 1
+            except OSError:
+                continue
+            except Exception as e:
+                logger.debug(f"[{self.JOBNAME}] skip cache dir {path}: {e}")
+
+        return removed_files, removed_dirs
+
     async def _clean_plugin_cache(self) -> None:
-        """删除并重建缓存目录"""
+        """Clean only expired cache files, keeping active downloads/renders intact."""
         loop = asyncio.get_running_loop()
         try:
-            await loop.run_in_executor(
+            removed_files, removed_dirs = await loop.run_in_executor(
                 None,
-                lambda: shutil.rmtree(self.cache_dir, ignore_errors=True),
+                self._clean_expired_files,
             )
-            self.cache_dir.mkdir(parents=True, exist_ok=True)
-            logger.info("Cache directory cleaned and recreated.")
+            logger.info(
+                f"Cache cleanup finished: files={removed_files}, dirs={removed_dirs}"
+            )
         except Exception:
             logger.exception("Error while cleaning cache directory.")
 

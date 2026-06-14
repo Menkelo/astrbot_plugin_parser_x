@@ -76,6 +76,7 @@ class ParserPlugin(Star):
 
     async def initialize(self):
         self._register_parser()
+        await self.text_renderer.check_available()
 
     async def terminate(self):
         await self.downloader.close()
@@ -410,17 +411,20 @@ class ParserPlugin(Star):
                 )
 
         matches.sort(key=lambda x: (x[0], -len(x[1])))
-        processed_parsers: set[int] = set()
+        processed_matches: set[tuple[str, str]] = set()
 
         for _, keyword, searched in matches:
             parser = self.parser_map.get(keyword)
             if parser is None:
                 continue
 
-            pid = id(parser)
-            if pid in processed_parsers:
+            raw_match = searched.group(0).strip()
+            match_url = re.sub(r"^https?://", "", raw_match, flags=re.IGNORECASE)
+            match_url = match_url.rstrip(").,;!?，。；！？）]")
+            match_key = (parser.platform.name, match_url.casefold())
+            if match_key in processed_matches:
                 continue
-            processed_parsers.add(pid)
+            processed_matches.add(match_key)
 
             try:
                 parse_res = await parser.parse(keyword, searched)

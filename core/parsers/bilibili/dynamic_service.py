@@ -1,11 +1,8 @@
 import asyncio
-import base64
 import hashlib
-import mimetypes
 import time
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
 
 from bilibili_api.dynamic import Dynamic
 from bilibili_api.exceptions import ResponseCodeException
@@ -13,6 +10,7 @@ from bilibili_api.exceptions import ResponseCodeException
 from astrbot.api import logger
 
 from ...data import ImageContent, MediaContent
+from ...utils import image_to_data_uri
 from ..base import ParseException
 
 
@@ -324,52 +322,19 @@ class BiliDynamicService:
             self._img_data_uri_cache.clear()
 
         headers = self.parser.headers.copy()
-        headers.update(
-            {
-                "Referer": referer,
-                "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
-                "Cache-Control": "no-cache",
-            }
+        headers["Cache-Control"] = "no-cache"
+        data_uri = await image_to_data_uri(
+            self.parser.http_get,
+            img_url,
+            headers=headers,
+            referer=referer,
+            normalizer=None,
+            max_bytes=max_bytes,
+            timeout=10,
+            debug_label="[Bilibili] dynamic image",
         )
-
-        try:
-            resp = await self.parser.http_get(
-                img_url,
-                headers=headers,
-                allow_redirects=True,
-                timeout=10,
-            )
-
-            if resp.status_code >= 400:
-                self._img_data_uri_cache[img_url] = None
-                return None
-
-            content = resp.content or b""
-            if not content:
-                self._img_data_uri_cache[img_url] = None
-                return None
-
-            if len(content) > max_bytes:
-                self._img_data_uri_cache[img_url] = None
-                return None
-
-            ctype = resp.headers.get("Content-Type", "") or ""
-            if "image" not in ctype.lower():
-                path = urlparse(img_url).path
-                guessed, _ = mimetypes.guess_type(path)
-                ctype = guessed or "image/jpeg"
-
-            if not ctype.startswith("image/"):
-                ctype = "image/jpeg"
-
-            data_uri = f"data:{ctype};base64,{base64.b64encode(content).decode('ascii')}"
-            self._img_data_uri_cache[img_url] = data_uri
-            return data_uri
-
-        except Exception as e:
-            logger.debug(f"[Bilibili] 动态图片转 dataURI 失败: {img_url} | {e}")
-            self._img_data_uri_cache[img_url] = None
-            return None
+        self._img_data_uri_cache[img_url] = data_uri
+        return data_uri
 
     async def _fetch_dynamic_raw(self, dynamic_id: int) -> dict:
         raw_dynamic = None

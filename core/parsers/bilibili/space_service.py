@@ -1,16 +1,14 @@
 import asyncio
-import base64
 import hashlib
 import json
-import mimetypes
 import random
 import time
 from pathlib import Path
-from urllib.parse import urlparse
 
 from astrbot.api import logger
 
 from ...data import ImageContent
+from ...utils import image_to_data_uri
 from ..base import ParseException
 
 
@@ -161,55 +159,19 @@ class BiliSpaceService:
         if len(self._img_data_uri_cache) > 512:
             self._img_data_uri_cache.clear()
 
-        headers = self._headers(mid)
-        headers.update(
-            {
-                "Referer": f"https://space.bilibili.com/{mid}",
-                "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
-            }
+        referer = f"https://space.bilibili.com/{mid}"
+        data_uri = await image_to_data_uri(
+            self.parser.http_get,
+            img_url,
+            headers=self._headers(mid),
+            referer=referer,
+            normalizer=None,
+            max_bytes=max_bytes,
+            timeout=12,
+            debug_label="[Bilibili-space] image",
         )
-
-        try:
-            resp = await self.parser.http_get(
-                img_url,
-                headers=headers,
-                allow_redirects=True,
-                timeout=12,
-            )
-
-            if resp.status_code >= 400:
-                logger.debug(f"[Bilibili-space] image status={resp.status_code}: {img_url}")
-                self._img_data_uri_cache[img_url] = None
-                return None
-
-            content = resp.content or b""
-            if not content:
-                self._img_data_uri_cache[img_url] = None
-                return None
-
-            if len(content) > max_bytes:
-                logger.debug(f"[Bilibili-space] image too large: {img_url}")
-                self._img_data_uri_cache[img_url] = None
-                return None
-
-            ctype = resp.headers.get("Content-Type", "") or ""
-            if "image" not in ctype.lower():
-                guessed, _ = mimetypes.guess_type(urlparse(img_url).path)
-                ctype = guessed or "image/jpeg"
-
-            if not ctype.startswith("image/"):
-                ctype = "image/jpeg"
-
-            b64 = base64.b64encode(content).decode("ascii")
-            data_uri = f"data:{ctype};base64,{b64}"
-
-            self._img_data_uri_cache[img_url] = data_uri
-            return data_uri
-
-        except Exception as e:
-            logger.debug(f"[Bilibili-space] image dataURI failed: {img_url} | {e}")
-            self._img_data_uri_cache[img_url] = None
-            return None
+        self._img_data_uri_cache[img_url] = data_uri
+        return data_uri
 
     def _to_work(self, v: dict) -> dict | None:
         if not isinstance(v, dict):

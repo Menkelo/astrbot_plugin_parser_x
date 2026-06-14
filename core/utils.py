@@ -1,9 +1,12 @@
 import asyncio
+import base64
 import hashlib
 import inspect
 import json
+import mimetypes
 import re
 import shutil
+from collections.abc import Awaitable, Callable
 from collections import OrderedDict
 from pathlib import Path
 from typing import Any, TypeVar
@@ -14,6 +17,8 @@ from astrbot.api import logger
 K = TypeVar("K")
 V = TypeVar("V")
 
+IMAGE_ACCEPT = "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"
+
 
 async def maybe_close_session(session: Any) -> None:
     """兼容同步 / 异步 close 的 Session。"""
@@ -23,6 +28,73 @@ async def maybe_close_session(session: Any) -> None:
     ret = session.close()
     if inspect.isawaitable(ret):
         await ret
+
+
+def normalize_image_url(url: str | None) -> str | None:
+    if not url:
+        return None
+
+    url = str(url).strip()
+    if not url:
+        return None
+
+    if url.startswith("//"):
+        return "https:" + url
+
+    if url.startswith("http://"):
+        return "https://" + url[len("http://") :]
+
+    return url
+
+
+async def image_to_data_uri(
+    http_get: Callable[..., Awaitable[Any]],
+    img_url: str | None,
+    *,
+    headers: dict[str, str] | None = None,
+    referer: str | None = None,
+    normalizer: Callable[[str | None], str | None] | None = normalize_image_url,
+    max_bytes: int = 4 * 1024 * 1024,
+    timeout: int = 10,
+    debug_label: str = "image",
+) -> str | None:
+    url = normalizer(img_url) if normalizer else img_url
+    if not url:
+        return None
+
+    request_headers = dict(headers or {})
+    request_headers["Accept"] = IMAGE_ACCEPT
+    if referer:
+        request_headers["Referer"] = referer
+
+    try:
+        resp = await http_get(
+            url,
+            headers=request_headers,
+            allow_redirects=True,
+            timeout=timeout,
+        )
+        if resp.status_code >= 400:
+            return None
+
+        content = resp.content or b""
+        if not content or len(content) > max_bytes:
+            return None
+
+        content_type = (resp.headers.get("Content-Type", "") or "").split(";", 1)[0].strip()
+        if not content_type.lower().startswith("image/"):
+            guessed, _ = mimetypes.guess_type(urlparse(url).path)
+            content_type = guessed or "image/jpeg"
+
+        if not content_type.lower().startswith("image/"):
+            content_type = "image/jpeg"
+
+        encoded = base64.b64encode(content).decode("ascii")
+        return f"data:{content_type};base64,{encoded}"
+
+    except Exception as e:
+        logger.debug(f"{debug_label} data URI failed: {url} | {e}")
+        return None
 
 
 class LimitedSizeDict(OrderedDict[K, V]):
