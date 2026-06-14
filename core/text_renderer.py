@@ -29,6 +29,7 @@ class TextCardRenderer:
         author_name: str | None,
         text: str,
         author_avatar: str | None = None,
+        title: str | None = None,
         timestamp_text: str | None = None,
     ):
         avatar_html = (
@@ -42,6 +43,7 @@ class TextCardRenderer:
         time_html = (
             f'<div class="time">{escape(timestamp_text)}</div>' if timestamp_text else ""
         )
+        title_html = f'<div class="title">{escape(title)}</div>' if title else ""
         text_html = self._render_text_html(text)
 
         html = f"""
@@ -83,7 +85,7 @@ class TextCardRenderer:
             .meta {{
               display: flex;
               align-items: center;
-              justify-content: space-between;
+              justify-content: flex-start;
               gap: 16px;
             }}
 
@@ -102,11 +104,11 @@ class TextCardRenderer:
             }}
 
             .time {{
+              margin-top: 2px;
               color: #8c95a3;
               font-size: 13px;
               line-height: 1.45;
-              text-align: right;
-              flex: 1;
+              text-align: left;
               word-break: break-word;
             }}
 
@@ -115,6 +117,10 @@ class TextCardRenderer:
               display: flex;
               align-items: center;
               gap: 14px;
+            }}
+
+            .author-block {{
+              min-width: 0;
             }}
 
             .avatar {{
@@ -137,6 +143,15 @@ class TextCardRenderer:
               font-size: 21px;
               font-weight: 850;
               line-height: 1.35;
+              word-break: break-word;
+            }}
+
+            .title {{
+              margin-top: 20px;
+              color: #20242c;
+              font-size: 20px;
+              font-weight: 850;
+              line-height: 1.45;
               word-break: break-word;
             }}
 
@@ -166,12 +181,15 @@ class TextCardRenderer:
           <div class="card">
             <div class="meta">
               <div class="platform">{escape(platform_name)}</div>
-              {time_html}
             </div>
             <div class="profile">
               {avatar_html}
-              {author_html}
+              <div class="author-block">
+                {author_html}
+                {time_html}
+              </div>
             </div>
+            {title_html}
             <div class="text">{text_html}</div>
             <div class="footer">Menkelo/astrbot_plugin_r_parser</div>
           </div>
