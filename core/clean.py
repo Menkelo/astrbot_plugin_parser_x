@@ -17,7 +17,8 @@ class CacheCleaner:
     """
 
     JOBNAME = "CacheCleaner"
-    MAX_AGE_SECONDS = 24 * 60 * 60
+    RETENTION_HOURS = 24
+    MAX_AGE_SECONDS = RETENTION_HOURS * 60 * 60
 
     def __init__(self, context: Context, config: AstrBotConfig):
         # 内嵌清理周期：每天凌晨 2:30
@@ -34,7 +35,10 @@ class CacheCleaner:
 
         self.register_task()
 
-        logger.info(f"{self.JOBNAME} 已启动，任务周期：{self.clean_cron}")
+        logger.info(
+            f"{self.JOBNAME} 已启动，任务周期: {self.clean_cron}，"
+            f"清理超过 {self.RETENTION_HOURS} 小时的缓存"
+        )
 
     def register_task(self):
         try:
@@ -97,7 +101,8 @@ class CacheCleaner:
                 self._clean_expired_files,
             )
             logger.info(
-                f"Cache cleanup finished: files={removed_files}, dirs={removed_dirs}"
+                f"Cache cleanup finished: retention={self.RETENTION_HOURS}h, "
+                f"files={removed_files}, dirs={removed_dirs}"
             )
         except Exception:
             logger.exception("Error while cleaning cache directory.")
