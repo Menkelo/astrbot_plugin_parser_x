@@ -113,8 +113,25 @@ class DouyinParser(BaseParser):
         return out
 
     @staticmethod
+    def _is_audio_like_url(url: str) -> bool:
+        low = (url or "").lower()
+        return any(
+            x in low
+            for x in (
+                ".mp3",
+                ".m4a",
+                ".aac",
+                ".wav",
+                "mime_type=audio",
+                "ies-music",
+            )
+        )
+
+    @staticmethod
     def _is_video_like_url(url: str) -> bool:
         low = (url or "").lower()
+        if DouyinParser._is_audio_like_url(url):
+            return False
         return any(
             x in low
             for x in (
@@ -215,6 +232,29 @@ class DouyinParser(BaseParser):
             score -= 10
 
         return score
+
+    @staticmethod
+    def _looks_like_live_photo(aweme: dict) -> bool:
+        text_parts: list[str] = []
+
+        desc = aweme.get("desc")
+        if isinstance(desc, str):
+            text_parts.append(desc)
+
+        text_extra = aweme.get("text_extra") or []
+        if isinstance(text_extra, list):
+            for item in text_extra:
+                if isinstance(item, dict):
+                    for key in ("hashtag_name", "hashtagName", "tag_name", "tagName"):
+                        value = item.get(key)
+                        if isinstance(value, str):
+                            text_parts.append(value)
+
+        text = " ".join(text_parts).lower()
+        return any(
+            token in text
+            for token in ("实况", "live图", "live 图", "livephoto", "live photo")
+        )
 
     def _repair_douyin_mixed_items(
         self,
@@ -499,9 +539,35 @@ class DouyinParser(BaseParser):
 
         has_mixed_image = any(t == "image" for t, _, _ in mixed_items)
         has_mixed_video = any(t == "video" for t, _, _ in mixed_items)
+        bgm_url = extract_bgm_url(aweme)
+
+        if has_mixed_image and not has_mixed_video and bgm_url and self._looks_like_live_photo(aweme):
+            image_entries = [
+                (key, item_url)
+                for item_type, key, item_url in mixed_items
+                if item_type == "image"
+            ]
+            contents = self.composer.build_image_audio_contents(
+                image_entries,
+                vid=vid,
+                audio_url=bgm_url,
+                ext_headers=self.ios_headers,
+            )
+
+            if contents:
+                author = self.create_author(
+                    meta.author.nickname,
+                    meta.avatar_url,
+                    ext_headers=self.ios_headers,
+                )
+                return self.result(
+                    title=meta.desc,
+                    author=author,
+                    contents=contents,
+                    timestamp=meta.create_time,
+                )
 
         if mixed_items and (has_mixed_image or has_mixed_video):
-            bgm_url = extract_bgm_url(aweme)
             contents = []
             dyn_index = 0
 

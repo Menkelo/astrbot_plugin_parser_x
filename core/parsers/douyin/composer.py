@@ -127,6 +127,97 @@ class DouyinMediaComposer:
             ]
         )
 
+    async def compose_image_with_audio(
+        self,
+        image_url: str,
+        audio_url: str,
+        vid: str,
+        index: int,
+        ext_headers: dict[str, str],
+        *,
+        max_duration: float = 8.0,
+    ) -> Path:
+        """
+        将“静图 + 音频”封装成短视频，用于平台只暴露 live photo 封面和音频的情况。
+        """
+        cache_dir = Path(self.config.get("cache_dir", "."))
+        short = hashlib.md5(
+            f"{vid}|image_audio|{index}|{image_url}|{audio_url}".encode()
+        ).hexdigest()[:10]
+        work_dir = cache_dir / f"image_audio_{vid}_{index}_{short}"
+        work_dir.mkdir(parents=True, exist_ok=True)
+
+        image_path = await self.downloader.download_img(
+            image_url,
+            img_name=f"image_audio_{vid}_{index}_{short}.jpg",
+            ext_headers=ext_headers,
+        )
+        audio_path = await self.downloader.download_audio(
+            audio_url,
+            audio_name=f"image_audio_{vid}_{index}_{short}.m4a",
+            ext_headers=ext_headers,
+        )
+
+        if not image_path.exists() or image_path.stat().st_size == 0:
+            raise RuntimeError("live photo 图片下载失败")
+        if not audio_path.exists() or audio_path.stat().st_size == 0:
+            raise RuntimeError("live photo 音频下载失败")
+
+        try:
+            duration = await self._probe_duration(audio_path)
+        except Exception:
+            duration = 0
+
+        if duration <= 0:
+            duration = 3.0
+        duration = min(duration, max_duration)
+
+        final = work_dir / f"image_audio_{vid}_{index}_{short}.mp4"
+        try:
+            await exec_ffmpeg_cmd(
+                [
+                    "ffmpeg",
+                    "-y",
+                    "-loop",
+                    "1",
+                    "-framerate",
+                    "30",
+                    "-i",
+                    str(image_path),
+                    "-i",
+                    str(audio_path),
+                    "-map",
+                    "0:v:0",
+                    "-map",
+                    "1:a:0",
+                    "-t",
+                    f"{duration:.3f}",
+                    "-vf",
+                    "scale='trunc(min(1280,iw)/2)*2':-2,format=yuv420p",
+                    "-c:v",
+                    "libx264",
+                    "-preset",
+                    "veryfast",
+                    "-crf",
+                    "24",
+                    "-c:a",
+                    "aac",
+                    "-b:a",
+                    "128k",
+                    "-shortest",
+                    "-movflags",
+                    "+faststart",
+                    str(final),
+                ]
+            )
+        finally:
+            await safe_unlink(audio_path)
+
+        if not final.exists() or final.stat().st_size == 0:
+            raise RuntimeError("live photo 合成结果无效")
+
+        return final
+
     async def compose_dynamic_video_with_bgm(
         self,
         video_url: str,
@@ -278,6 +369,38 @@ class DouyinMediaComposer:
                     vid=vid,
                     index=index,
                     bgm_url=bgm_url,
+                    ext_headers=ext_headers,
+                )
+            )
+            contents.append(DynamicContent(task))
+
+        return contents
+
+    def build_image_audio_contents(
+        self,
+        entries: list[tuple[str, str]],
+        vid: str,
+        audio_url: str,
+        ext_headers: dict[str, str],
+    ) -> list[DynamicContent]:
+        contents: list[DynamicContent] = []
+        seen: set[str] = set()
+
+        index = 0
+        for key, image_url in entries:
+            dedupe_key = (key or image_url).strip() if (key or image_url) else ""
+            if not dedupe_key or not image_url or dedupe_key in seen:
+                continue
+
+            seen.add(dedupe_key)
+            index += 1
+
+            task = asyncio.create_task(
+                self.compose_image_with_audio(
+                    image_url=image_url,
+                    audio_url=audio_url,
+                    vid=vid,
+                    index=index,
                     ext_headers=ext_headers,
                 )
             )

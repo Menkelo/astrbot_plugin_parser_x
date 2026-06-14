@@ -11,6 +11,7 @@ from astrbot.core.config.astrbot_config import AstrBotConfig
 
 from ..download import Downloader
 from .base import BaseParser, ParseException, Platform, handle
+from .douyin.composer import DouyinMediaComposer
 
 
 class XiaoHongShuParser(BaseParser):
@@ -22,6 +23,7 @@ class XiaoHongShuParser(BaseParser):
         self._page_cache_ttl = int(config.get("xhs_cache_ttl", 120))
         self._page_cache: dict[str, tuple[float, str, str]] = {}
         self._redirect_cache: dict[str, tuple[float, str]] = {}
+        self.media_composer = DouyinMediaComposer(downloader, config)
 
         explore_headers = {
             "accept": (
@@ -109,6 +111,20 @@ class XiaoHongShuParser(BaseParser):
         if not u.startswith(("http://", "https://")):
             return False
 
+        if any(
+            token in u
+            for token in (
+                "sns-audio",
+                ".mp3",
+                ".m4a",
+                ".aac",
+                ".wav",
+                ".ogg",
+                "mime_type=audio",
+            )
+        ):
+            return False
+
         return any(
             token in u
             for token in (
@@ -132,6 +148,63 @@ class XiaoHongShuParser(BaseParser):
                 ".avif",
             )
         )
+
+    @staticmethod
+    def _is_probably_xhs_audio_url(url: str | None) -> bool:
+        if not isinstance(url, str) or not url:
+            return False
+
+        u = url.lower()
+        if not u.startswith(("http://", "https://")):
+            return False
+
+        has_audio_hint = any(
+            token in u
+            for token in (
+                "sns-audio",
+                ".mp3",
+                ".m4a",
+                ".aac",
+                ".wav",
+                ".ogg",
+                "mime_type=audio",
+                "audio",
+                "music",
+                "bgm",
+                "sound",
+            )
+        )
+        if not has_audio_hint:
+            return False
+
+        if any(
+            token in u
+            for token in (
+                "sns-video",
+                ".mp4",
+                ".m3u8",
+                "mime_type=video",
+                "video_id=",
+                "/video/",
+            )
+        ):
+            return False
+
+        if any(
+            token in u
+            for token in (
+                "sns-img",
+                "imageview",
+                ".jpg",
+                ".jpeg",
+                ".png",
+                ".webp",
+                ".avif",
+            )
+        ):
+            return False
+
+        return True
 
     @classmethod
     def _collect_video_urls_deep(
@@ -205,6 +278,85 @@ class XiaoHongShuParser(BaseParser):
             urls.extend(cls._collect_video_urls_deep(val, depth=depth + 1))
 
         return cls._uniq_urls(urls)
+
+    @classmethod
+    def _collect_audio_urls_deep(
+        cls,
+        obj: Any,
+        *,
+        depth: int = 0,
+        max_depth: int = 7,
+    ) -> list[str]:
+        if depth > max_depth:
+            return []
+
+        if isinstance(obj, str):
+            obj = obj.replace("&amp;", "&")
+            return [obj] if cls._is_probably_xhs_audio_url(obj) else []
+
+        urls: list[str] = []
+
+        if isinstance(obj, list):
+            for item in obj:
+                urls.extend(cls._collect_audio_urls_deep(item, depth=depth + 1))
+            return cls._uniq_urls(urls)
+
+        if not isinstance(obj, dict):
+            return []
+
+        for key in (
+            "audio",
+            "audios",
+            "audioUrl",
+            "audio_url",
+            "music",
+            "musicUrl",
+            "music_url",
+            "bgm",
+            "bgmUrl",
+            "bgm_url",
+            "sound",
+            "soundUrl",
+            "sound_url",
+            "playUrl",
+            "play_url",
+            "url",
+        ):
+            val = obj.get(key)
+            if isinstance(val, str) and cls._is_probably_xhs_audio_url(val):
+                urls.append(val.replace("&amp;", "&"))
+            elif isinstance(val, (dict, list)):
+                urls.extend(cls._collect_audio_urls_deep(val, depth=depth + 1))
+
+        for val in obj.values():
+            urls.extend(cls._collect_audio_urls_deep(val, depth=depth + 1))
+
+        return cls._uniq_urls(urls)
+
+    @classmethod
+    def _extract_audio_url_from_note(cls, *objs: Any) -> str | None:
+        candidates: list[str] = []
+        for obj in objs:
+            candidates.extend(cls._collect_audio_urls_deep(obj))
+
+        candidates = cls._uniq_urls(candidates)
+        return candidates[0] if candidates else None
+
+    @staticmethod
+    def _safe_media_id(*values: Any) -> str:
+        for value in values:
+            if value is None:
+                continue
+
+            raw = str(value).strip()
+            if not raw:
+                continue
+
+            safe = re.sub(r"[^0-9A-Za-z_-]+", "_", raw).strip("_")
+            if safe:
+                return safe[:80]
+
+        return "xhs"
 
     @classmethod
     def _extract_dynamic_video_url_from_image(cls, image_obj: Any) -> str | None:
@@ -285,12 +437,30 @@ class XiaoHongShuParser(BaseParser):
 
         return items
 
-    def _create_image_media_contents(self, media_items: list[tuple[str, str]]):
+    def _create_image_media_contents(
+        self,
+        media_items: list[tuple[str, str]],
+        *,
+        audio_url: str | None = None,
+        vid: str = "xhs",
+    ):
         contents = []
 
+        video_index = 0
         for media_type, url in media_items:
             if media_type == "video":
-                contents.extend(self.create_dynamic_contents([url], ext_headers=self.ios_headers))
+                video_index += 1
+                if audio_url:
+                    contents.extend(
+                        self.media_composer.build_dynamic_contents_with_bgm(
+                            entries=[(url, url)],
+                            vid=f"{vid}_{video_index}",
+                            bgm_url=audio_url,
+                            ext_headers=self.ios_headers,
+                        )
+                    )
+                else:
+                    contents.extend(self.create_dynamic_contents([url], ext_headers=self.ios_headers))
             else:
                 contents.extend(self.create_image_contents([url], ext_headers=self.headers))
 
@@ -551,7 +721,18 @@ class XiaoHongShuParser(BaseParser):
             contents.append(self.create_video_content(video_url, cover_url))
 
         elif media_items := self._extract_image_media_items(note_data.get("imageList")):
-            contents.extend(self._create_image_media_contents(media_items))
+            contents.extend(
+                self._create_image_media_contents(
+                    media_items,
+                    audio_url=self._extract_audio_url_from_note(note_data),
+                    vid=self._safe_media_id(
+                        note_data.get("id"),
+                        note_data.get("noteId"),
+                        note_data.get("note_id"),
+                        final_url,
+                    ),
+                )
+            )
 
         elif image_urls := note_detail.image_urls:
             contents.extend(self.create_image_contents(image_urls))
@@ -642,10 +823,32 @@ class XiaoHongShuParser(BaseParser):
             )
 
         elif media_items := self._extract_image_media_items(note_data.get("imageList")):
-            contents.extend(self._create_image_media_contents(media_items))
+            contents.extend(
+                self._create_image_media_contents(
+                    media_items,
+                    audio_url=self._extract_audio_url_from_note(note_data, preload_data),
+                    vid=self._safe_media_id(
+                        note_data.get("id"),
+                        note_data.get("noteId"),
+                        note_data.get("note_id"),
+                        final_url,
+                    ),
+                )
+            )
 
         elif media_items := self._extract_image_media_items(preload_data.get("imagesList")):
-            contents.extend(self._create_image_media_contents(media_items))
+            contents.extend(
+                self._create_image_media_contents(
+                    media_items,
+                    audio_url=self._extract_audio_url_from_note(note_data, preload_data),
+                    vid=self._safe_media_id(
+                        note_data.get("id"),
+                        note_data.get("noteId"),
+                        note_data.get("note_id"),
+                        final_url,
+                    ),
+                )
+            )
 
         elif img_urls := note_data_obj.image_urls:
             contents.extend(self.create_image_contents(img_urls))

@@ -1,5 +1,6 @@
 import asyncio
 import hashlib
+import json
 import time
 from html import unescape
 from pathlib import Path
@@ -64,6 +65,57 @@ class BiliDynamicService:
         return ""
 
     @staticmethod
+    def _extract_assignment_json(html: str, marker: str) -> str | None:
+        idx = html.find(marker)
+        if idx == -1:
+            return None
+
+        eq = html.find("=", idx + len(marker))
+        if eq == -1:
+            return None
+
+        start = eq + 1
+        while start < len(html) and html[start].isspace():
+            start += 1
+
+        if start >= len(html) or html[start] not in "{[":
+            return None
+
+        stack: list[str] = []
+        in_string = False
+        quote = ""
+        escaped = False
+        pairs = {"{": "}", "[": "]"}
+
+        for pos in range(start, len(html)):
+            ch = html[pos]
+
+            if in_string:
+                if escaped:
+                    escaped = False
+                elif ch == "\\":
+                    escaped = True
+                elif ch == quote:
+                    in_string = False
+                continue
+
+            if ch in {"'", '"'}:
+                in_string = True
+                quote = ch
+                continue
+
+            if ch in pairs:
+                stack.append(pairs[ch])
+                continue
+
+            if stack and ch == stack[-1]:
+                stack.pop()
+                if not stack:
+                    return html[start : pos + 1]
+
+        return None
+
+    @staticmethod
     def _iter_modules(modules: Any) -> list[dict]:
         if not isinstance(modules, list):
             return []
@@ -90,6 +142,43 @@ class BiliDynamicService:
                 uniq.append(url)
 
         return uniq
+
+    @classmethod
+    def _dedupe_media_items(cls, media_items: list[tuple[str, str]]) -> list[tuple[str, str]]:
+        seen = set()
+        uniq: list[tuple[str, str]] = []
+
+        for media_type, url in media_items:
+            url = normalize_image_url(url)
+            if media_type not in {"image", "video"} or not url:
+                continue
+
+            key = (media_type, url)
+            if key not in seen:
+                seen.add(key)
+                uniq.append(key)
+
+        return uniq
+
+    @classmethod
+    def _pic_to_media_item(cls, pic: Any) -> tuple[str, str] | None:
+        if not isinstance(pic, dict):
+            return None
+
+        live_url = cls._first_str(
+            pic.get("live_url"),
+            pic.get("liveUrl"),
+            pic.get("video_url"),
+            pic.get("videoUrl"),
+        )
+        if live_url:
+            return "video", live_url
+
+        image_url = cls._first_str(pic.get("url"), pic.get("src"))
+        if image_url:
+            return "image", image_url
+
+        return None
 
     @classmethod
     def extract_author_info(cls, modules: Any) -> tuple[str, str | None, int | None]:
@@ -421,7 +510,15 @@ class BiliDynamicService:
 
     @classmethod
     def extract_modules_list_image_urls(cls, modules: Any) -> list[str]:
-        image_urls: list[str] = []
+        return [
+            url
+            for media_type, url in cls.extract_modules_list_media_items(modules)
+            if media_type == "image"
+        ]
+
+    @classmethod
+    def extract_modules_list_media_items(cls, modules: Any) -> list[tuple[str, str]]:
+        media_items: list[tuple[str, str]] = []
 
         for module in cls._iter_modules(modules):
             module_type = module.get("module_type")
@@ -432,10 +529,9 @@ class BiliDynamicService:
                 pics = album.get("pics") or []
                 if isinstance(pics, list):
                     for pic in pics:
-                        if isinstance(pic, dict):
-                            url = pic.get("url")
-                            if isinstance(url, str) and url:
-                                image_urls.append(url)
+                        item = cls._pic_to_media_item(pic)
+                        if item:
+                            media_items.append(item)
 
             if module_type == "MODULE_TYPE_CONTENT":
                 content = module.get("module_content") or {}
@@ -450,39 +546,45 @@ class BiliDynamicService:
                         pics = pic_obj.get("pics") or []
                         if isinstance(pics, list):
                             for pic in pics:
-                                if isinstance(pic, dict):
-                                    url = pic.get("url")
-                                    if isinstance(url, str) and url:
-                                        image_urls.append(url)
+                                item = cls._pic_to_media_item(pic)
+                                if item:
+                                    media_items.append(item)
 
-        return image_urls
+        return media_items
 
     @classmethod
     def extract_dynamic_image_urls(cls, item: dict, modules: Any) -> list[str]:
-        image_urls: list[str] = []
+        return [
+            url
+            for media_type, url in cls.extract_dynamic_media_items(item, modules)
+            if media_type == "image"
+        ]
 
-        image_urls.extend(cls.extract_modules_list_image_urls(modules))
+    @classmethod
+    def extract_dynamic_media_items(cls, item: dict, modules: Any) -> list[tuple[str, str]]:
+        media_items: list[tuple[str, str]] = []
+
+        media_items.extend(cls.extract_modules_list_media_items(modules))
 
         if not isinstance(modules, dict):
-            return cls._dedupe_image_urls(image_urls)
+            return cls._dedupe_media_items(media_items)
 
         md = modules.get("module_dynamic") or {}
         if not isinstance(md, dict):
-            return cls._dedupe_image_urls(image_urls)
+            return cls._dedupe_media_items(media_items)
 
         major = md.get("major") or {}
         if not isinstance(major, dict):
-            return cls._dedupe_image_urls(image_urls)
+            return cls._dedupe_media_items(media_items)
 
         opus = major.get("opus") or {}
         if isinstance(opus, dict):
             pics = opus.get("pics") or []
             if isinstance(pics, list):
                 for p in pics:
-                    if isinstance(p, dict):
-                        u = p.get("url")
-                        if isinstance(u, str) and u:
-                            image_urls.append(u)
+                    media_item = cls._pic_to_media_item(p)
+                    if media_item:
+                        media_items.append(media_item)
 
             content = opus.get("content") or {}
             paragraphs = content.get("paragraphs") or []
@@ -495,21 +597,20 @@ class BiliDynamicService:
                     pics2 = pic_obj.get("pics") or []
                     if isinstance(pics2, list):
                         for p in pics2:
-                            if isinstance(p, dict):
-                                u = p.get("url")
-                                if isinstance(u, str) and u:
-                                    image_urls.append(u)
+                            media_item = cls._pic_to_media_item(p)
+                            if media_item:
+                                media_items.append(media_item)
 
         archive = major.get("archive") or {}
         if isinstance(archive, dict):
             cover = archive.get("cover")
             if isinstance(cover, str) and cover:
-                image_urls.append(cover)
+                media_items.append(("image", cover))
 
         if isinstance(item, dict):
-            image_urls.extend(cls.extract_modules_list_image_urls(item.get("modules")))
+            media_items.extend(cls.extract_modules_list_media_items(item.get("modules")))
 
-        return cls._dedupe_image_urls(image_urls)
+        return cls._dedupe_media_items(media_items)
 
     # endregion
 
@@ -535,6 +636,42 @@ class BiliDynamicService:
             timeout=10,
             debug_label="[Bilibili] dynamic image",
         )
+
+    async def _fetch_opus_page_raw(self, dynamic_id: int) -> dict | None:
+        url = f"https://www.bilibili.com/opus/{dynamic_id}"
+        headers = self.parser.headers.copy()
+        headers["Referer"] = "https://www.bilibili.com/"
+
+        if self.parser.bili_ck:
+            headers["Cookie"] = self.parser.bili_ck
+
+        try:
+            resp = await self.parser.http_get(
+                url,
+                headers=headers,
+                allow_redirects=True,
+                timeout=12,
+            )
+        except Exception as e:
+            logger.debug(f"[Bilibili] opus页面兜底请求失败: {e}")
+            return None
+
+        html = resp.text or ""
+        json_text = self._extract_assignment_json(html, "window.__INITIAL_STATE__")
+        if not json_text:
+            return None
+
+        try:
+            data = json.loads(json_text)
+        except Exception as e:
+            logger.debug(f"[Bilibili] opus页面INITIAL_STATE解析失败: {e}")
+            return None
+
+        detail = data.get("detail") if isinstance(data, dict) else None
+        if isinstance(detail, dict) and detail.get("modules"):
+            return {"item": detail}
+
+        return None
 
     async def _fetch_dynamic_raw(self, dynamic_id: int) -> dict:
         raw_dynamic = None
@@ -591,6 +728,10 @@ class BiliDynamicService:
             return {"item": item}
 
         except Exception as e:
+            page_raw = await self._fetch_opus_page_raw(dynamic_id)
+            if page_raw:
+                return page_raw
+
             raise ParseException(
                 f"B站动态解析失败（疑似风控 -352），建议配置 bili_ck 后重试: {e or last_err}"
             ) from (e if isinstance(e, Exception) else last_err)
@@ -606,11 +747,21 @@ class BiliDynamicService:
 
         dynamic_title = self.extract_dynamic_title(item, modules)
         full_text = self.neutralize_at_text(self.extract_dynamic_text(item, modules))
-        image_urls = self.extract_dynamic_image_urls(item, modules)
+        media_items = self.extract_dynamic_media_items(item, modules)
 
-        full_images: list[MediaContent] = (
-            self.parser.create_image_contents(image_urls) if image_urls else []
-        )
+        media_headers = self.parser.headers.copy()
+        media_headers["Referer"] = f"https://www.bilibili.com/opus/{dynamic_id}"
+
+        full_media: list[MediaContent] = []
+        for media_type, media_url in media_items:
+            if media_type == "video":
+                full_media.extend(
+                    self.parser.create_dynamic_contents([media_url], ext_headers=media_headers)
+                )
+            else:
+                full_media.extend(
+                    self.parser.create_image_contents([media_url], ext_headers=media_headers)
+                )
 
         author_avatar_data_uri = await self.img_to_data_uri(
             author_avatar,
@@ -620,8 +771,8 @@ class BiliDynamicService:
         digest = hashlib.md5(
             (
                 f"{dynamic_id}|{author_name}|{author_avatar}|"
-                f"{dynamic_title}|{full_text}|{image_urls}|"
-                f"dyn_service_v4"
+                f"{dynamic_title}|{full_text}|{media_items}|"
+                f"dyn_service_v5"
             ).encode()
         ).hexdigest()[:10]
 
@@ -638,7 +789,7 @@ class BiliDynamicService:
             )
 
         contents: list[MediaContent] = [ImageContent(out_path)]
-        contents.extend(full_images)
+        contents.extend(full_media)
 
         return self.parser.result(
             title=dynamic_title,

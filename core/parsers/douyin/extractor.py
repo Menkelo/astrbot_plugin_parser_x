@@ -14,6 +14,15 @@ _VIDEO_HINTS = (
     "api-play",
     "is_play_url=1",
 )
+_AUDIO_HINTS = (
+    ".mp3",
+    ".m4a",
+    ".aac",
+    ".wav",
+    "mime_type=audio",
+    "ies-music",
+    "music",
+)
 
 _BAD_IMAGE_CONTEXT_KEYS = {
     "author",
@@ -101,7 +110,20 @@ def _is_probably_video_url(u: str) -> bool:
         return False
 
     low = u.lower()
+    if _is_probably_audio_url(low):
+        return False
     return any(h in low for h in _VIDEO_HINTS)
+
+
+def _is_probably_audio_url(u: str) -> bool:
+    if not isinstance(u, str) or not u:
+        return False
+
+    low = u.lower()
+    if not low.startswith(("http://", "https://")):
+        return False
+
+    return any(h in low for h in _AUDIO_HINTS)
 
 
 def _is_probably_image_url(u: str) -> bool:
@@ -354,6 +376,29 @@ def _collect_video_urls_deep(obj, depth: int = 0, max_depth: int = 6) -> list[st
                         urls.append(u)
 
             urls.extend(_collect_video_urls_deep(v, depth + 1, max_depth))
+
+    return _dedupe_keep_order(urls)
+
+
+def _collect_audio_urls_deep(obj, depth: int = 0, max_depth: int = 6) -> list[str]:
+    if depth > max_depth:
+        return []
+
+    urls: list[str] = []
+
+    if isinstance(obj, str):
+        if _is_probably_audio_url(obj):
+            urls.append(obj)
+        return urls
+
+    if isinstance(obj, list):
+        for it in obj:
+            urls.extend(_collect_audio_urls_deep(it, depth + 1, max_depth))
+        return _dedupe_keep_order(urls)
+
+    if isinstance(obj, dict):
+        for v in obj.values():
+            urls.extend(_collect_audio_urls_deep(v, depth + 1, max_depth))
 
     return _dedupe_keep_order(urls)
 
@@ -651,19 +696,21 @@ def extract_static_image_urls_excluding_dynamic(aweme_obj: dict, dynamic_indexes
 
 def extract_bgm_url(aweme_obj: dict) -> str | None:
     music = aweme_obj.get("music") or {}
-    if not isinstance(music, dict):
-        return None
+    if isinstance(music, dict):
+        for key in ("play_url", "playUrl", "audio", "audios"):
+            candidates = _collect_audio_urls_deep(music.get(key))
+            if candidates:
+                return candidates[0]
 
-    play_url = music.get("play_url") or {}
-    if not isinstance(play_url, dict):
-        return None
+        candidates = _collect_audio_urls_deep(music)
+        if candidates:
+            return candidates[0]
 
-    url_list = play_url.get("url_list") or []
-    if not isinstance(url_list, list):
-        return None
-
-    for u in url_list:
-        if isinstance(u, str) and u:
-            return u
+    video = aweme_obj.get("video") or {}
+    if isinstance(video, dict):
+        play_addr = video.get("play_addr") or video.get("playAddr") or {}
+        candidates = _collect_audio_urls_deep(play_addr)
+        if candidates:
+            return candidates[0]
 
     return None
