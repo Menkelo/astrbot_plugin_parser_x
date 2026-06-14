@@ -22,11 +22,9 @@ from .comment_renderer import BiliCommentRenderer
 from .comment_service import BiliCommentService
 from .dynamic_renderer import BiliDynamicRenderer
 from .dynamic_service import BiliDynamicService
-from .live_renderer import BiliLiveRenderer
 from .live_service import BiliLiveService
-from .space_renderer import BiliSpaceRenderer
-from .space_service import BiliSpaceService
 from .stream_selector import BiliStreamSelector
+from ...live_renderer import LiveCardRenderer
 
 
 class BilibiliParser(BaseParser):
@@ -99,11 +97,9 @@ class BilibiliParser(BaseParser):
 
         self.stream_selector = BiliStreamSelector()
 
-        self.space_renderer = BiliSpaceRenderer()
-        self.live_renderer = BiliLiveRenderer()
+        self.live_renderer = LiveCardRenderer()
         self.dynamic_renderer = BiliDynamicRenderer()
 
-        self.space_service = BiliSpaceService(self)
         self.live_service = BiliLiveService(self)
         self.dynamic_service = BiliDynamicService(self)
 
@@ -168,21 +164,6 @@ class BilibiliParser(BaseParser):
     )
     async def _parse_opus(self, searched: Match[str]):
         return await self.parse_dynamic(int(searched.group("dynamic_id")))
-
-    @handle(
-        "space.bilibili.com/",
-        r"(?:https?://)?space\.bilibili\.com/(?P<mid>\d+)(?:\?[^\s#]*)?(?:#[^\s]*)?",
-    )
-    @handle(
-        "m.bilibili.com/space/",
-        r"(?:https?://)?m\.bilibili\.com/space/(?P<mid>\d+)(?:\?[^\s#]*)?(?:#[^\s]*)?",
-    )
-    @handle(
-        "bilibili.com/space/",
-        r"(?:https?://)?(?:www\.)?bilibili\.com/space/(?P<mid>\d+)(?:\?[^\s#]*)?(?:#[^\s]*)?",
-    )
-    async def _parse_space(self, searched: Match[str]):
-        return await self.parse_space(int(searched.group("mid")))
 
     @handle(
         "live.bilibili.com/",
@@ -804,9 +785,6 @@ class BilibiliParser(BaseParser):
 
     async def parse_dynamic(self, dynamic_id: int):
         return await self.dynamic_service.parse_dynamic(dynamic_id)
-
-    async def parse_space(self, mid: int):
-        return await self.space_service.parse_space(mid)
 
     async def parse_live(self, room_id: int):
         return await self.live_service.parse_live(room_id)

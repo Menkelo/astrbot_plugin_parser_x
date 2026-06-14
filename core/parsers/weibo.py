@@ -42,19 +42,18 @@ class WeiboParser(BaseParser):
         logger.debug(f"[Weibo] 尝试 API 解析: {url}")
         
         try:
-            resp = await self.client.get(url, headers=self.headers)
+            resp = await self.client.get(url, headers=self.headers, timeout=8)
             if resp.status_code != 200:
-                logger.debug(f"微博 API 请求失败: {resp.status_code}，尝试 fallback")
-                return await self._parse_with_ytdlp(searched.group(0))
+                raise ParseException(f"微博 API 请求失败: HTTP {resp.status_code}")
             
             data = resp.json()
+        except ParseException:
+            raise
         except Exception as e:
-            logger.debug(f"连接微博 API 失败: {e}，尝试 fallback")
-            return await self._parse_with_ytdlp(searched.group(0))
+            raise ParseException(f"连接微博 API 失败: {e}") from e
 
-        if not data or data.get("ok") != 1:
-            logger.debug(f"微博 API 返回错误 ({data.get('msg')})，尝试 fallback")
-            return await self._parse_with_ytdlp(searched.group(0))
+        if not isinstance(data, dict) or data.get("ok") != 1:
+            raise ParseException(f"微博 API 返回错误: {data.get('msg') if isinstance(data, dict) else data}")
 
         data = data.get("data", {})
         if not data:
@@ -109,8 +108,7 @@ class WeiboParser(BaseParser):
 
         if "pics" in data:
             for pic in data["pics"]:
-                large = pic.get("large", {})
-                url = large.get("url") or pic.get("url")
+                url = self._pick_static_pic_url(pic)
                 if url:
                     image_urls.append(url)
                     img_task = self.downloader.download_img(
@@ -122,6 +120,10 @@ class WeiboParser(BaseParser):
         # 移除了评论区抓取逻辑
 
         extra = {}
+        if contents:
+            # 微博图文经常有多张图片，合并转发在部分 OneBot 实现里容易超时。
+            extra["force_direct_media"] = True
+
         if text:
             text_card_avatar = await self._img_to_data_uri(author_avatar) or author_avatar
             if text_card_avatar:
@@ -153,6 +155,21 @@ class WeiboParser(BaseParser):
             url=original_url,
             extra=extra,
         )
+
+    @staticmethod
+    def _pick_static_pic_url(pic: dict) -> str | None:
+        if not isinstance(pic, dict):
+            return None
+
+        for key in ("large", "original", "bmiddle", "thumbnail"):
+            item = pic.get(key)
+            if isinstance(item, dict):
+                url = item.get("url")
+                if isinstance(url, str) and url:
+                    return url
+
+        url = pic.get("url")
+        return url if isinstance(url, str) and url else None
 
     @staticmethod
     def _fmt_time(ts: int | None) -> str | None:
@@ -246,37 +263,4 @@ class WeiboParser(BaseParser):
             max_bytes=max_bytes,
             timeout=10,
             debug_label="[Weibo] image",
-        )
-
-    async def _parse_with_ytdlp(self, url: str):
-        if not url.startswith("http"):
-            url = f"https://{url}"
-            
-        logger.debug(f"[Weibo] 使用 yt-dlp 兜底解析: {url}")
-        
-        info = await self.downloader.ytdlp_extract_info(url)
-        contents = []
-        
-        if info.duration:
-            video_task = self.downloader.download_video(
-                url, 
-                use_ytdlp=True, 
-                video_name=info.title
-            )
-            # 提纯：不下载封面
-            contents.append(VideoContent(video_task, None, duration=info.duration))
-        
-        if not contents and info.thumbnail:
-            img_task = self.downloader.download_img(info.thumbnail)
-            contents.append(ImageContent(img_task))
-
-        author = self.create_author(info.uploader or "微博用户")
-
-        return self.result(
-            title=info.title or "微博正文",
-            text=info.description or "",
-            author=author,
-            contents=contents,
-            timestamp=info.timestamp,
-            url=url,
         )

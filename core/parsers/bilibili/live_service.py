@@ -175,19 +175,20 @@ class BiliLiveService:
         area_text = f"{parent_area} / {area}".strip(" /")
 
         digest = hashlib.md5(
-            f"{real_room_id}|{title}|{uname}|{live_status}|{online}|live_service_v1".encode()
+            f"{real_room_id}|{title}|{uname}|{live_status}|{online}|live_service_v2".encode()
         ).hexdigest()[:10]
         out_path = Path(self.parser.cache_dir) / f"bili_live_{real_room_id}_{digest}.png"
 
         if not out_path.exists():
             await self.parser.live_renderer.render_live_card(
                 out_path=out_path,
+                platform_name="Bilibili",
                 title=title,
-                uname=uname,
+                streamer_name=uname,
                 room_id=real_room_id,
                 cover=cover,
                 avatar=avatar,
-                live_status=live_status,
+                status_text="直播中" if live_status == 1 else "未开播",
                 area_text=area_text,
                 online=online if isinstance(online, int) else None,
             )
