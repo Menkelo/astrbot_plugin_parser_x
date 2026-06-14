@@ -21,8 +21,8 @@ class CacheCleaner:
     MAX_AGE_SECONDS = RETENTION_HOURS * 60 * 60
 
     def __init__(self, context: Context, config: AstrBotConfig):
-        # 内嵌清理周期：每天凌晨 2:30
-        self.clean_cron = "30 2 * * *"
+        # 内嵌清理周期：每天 00:00
+        self.clean_cron = "0 0 * * *"
         self.cache_dir = Path(config["cache_dir"])
 
         tz = context.get_config().get("timezone")
