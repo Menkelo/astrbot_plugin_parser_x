@@ -35,11 +35,6 @@ class CacheCleaner:
 
         self.register_task()
 
-        logger.info(
-            f"{self.JOBNAME} 已启动，任务周期: {self.clean_cron}，"
-            f"清理超过 {self.RETENTION_HOURS} 小时的缓存"
-        )
-
     def register_task(self):
         try:
             self.trigger = CronTrigger.from_crontab(
@@ -96,13 +91,9 @@ class CacheCleaner:
         """Clean only expired cache files, keeping active downloads/renders intact."""
         loop = asyncio.get_running_loop()
         try:
-            removed_files, removed_dirs = await loop.run_in_executor(
+            await loop.run_in_executor(
                 None,
                 self._clean_expired_files,
-            )
-            logger.info(
-                f"Cache cleanup finished: retention={self.RETENTION_HOURS}h, "
-                f"files={removed_files}, dirs={removed_dirs}"
             )
         except Exception:
             logger.exception("Error while cleaning cache directory.")
