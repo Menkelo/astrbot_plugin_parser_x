@@ -10,7 +10,6 @@ from astrbot.api import logger
 from astrbot.core.config.astrbot_config import AstrBotConfig
 
 from ..download import Downloader
-from ..utils import normalize_image_url
 from .base import BaseParser, ParseException, Platform, handle
 
 
@@ -201,90 +200,6 @@ class XiaoHongShuParser(BaseParser):
 
         keyword, matched = self.search_url(final_url)
         return await self.parse(keyword, matched)
-
-    def _extract_live_name_from_source(self) -> str | None:
-        text = self.source_text or ""
-        for pattern in (
-            r"【([^】]{1,30})】正在直播",
-            r"([^\s，,。！!【】#]{1,30})正在直播",
-            r"([^\s，,。！!【】#]{1,30})的直播",
-        ):
-            if matched := re.search(pattern, text):
-                name = matched.group(1).strip()
-                if name and "小红书" not in name:
-                    return name
-        return None
-
-    @staticmethod
-    def _extract_livestream_room_id(url: str) -> str:
-        if matched := re.search(r"/livestream/[^/]+/(\d+)", url):
-            return matched.group(1)
-        if matched := re.search(r"[?&]room_id=(\d+)", url):
-            return matched.group(1)
-        return "-"
-
-    @handle(
-        "xiaohongshu.com/livestream",
-        r"(?:https?://)?(?:www\.)?xiaohongshu\.com/livestream/[A-Za-z0-9._?%&+=/#@-]+",
-    )
-    async def _parse_livestream(self, searched: re.Match[str]):
-        raw = searched.group(0)
-        url = raw if raw.startswith(("http://", "https://")) else f"https://{raw}"
-        final_url = url
-        html = ""
-
-        try:
-            final_url, html = await self._fetch_html(
-                url,
-                headers=self.headers,
-                timeout=8,
-            )
-        except Exception as e:
-            logger.debug(f"[XHS-live] 页面获取失败，使用分享文案兜底: {e}")
-
-        room_data = {}
-        if html:
-            try:
-                json_obj = self._extract_initial_state_json(html)
-                room_data = (
-                    json_obj.get("liveStream", {})
-                    .get("roomData", {})
-                )
-            except Exception as e:
-                logger.debug(f"[XHS-live] 初始状态解析失败，使用分享文案兜底: {e}")
-
-        host_info = room_data.get("hostInfo", {}) if isinstance(room_data, dict) else {}
-        room_info = room_data.get("roomInfo", {}) if isinstance(room_data, dict) else {}
-        source_name = self._extract_live_name_from_source()
-
-        streamer_name = host_info.get("nickName") or source_name or "小红书主播"
-        room_title = room_info.get("roomTitle") or ""
-        title = room_title or f"{streamer_name}的直播"
-        room_id = room_info.get("roomId") or self._extract_livestream_room_id(final_url)
-        cover = normalize_image_url(room_info.get("roomCover"))
-        avatar = normalize_image_url(host_info.get("avatar"))
-        online = room_info.get("displayViewerCount") or room_info.get("displayMemberCount")
-
-        room_status = room_info.get("status")
-        if "正在直播" in (self.source_text or "") or room_status in (1, 2, "1", "2"):
-            status_text = "直播中"
-        else:
-            status_text = "直播"
-
-        return await self.create_live_card_result(
-            platform_name="Xiaohongshu",
-            title=title,
-            streamer_name=streamer_name,
-            room_id=room_id or "-",
-            cover=cover,
-            avatar=avatar,
-            status_text=status_text,
-            area_text="直播",
-            online=online,
-            online_label="观看",
-            cache_key=final_url,
-            url=final_url,
-        )
 
     @handle(
         "hongshu.com/explore",

@@ -183,17 +183,16 @@ class BiliLiveService:
         if uid and (not anchor_base.get("face") or not anchor_base.get("uname")):
             anchor_fallback = await self._fetch_anchor_info(uid, real_room_id)
 
-        title = room_info.get("title") or f"B站直播间 {real_room_id}"
+        title = room_info.get("title") or "B站直播间"
         uname = anchor_base.get("uname") or anchor_fallback.get("uname") or "B站主播"
         cover = room_info.get("cover") or room_info.get("user_cover") or room_info.get("keyframe")
         avatar = anchor_base.get("face") or anchor_fallback.get("face")
-        online = room_info.get("online")
         parent_area = room_info.get("parent_area_name") or ""
         area = room_info.get("area_name") or ""
         area_text = f"{parent_area} / {area}".strip(" /")
 
         digest = hashlib.md5(
-            f"{real_room_id}|{title}|{uname}|{avatar}|{live_status}|{online}|live_service_v3".encode()
+            f"{real_room_id}|{title}|{uname}|{avatar}|{cover}|{live_status}|live_service_v4".encode()
         ).hexdigest()[:10]
         out_path = Path(self.parser.cache_dir) / f"bili_live_{real_room_id}_{digest}.png"
 
@@ -203,12 +202,10 @@ class BiliLiveService:
                 platform_name="Bilibili",
                 title=title,
                 streamer_name=uname,
-                room_id=real_room_id,
                 cover=cover,
                 avatar=avatar,
                 status_text="直播中" if live_status == 1 else "未开播",
                 area_text=area_text,
-                online=online if isinstance(online, int) else None,
             )
 
         return self.parser.result(

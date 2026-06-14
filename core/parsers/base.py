@@ -1,6 +1,5 @@
 import asyncio
 import json as _json
-import re
 import socket
 from abc import ABC
 from asyncio import Task
@@ -193,71 +192,6 @@ class BaseParser:
     @source_text.setter
     def source_text(self, text: str) -> None:
         self._source_text_ctx.set(text or "")
-
-    async def create_live_card_result(
-        self,
-        *,
-        platform_name: str,
-        title: str,
-        streamer_name: str,
-        room_id: str | int,
-        cover: str | None = None,
-        avatar: str | None = None,
-        status_text: str = "直播中",
-        area_text: str | None = "直播",
-        online: int | str | None = None,
-        room_label: str = "房间号",
-        online_label: str = "人气",
-        cache_key: str | None = None,
-        url: str | None = None,
-    ) -> ParseResult:
-        from hashlib import md5
-
-        from ..live_renderer import LiveCardRenderer
-
-        digest_source = "\n".join(
-            [
-                cache_key or "",
-                platform_name,
-                title,
-                streamer_name,
-                str(room_id),
-                cover or "",
-                avatar or "",
-                status_text,
-                area_text or "",
-                str(online or ""),
-                "live_card_result_v2",
-            ]
-        )
-        digest = md5(digest_source.encode("utf-8")).hexdigest()[:12]
-        slug = re.sub(r"[^A-Za-z0-9_-]+", "_", platform_name.lower()).strip("_")
-        slug = slug or self.platform.name or "live"
-        out_path = self.cache_dir / f"live_{slug}_{digest}.png"
-
-        if not out_path.exists():
-            renderer = getattr(self, "live_renderer", None) or LiveCardRenderer()
-            await renderer.render_live_card(
-                out_path=out_path,
-                platform_name=platform_name,
-                title=title,
-                streamer_name=streamer_name,
-                room_id=room_id,
-                cover=cover,
-                avatar=avatar,
-                status_text=status_text,
-                area_text=area_text,
-                online=online,
-                room_label=room_label,
-                online_label=online_label,
-            )
-
-        return self.result(
-            title=title,
-            contents=[ImageContent(out_path)],
-            url=url,
-            extra={"force_direct_media": True},
-        )
 
     async def http_get(
         self,
