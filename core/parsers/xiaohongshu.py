@@ -101,6 +101,202 @@ class XiaoHongShuParser(BaseParser):
         return out
 
     @staticmethod
+    def _is_probably_xhs_video_url(url: str | None) -> bool:
+        if not isinstance(url, str) or not url:
+            return False
+
+        u = url.lower()
+        if not u.startswith(("http://", "https://")):
+            return False
+
+        return any(
+            token in u
+            for token in (
+                "sns-video",
+                "xhscdn.com",
+                ".mp4",
+                ".m3u8",
+                "mime_type=video",
+                "video_id=",
+                "/video/",
+            )
+        ) and not any(
+            token in u
+            for token in (
+                "sns-img",
+                "imageview",
+                ".jpg",
+                ".jpeg",
+                ".png",
+                ".webp",
+                ".avif",
+            )
+        )
+
+    @classmethod
+    def _collect_video_urls_deep(
+        cls,
+        obj: Any,
+        *,
+        depth: int = 0,
+        max_depth: int = 7,
+    ) -> list[str]:
+        if depth > max_depth:
+            return []
+
+        if isinstance(obj, str):
+            obj = obj.replace("&amp;", "&")
+            return [obj] if cls._is_probably_xhs_video_url(obj) else []
+
+        urls: list[str] = []
+
+        if isinstance(obj, list):
+            for item in obj:
+                urls.extend(cls._collect_video_urls_deep(item, depth=depth + 1))
+            return cls._uniq_urls(urls)
+
+        if not isinstance(obj, dict):
+            return []
+
+        for key in (
+            "url",
+            "playUrl",
+            "play_url",
+            "streamUrl",
+            "stream_url",
+            "mainUrl",
+            "main_url",
+            "masterUrl",
+        ):
+            val = obj.get(key)
+            if isinstance(val, str) and cls._is_probably_xhs_video_url(val):
+                urls.append(val.replace("&amp;", "&"))
+
+        for key in ("backupUrls", "backup_urls", "backupUrl", "backup_url"):
+            val = obj.get(key)
+            if isinstance(val, list):
+                for u in val:
+                    if isinstance(u, str) and cls._is_probably_xhs_video_url(u):
+                        urls.append(u.replace("&amp;", "&"))
+            elif isinstance(val, str) and cls._is_probably_xhs_video_url(val):
+                urls.append(val.replace("&amp;", "&"))
+
+        for key in (
+            "originVideoKey",
+            "origin_video_key",
+            "videoKey",
+            "video_key",
+            "livePhotoVideoKey",
+            "live_photo_video_key",
+        ):
+            val = obj.get(key)
+            if isinstance(val, str) and val and not val.startswith(("http://", "https://")):
+                urls.append(f"https://sns-video-bd.xhscdn.com/{val.lstrip('/')}")
+
+        for key in ("h264", "h265", "av1", "h266"):
+            val = obj.get(key)
+            if isinstance(val, list):
+                for item in val:
+                    if isinstance(item, dict):
+                        urls.extend(Video._collect_urls_from_stream_item(item))
+
+        # 小红书 live photo 字段名不稳定，递归限定在单张 image item 内，避免扫到整页无关资源。
+        for val in obj.values():
+            urls.extend(cls._collect_video_urls_deep(val, depth=depth + 1))
+
+        return cls._uniq_urls(urls)
+
+    @classmethod
+    def _extract_dynamic_video_url_from_image(cls, image_obj: Any) -> str | None:
+        if not isinstance(image_obj, dict):
+            return None
+
+        priority_parts = []
+        for key in (
+            "livePhoto",
+            "live_photo",
+            "livePhotoMedia",
+            "live_photo_media",
+            "dynamicPhoto",
+            "dynamic_photo",
+            "video",
+            "media",
+        ):
+            val = image_obj.get(key)
+            if isinstance(val, (dict, list)):
+                priority_parts.append(val)
+
+        candidates: list[str] = []
+        for part in priority_parts:
+            candidates.extend(cls._collect_video_urls_deep(part))
+        candidates.extend(cls._collect_video_urls_deep(image_obj))
+
+        candidates = cls._uniq_urls(candidates)
+        if not candidates:
+            return None
+
+        candidates.sort(
+            key=lambda u: (
+                0 if "sns-video" in u.lower() else 5,
+                Video._score_video_url(u),
+                0 if ".mp4" in u.lower() else 8,
+            )
+        )
+        return candidates[0]
+
+    @staticmethod
+    def _extract_static_image_url_from_image(image_obj: Any) -> str | None:
+        if not isinstance(image_obj, dict):
+            return None
+
+        for key in ("urlSizeLarge", "urlDefault", "urlPre", "url"):
+            val = image_obj.get(key)
+            if isinstance(val, str) and val:
+                return val.replace("&amp;", "&")
+
+        return None
+
+    @classmethod
+    def _extract_image_media_items(cls, image_list: Any) -> list[tuple[str, str]]:
+        if not isinstance(image_list, list):
+            return []
+
+        items: list[tuple[str, str]] = []
+        seen: set[tuple[str, str]] = set()
+
+        for image_obj in image_list:
+            if not isinstance(image_obj, dict):
+                continue
+
+            video_url = cls._extract_dynamic_video_url_from_image(image_obj)
+            if video_url:
+                key = ("video", video_url)
+                if key not in seen:
+                    seen.add(key)
+                    items.append(key)
+                continue
+
+            image_url = cls._extract_static_image_url_from_image(image_obj)
+            if image_url:
+                key = ("image", image_url)
+                if key not in seen:
+                    seen.add(key)
+                    items.append(key)
+
+        return items
+
+    def _create_image_media_contents(self, media_items: list[tuple[str, str]]):
+        contents = []
+
+        for media_type, url in media_items:
+            if media_type == "video":
+                contents.extend(self.create_dynamic_contents([url], ext_headers=self.ios_headers))
+            else:
+                contents.extend(self.create_image_contents([url], ext_headers=self.headers))
+
+        return contents
+
+    @staticmethod
     def _unwrap_sec_redirect(url: str) -> str:
         """
         小红书安全中转页：
@@ -354,6 +550,9 @@ class XiaoHongShuParser(BaseParser):
             cover_url = note_detail.image_urls[0] if note_detail.image_urls else None
             contents.append(self.create_video_content(video_url, cover_url))
 
+        elif media_items := self._extract_image_media_items(note_data.get("imageList")):
+            contents.extend(self._create_image_media_contents(media_items))
+
         elif image_urls := note_detail.image_urls:
             contents.extend(self.create_image_contents(image_urls))
 
@@ -441,6 +640,12 @@ class XiaoHongShuParser(BaseParser):
                     img_urls[0] if img_urls else None,
                 )
             )
+
+        elif media_items := self._extract_image_media_items(note_data.get("imageList")):
+            contents.extend(self._create_image_media_contents(media_items))
+
+        elif media_items := self._extract_image_media_items(preload_data.get("imagesList")):
+            contents.extend(self._create_image_media_contents(media_items))
 
         elif img_urls := note_data_obj.image_urls:
             contents.extend(self.create_image_contents(img_urls))
