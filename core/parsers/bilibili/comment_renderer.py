@@ -13,6 +13,7 @@ class BiliCommentRenderer:
         video_cover: str | None,
         video_author: str | None = None,
         video_time: str | None = None,
+        author_label: str = "UP主",
     ):
         comments_html = ""
 
@@ -68,7 +69,7 @@ class BiliCommentRenderer:
 
         meta_items = []
         if video_author:
-            meta_items.append(f"UP主：{escape(video_author)}")
+            meta_items.append(f"{escape(author_label)}：{escape(video_author)}")
         if video_time:
             meta_items.append(f"发布：{escape(video_time)}")
 

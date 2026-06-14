@@ -11,6 +11,12 @@
         "type": "bool",
         "default": true
     },
+    "douyin_comment": {
+        "description": "抖音评论区",
+        "hint": "开启后解析抖音作品时会尝试额外生成评论区截图卡片；接口被风控或无评论时会静默跳过",
+        "type": "bool",
+        "default": true
+    },
     "performance": {
         "description": "性能配置",
         "type": "object",

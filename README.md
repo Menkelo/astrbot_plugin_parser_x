@@ -12,6 +12,7 @@
 - 超限保护（体积限制）
 - OneBot V11 贴表情“已受理”提示（可选）
 - B站评论区截图卡片（含过滤机制，可选）
+- 抖音评论区截图卡片（可选，接口风控时静默跳过）
 - B站直播卡片渲染
 - 多平台下载失败自动兜底（curl_cffi / aiohttp / yt-dlp）
 
@@ -32,6 +33,7 @@
 - v.douyin / jx.douyin 短链
 - video / note / slides 等类型
 - 图文 / 图集静态图片解析
+- 评论区截图卡片生成
 
 ### **快手 / 微博 / 小红书**
 
@@ -56,6 +58,7 @@
 - `performance.bili_cache_ttl`：B站信息缓存时长（秒）
 - `cookies.douyin_ck`：抖音 Cookie（推荐）
 - `cookies.bili_ck`：B站 Cookie（推荐，能提升接口稳定性）
+- `douyin_comment`：是否开启抖音评论区截图卡片
 
 ---
 

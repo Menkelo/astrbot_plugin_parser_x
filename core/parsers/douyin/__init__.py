@@ -1,3 +1,4 @@
+import asyncio
 import re
 from typing import TYPE_CHECKING, ClassVar
 from urllib.parse import parse_qs, urlparse
@@ -8,6 +9,8 @@ from astrbot.core.config.astrbot_config import AstrBotConfig
 
 from ...download import Downloader
 from ..base import BaseParser, ParseException, Platform, SkipParseException, handle
+from ..bilibili.comment_renderer import BiliCommentRenderer
+from .comment_service import DouyinCommentService
 from .extractor import (
     extract_id_from_query,
     extract_router_data_json_str,
@@ -33,11 +36,49 @@ class DouyinParser(BaseParser):
         if self.cookies:
             self._set_cookies(self.cookies)
 
+        self.enable_comment_card = bool(config.get("douyin_comment", True))
+        comment_conf = config.get("comment_filter", {})
+        if not isinstance(comment_conf, dict):
+            comment_conf = {}
+
+        self.comment_renderer = BiliCommentRenderer()
+        self.comment_service = DouyinCommentService(
+            self,
+            renderer=self.comment_renderer,
+            comment_limit=9,
+            enable_text_ad_filter=bool(comment_conf.get("enable_text_ad_filter", True)),
+        )
+
     def _set_cookies(self, cookies: str):
         cleaned = cookies.replace("\n", "").replace("\r", "").strip()
         if cleaned:
             self.ios_headers["Cookie"] = cleaned
             self.android_headers["Cookie"] = cleaned
+
+    def _create_comment_task(
+        self,
+        aweme_id: str,
+        *,
+        title: str,
+        cover: str | None,
+        author: str | None,
+        timestamp: int | None,
+        referer: str,
+    ) -> asyncio.Task | None:
+        if not self.enable_comment_card or not aweme_id:
+            return None
+
+        return asyncio.create_task(
+            self.comment_service.build_comment_image_content(
+                aweme_id,
+                video_title=title,
+                video_cover=cover,
+                video_author=author,
+                video_timestamp=timestamp,
+                referer=referer,
+            ),
+            name=f"douyin_comments_{aweme_id}",
+        )
 
     @staticmethod
     def _build_iesdouyin_url(ty: str, vid: str) -> str:
@@ -298,11 +339,21 @@ class DouyinParser(BaseParser):
             meta.avatar_url,
             ext_headers=self.ios_headers,
         )
+        aweme_id = meta.id or vid
+        comment_task = self._create_comment_task(
+            aweme_id,
+            title=meta.desc,
+            cover=meta.cover_url or (image_urls[0] if image_urls else None),
+            author=meta.author.nickname,
+            timestamp=meta.create_time,
+            referer=f"https://www.douyin.com/{'note' if self._has_image_album(aweme) else 'video'}/{aweme_id}",
+        )
         return self.result(
             title=meta.desc,
             author=author,
             contents=contents,
             timestamp=meta.create_time,
+            extra={"comment_task": comment_task} if comment_task else {},
         )
 
     async def parse_slides(self, video_id: str):
@@ -357,6 +408,7 @@ class DouyinParser(BaseParser):
             return valid[0]
 
         sent_images: set[str] = set()
+        first_image_url: str | None = None
 
         for image in slides.images or []:
             image_url = pick_best_image_url(image.url_list or [])
@@ -365,6 +417,8 @@ class DouyinParser(BaseParser):
 
             if image_url and image_url not in sent_images:
                 sent_images.add(image_url)
+                if not first_image_url:
+                    first_image_url = image_url
                 contents.extend(
                     self._create_image_contents_with_headers(
                         [image_url],
@@ -377,12 +431,21 @@ class DouyinParser(BaseParser):
             slides.avatar_url,
             ext_headers=self.android_headers,
         )
+        comment_task = self._create_comment_task(
+            video_id,
+            title=slides.desc,
+            cover=first_image_url,
+            author=slides.name,
+            timestamp=slides.create_time,
+            referer=f"https://www.douyin.com/note/{video_id}",
+        )
 
         return self.result(
             title=slides.desc,
             author=author,
             contents=contents,
             timestamp=slides.create_time,
+            extra={"comment_task": comment_task} if comment_task else {},
         )
 
     async def _parse_with_ytdlp(self, vid: str):
@@ -405,12 +468,23 @@ class DouyinParser(BaseParser):
                 )
             )
 
-        author = self.create_author(info.uploader or "抖音用户")
+        title = info.title or "抖音视频"
+        author_name = info.uploader or "抖音用户"
+        author = self.create_author(author_name)
+        comment_task = self._create_comment_task(
+            vid,
+            title=title,
+            cover=None,
+            author=author_name,
+            timestamp=info.timestamp,
+            referer=url,
+        )
         return self.result(
-            title=info.title or "抖音视频",
+            title=title,
             text=info.description or "",
             author=author,
             contents=contents,
             timestamp=info.timestamp,
             url=url,
+            extra={"comment_task": comment_task} if comment_task else {},
         )
