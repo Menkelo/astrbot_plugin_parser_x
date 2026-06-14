@@ -1,16 +1,20 @@
 import base64
+import hashlib
 import mimetypes
 import re
+import time
 from email.utils import parsedate_to_datetime
 from html import unescape
+from pathlib import Path
 from re import Match
 from typing import ClassVar
 
 from astrbot.api import logger
 from astrbot.core.config.astrbot_config import AstrBotConfig
 
-from ..data import Platform, VideoContent, ImageContent, MediaContent
+from ..data import Platform, VideoContent, ImageContent
 from ..download import Downloader
+from ..text_renderer import TextCardRenderer
 from .base import BaseParser, handle, ParseException
 
 
@@ -26,6 +30,9 @@ class WeiboParser(BaseParser):
             "MWeibo-Pwa": "1",
             "X-Requested-With": "XMLHttpRequest"
         })
+        self.cache_dir = Path(config["cache_dir"])
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        self.text_renderer = TextCardRenderer()
         
     @handle("weibo.com", r"weibo\.com/[0-9]+/([a-zA-Z0-9]+)")
     @handle("weibo.cn", r"weibo\.cn/(?:status|detail)/([a-zA-Z0-9]+)")
@@ -79,6 +86,8 @@ class WeiboParser(BaseParser):
                 pass
         
         contents = []
+        image_urls: list[str] = []
+        has_video = False
 
         page_info = data.get("page_info", {})
         if page_info and page_info.get("type") == "video":
@@ -99,12 +108,14 @@ class WeiboParser(BaseParser):
                 )
                 # 提纯：不下载封面
                 contents.append(VideoContent(video_task, None, duration=duration))
+                has_video = True
 
         if "pics" in data:
             for pic in data["pics"]:
                 large = pic.get("large", {})
                 url = large.get("url") or pic.get("url")
                 if url:
+                    image_urls.append(url)
                     img_task = self.downloader.download_img(
                         url, 
                         ext_headers=self.headers
@@ -114,10 +125,24 @@ class WeiboParser(BaseParser):
         # 移除了评论区抓取逻辑
 
         extra = {}
-        if not contents:
+        if text:
             text_card_avatar = await self._img_to_data_uri(author_avatar) or author_avatar
             if text_card_avatar:
                 extra["text_card_avatar"] = text_card_avatar
+
+            if not has_video:
+                try:
+                    text_card = await self._render_text_card(
+                        bid=bid,
+                        author_name=author_name,
+                        author_avatar=text_card_avatar,
+                        text=text,
+                        timestamp=timestamp,
+                        image_urls=image_urls,
+                    )
+                    contents.insert(0, text_card)
+                except Exception as e:
+                    logger.warning(f"[Weibo] 正文卡渲染失败: {e}")
 
         author = self.create_author(author_name, author_avatar, ext_headers=self.headers)
         original_url = f"https://weibo.com/{user.get('id')}/{bid}"
@@ -131,6 +156,57 @@ class WeiboParser(BaseParser):
             url=original_url,
             extra=extra,
         )
+
+    @staticmethod
+    def _fmt_time(ts: int | None) -> str | None:
+        if not ts:
+            return None
+        try:
+            return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ts))
+        except Exception:
+            return None
+
+    async def _render_text_card(
+        self,
+        *,
+        bid: str,
+        author_name: str,
+        author_avatar: str | None,
+        text: str,
+        timestamp: int | None,
+        image_urls: list[str],
+    ) -> ImageContent:
+        avatar_digest = (
+            hashlib.md5(author_avatar.encode("utf-8")).hexdigest()
+            if author_avatar
+            else ""
+        )
+        digest = hashlib.md5(
+            "\n".join(
+                [
+                    bid,
+                    author_name,
+                    avatar_digest,
+                    self._fmt_time(timestamp) or "",
+                    text,
+                    "|".join(image_urls),
+                    "weibo_text_card_v1",
+                ]
+            ).encode("utf-8")
+        ).hexdigest()[:12]
+
+        out_path = self.cache_dir / f"weibo_text_card_{bid}_{digest}.png"
+        if not out_path.exists():
+            await self.text_renderer.render_text_card(
+                out_path=out_path,
+                platform_name=self.platform.display_name,
+                author_name=author_name,
+                author_avatar=author_avatar,
+                text=text,
+                timestamp_text=self._fmt_time(timestamp),
+            )
+
+        return ImageContent(out_path)
 
     @staticmethod
     def _norm_img(url: str | None) -> str:
