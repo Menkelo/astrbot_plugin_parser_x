@@ -221,9 +221,8 @@ class BiliLiveService:
 
         title = room_info.get("title") or "B站直播间"
         if live_status != 1:
-            prompt = f"B站直播间未开播：{title}" if title else "B站直播间未开播"
             return self.parser.result(
-                text=prompt,
+                text="B站直播间未开播",
                 extra={"plain_text_only": True},
             )
 
