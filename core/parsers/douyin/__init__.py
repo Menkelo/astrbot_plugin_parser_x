@@ -1,5 +1,6 @@
 import re
 from typing import TYPE_CHECKING, ClassVar
+from urllib.parse import parse_qs, urlparse
 
 import msgspec
 from astrbot.api import logger
@@ -107,6 +108,8 @@ class DouyinParser(BaseParser):
         low = (url or "").lower()
         if DouyinParser._is_audio_like_url(url):
             return False
+        if DouyinParser._has_url_as_video_id(url):
+            return False
         return any(
             x in low
             for x in (
@@ -121,6 +124,25 @@ class DouyinParser(BaseParser):
                 "is_play_url=1",
             )
         )
+
+    @staticmethod
+    def _has_url_as_video_id(url: str) -> bool:
+        try:
+            query = parse_qs(urlparse(url).query)
+        except Exception:
+            return False
+
+        for key in ("video_id", "vid"):
+            for value in query.get(key) or []:
+                if isinstance(value, str) and value.lower().startswith(("http://", "https://")):
+                    return True
+
+        return False
+
+    @staticmethod
+    def _has_image_album(aweme: dict) -> bool:
+        images = aweme.get("images")
+        return isinstance(images, list) and len(images) > 0
 
     @handle("v.douyin", r"v\.douyin\.com/[a-zA-Z0-9_\-]+")
     @handle("jx.douyin", r"jx\.douyin\.com/[a-zA-Z0-9_\-]+")
@@ -237,10 +259,19 @@ class DouyinParser(BaseParser):
         meta = msgspec.convert(aweme, VideoData)
 
         contents = []
+        image_urls = meta.image_urls or extract_static_image_urls_deep(aweme)
 
-        # 普通视频 / 普通图集兜底：
-        # 优先视频，避免普通视频因为图片字段被误判成图集。
-        if meta.video_url and self._is_video_like_url(meta.video_url):
+        # 图文 / live photo 作品会带 images，同时可能把动图播放地址塞进顶层 video。
+        # 当前策略回退为静态图，避免把无声/不可直连的动图视频当普通视频下载。
+        if self._has_image_album(aweme) and image_urls:
+            contents.extend(
+                self._create_image_contents_with_headers(
+                    image_urls,
+                    self.ios_headers,
+                )
+            )
+
+        elif meta.video_url and self._is_video_like_url(meta.video_url):
             task = self.downloader.download_video(
                 meta.video_url,
                 video_name=f"douyin_{meta.id or vid}.mp4",
@@ -254,8 +285,7 @@ class DouyinParser(BaseParser):
                 )
             )
 
-        else:
-            image_urls = meta.image_urls or extract_static_image_urls_deep(aweme)
+        elif image_urls:
             contents.extend(
                 self._create_image_contents_with_headers(
                     image_urls,
