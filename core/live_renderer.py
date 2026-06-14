@@ -16,6 +16,7 @@ class LiveCardRenderer:
         avatar: str | None,
         status_text: str,
         area_text: str | None,
+        user_time_text: str | None = None,
     ):
         def esc(value: str | int | None) -> str:
             return escape(str(value or ""))
@@ -31,6 +32,11 @@ class LiveCardRenderer:
             else '<div class="avatar ph"></div>'
         )
         meta_html = f'<div class="meta">{esc(area_text)}</div>' if area_text else ""
+        user_time_html = (
+            f'<div class="user-time">{esc(user_time_text)}</div>'
+            if user_time_text
+            else ""
+        )
 
         html = f"""
         <!doctype html>
@@ -81,6 +87,7 @@ class LiveCardRenderer:
               width: 36px; height: 36px; border-radius: 10px; object-fit: cover; background: #eef1f4;
             }}
             .uname {{ font-size: 16px; font-weight: 700; }}
+            .user-time {{ margin-top: 3px; color: #7b8491; font-size: 12px; line-height: 1.35; }}
             .meta {{ margin-top: 10px; color: #6b7280; font-size: 13px; }}
             .footer {{ margin-top: 10px; color: #9aa1ac; font-size: 12px; }}
           </style>
@@ -94,7 +101,7 @@ class LiveCardRenderer:
                 <div class="status">{esc(status_text)}</div>
               </div>
               <div class="title">{esc(title)}</div>
-              <div class="user">{avatar_html}<div class="uname">{esc(streamer_name)}</div></div>
+              <div class="user">{avatar_html}<div><div class="uname">{esc(streamer_name)}</div>{user_time_html}</div></div>
               {meta_html}
               <div class="footer">Menkelo/astrbot_plugin_r_parser</div>
             </div>

@@ -1,6 +1,7 @@
 import hashlib
 import json
 import random
+import time
 from pathlib import Path
 
 from astrbot.api import logger
@@ -12,6 +13,45 @@ from ..base import ParseException
 class BiliLiveService:
     def __init__(self, parser):
         self.parser = parser
+
+    @staticmethod
+    def _format_time_value(value) -> str | None:
+        if value is None or value is False:
+            return None
+
+        if isinstance(value, str):
+            text = value.strip()
+            if not text or text == "0" or text.startswith("0000-00-00"):
+                return None
+            if not text.isdigit():
+                return text
+            value = int(text)
+
+        if isinstance(value, (int, float)):
+            ts = int(value)
+            if ts <= 0:
+                return None
+            if ts > 10_000_000_000:
+                ts //= 1000
+            try:
+                return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ts))
+            except Exception:
+                return None
+
+        return None
+
+    @classmethod
+    def _pick_time_text(cls, sources: list[dict], keys: tuple[str, ...]) -> str | None:
+        for source in sources:
+            if not isinstance(source, dict):
+                continue
+            for key in keys:
+                if key not in source:
+                    continue
+                text = cls._format_time_value(source.get(key))
+                if text:
+                    return text
+        return None
 
     async def _get_json(self, url: str, params: dict, room_id: int, retry: int = 3):
         headers = self.parser.headers.copy()
@@ -152,6 +192,7 @@ class BiliLiveService:
         info_api = "https://api.live.bilibili.com/xlive/web-room/v1/index/getInfoByRoom"
         fallback_info_api = "https://api.live.bilibili.com/room/v1/Room/get_info"
 
+        init_data = {}
         init_raw = await self._get_json(init_api, {"id": room_id}, room_id)
         if init_raw.get("code") != 0:
             real_room_id = room_id
@@ -190,9 +231,41 @@ class BiliLiveService:
         parent_area = room_info.get("parent_area_name") or ""
         area = room_info.get("area_name") or ""
         area_text = f"{parent_area} / {area}".strip(" /")
+        start_time_text = self._pick_time_text(
+            [room_info, init_data],
+            (
+                "live_start_time",
+                "liveStartTime",
+                "live_time",
+                "liveTime",
+                "start_time",
+                "startTime",
+            ),
+        )
+        end_time_text = self._pick_time_text(
+            [room_info, init_data],
+            (
+                "live_end_time",
+                "liveEndTime",
+                "end_time",
+                "endTime",
+                "stop_time",
+                "stopTime",
+                "last_end_time",
+                "lastEndTime",
+                "last_live_end_time",
+                "lastLiveEndTime",
+            ),
+        )
+        if live_status == 1:
+            status_text = "直播中"
+            user_time_text = f"开播时间 {start_time_text}" if start_time_text else None
+        else:
+            status_text = "已结束"
+            user_time_text = f"结束时间 {end_time_text}" if end_time_text else None
 
         digest = hashlib.md5(
-            f"{real_room_id}|{title}|{uname}|{avatar}|{cover}|{live_status}|live_service_v4".encode()
+            f"{real_room_id}|{title}|{uname}|{avatar}|{cover}|{live_status}|{user_time_text or ''}|live_service_v5".encode()
         ).hexdigest()[:10]
         out_path = Path(self.parser.cache_dir) / f"bili_live_{real_room_id}_{digest}.png"
 
@@ -204,8 +277,9 @@ class BiliLiveService:
                 streamer_name=uname,
                 cover=cover,
                 avatar=avatar,
-                status_text="直播中" if live_status == 1 else "未开播",
+                status_text=status_text,
                 area_text=area_text,
+                user_time_text=user_time_text,
             )
 
         return self.parser.result(
