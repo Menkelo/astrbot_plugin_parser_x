@@ -1,4 +1,5 @@
 import re
+from html import unescape
 from typing import TYPE_CHECKING, ClassVar
 
 import msgspec
@@ -6,6 +7,7 @@ from astrbot.api import logger
 from astrbot.core.config.astrbot_config import AstrBotConfig
 
 from ...download import Downloader
+from ...utils import normalize_image_url
 from ..base import BaseParser, ParseException, Platform, handle
 from .extractor import (
     extract_id_from_query,
@@ -59,6 +61,150 @@ class DouyinParser(BaseParser):
             "enterfrom=live",
         ]
         return any(k in u for k in live_keys)
+
+    @staticmethod
+    def _clean_html_text(value: str | None) -> str | None:
+        if not value:
+            return None
+        text = re.sub(r"<[^>]+>", "", value)
+        text = unescape(text).strip()
+        return text or None
+
+    @classmethod
+    def _clean_live_url(cls, value: str | None) -> str | None:
+        text = cls._clean_html_text(value)
+        if not text:
+            return None
+        text = text.strip("'\"")
+        if text.startswith("//"):
+            text = "https:" + text
+        return normalize_image_url(text)
+
+    @staticmethod
+    def _extract_input_value(html: str, name: str) -> str | None:
+        for matched in re.finditer(r"<input\b[^>]*>", html, flags=re.IGNORECASE | re.DOTALL):
+            tag = matched.group(0)
+            name_attr = re.search(
+                r"\bname=([\"'])(.*?)\1",
+                tag,
+                flags=re.IGNORECASE | re.DOTALL,
+            )
+            if not name_attr or name_attr.group(2) != name:
+                continue
+            value_attr = re.search(
+                r"\bvalue=([\"'])(.*?)\1",
+                tag,
+                flags=re.IGNORECASE | re.DOTALL,
+            )
+            if value_attr:
+                return unescape(value_attr.group(2)).strip()
+        return None
+
+    @classmethod
+    def _extract_text(cls, html: str, pattern: str) -> str | None:
+        matched = re.search(pattern, html, flags=re.IGNORECASE | re.DOTALL)
+        if not matched:
+            return None
+        return cls._clean_html_text(matched.group(1))
+
+    @staticmethod
+    def _extract_live_room_id(url: str) -> str:
+        for pattern in (
+            r"/reflow/(\d+)",
+            r"live\.douyin\.com/(\d+)",
+            r"[?&]room_id=(\d+)",
+        ):
+            if matched := re.search(pattern, url):
+                return matched.group(1)
+        return "-"
+
+    def _extract_live_name_from_source(self) -> str | None:
+        text = self.source_text or ""
+        for pattern in (
+            r"【([^】]{1,30})】正在直播",
+            r"([^\s，,。！!【】#]{1,30})正在直播",
+            r"([^\s，,。！!【】#]{1,30})的直播",
+        ):
+            if matched := re.search(pattern, text):
+                name = matched.group(1).strip()
+                if name and "抖音" not in name:
+                    return name
+        return None
+
+    async def _parse_live_url(self, url: str):
+        html = ""
+        final_url = url
+
+        try:
+            resp = await self.http_get(
+                url,
+                headers=self.ios_headers,
+                allow_redirects=True,
+                timeout=10,
+            )
+            html = resp.text or ""
+            final_url = str(getattr(resp, "url", "") or url)
+        except Exception as e:
+            logger.debug(f"[Douyin-live] 页面获取失败，使用分享文案兜底: {e}")
+
+        source_name = self._extract_live_name_from_source()
+        share_title = self._extract_input_value(html, "shareTitle")
+        title = share_title or (f"{source_name}的直播" if source_name else "抖音直播")
+        streamer_name = (
+            self._extract_text(html, r'<h2[^>]*class="[^"]*anchor-name[^"]*"[^>]*>(.*?)</h2>')
+            or (share_title[:-3] if share_title and share_title.endswith("的直播") else None)
+            or source_name
+            or "抖音主播"
+        )
+
+        cover = self._clean_live_url(self._extract_input_value(html, "shareImage"))
+        if not cover:
+            cover = self._clean_live_url(
+                self._extract_text(
+                    html,
+                    r'<div[^>]*class="[^"]*cover[^"]*"[^>]*>\s*<img[^>]*src="([^"]+)"',
+                )
+            )
+        if not cover:
+            cover = self._clean_live_url(
+                self._extract_text(html, r"background-image:url\(([^)]+)\)")
+            )
+
+        avatar = self._clean_live_url(
+            self._extract_text(
+                html,
+                r'<div[^>]*class="[^"]*avatar[^"]*"[^>]*>\s*<img[^>]*src="([^"]+)"',
+            )
+        )
+
+        online = (
+            self._extract_text(html, r'<p[^>]*class="[^"]*status[^"]*"[^>]*>(.*?)</p>')
+            or self._extract_text(html, r'"displayMiddle"\s*:\s*"([^"]+)"')
+            or self._extract_text(html, r'"displayShort"\s*:\s*"([^"]+)"')
+        )
+
+        reason = self._extract_text(html, r'<div[^>]*class="[^"]*reason[^"]*"[^>]*>(.*?)</div>')
+        if reason and "结束" in reason:
+            status_text = "已结束"
+        elif "正在直播" in (self.source_text or "") or "直播中" in html:
+            status_text = "直播中"
+        else:
+            status_text = reason or "直播"
+
+        return await self.create_live_card_result(
+            platform_name="Douyin",
+            title=title,
+            streamer_name=streamer_name,
+            room_id=self._extract_live_room_id(final_url),
+            cover=cover,
+            avatar=avatar,
+            status_text=status_text,
+            area_text="直播",
+            online=online,
+            online_label="观看",
+            cache_key=final_url,
+            url=final_url,
+        )
 
     def _create_image_contents_with_headers(self, urls: list[str], headers: dict[str, str]):
         """
@@ -122,11 +268,15 @@ class DouyinParser(BaseParser):
             )
         )
 
-    # 直播直链硬拦截
+    # 直播链接走通用直播卡，不下载直播流。
     @handle("live.douyin.com", r"(?:https?://)?live\.douyin\.com/[A-Za-z0-9_/?.=&%-]+")
+    @handle("douyin.com/live", r"(?:https?://)?(?:www\.)?douyin\.com/live/[A-Za-z0-9_/?.=&%-]+")
     @handle("webcast.douyin.com", r"(?:https?://)?webcast\.douyin\.com/[A-Za-z0-9_/?.=&%-]+")
-    async def _parse_live_block(self, searched: re.Match[str]):
-        raise ParseException("暂不支持抖音直播解析")
+    @handle("webcast.amemv.com", r"(?:https?://)?webcast\.amemv\.com/[A-Za-z0-9_/?.=&%-]+")
+    async def _parse_live_link(self, searched: re.Match[str]):
+        raw = searched.group(0)
+        url = raw if raw.startswith(("http://", "https://")) else f"https://{raw}"
+        return await self._parse_live_url(url)
 
     @handle("v.douyin", r"v\.douyin\.com/[a-zA-Z0-9_\-]+")
     @handle("jx.douyin", r"jx\.douyin\.com/[a-zA-Z0-9_\-]+")
@@ -135,7 +285,7 @@ class DouyinParser(BaseParser):
         final_url = await self.get_final_url(short_url, headers=self.ios_headers)
 
         if self._is_live_url(final_url):
-            raise ParseException("暂不支持抖音直播解析")
+            return await self._parse_live_url(final_url)
 
         try:
             keyword, m = self.search_url(final_url)
@@ -191,8 +341,6 @@ class DouyinParser(BaseParser):
             f"https://www.douyin.com/{ty}/{vid}",
         ):
             try:
-                if self._is_live_url(url):
-                    raise ParseException("暂不支持抖音直播解析")
                 return await self.parse_video(url, vid)
             except Exception as e:
                 last_err = e
@@ -209,8 +357,6 @@ class DouyinParser(BaseParser):
                 self._build_iesdouyin_url(ty, vid),
             ):
                 try:
-                    if self._is_live_url(url):
-                        raise ParseException("暂不支持抖音直播解析")
                     return await self.parse_video(url, vid)
                 except Exception as e:
                     last_err = e
@@ -220,7 +366,7 @@ class DouyinParser(BaseParser):
 
     async def parse_video(self, url: str, vid: str):
         if self._is_live_url(url):
-            raise ParseException("暂不支持抖音直播解析")
+            return await self._parse_live_url(url)
 
         resp = await self.http_get(
             url,
@@ -234,7 +380,7 @@ class DouyinParser(BaseParser):
 
         final_resp_url = str(getattr(resp, "url", "") or "")
         if self._is_live_url(final_resp_url):
-            raise ParseException("暂不支持抖音直播解析")
+            return await self._parse_live_url(final_resp_url)
 
         from .video import VideoData, recursive_collect_videos
 
@@ -367,9 +513,6 @@ class DouyinParser(BaseParser):
 
     async def _parse_with_ytdlp(self, vid: str):
         url = f"https://www.douyin.com/video/{vid}"
-
-        if self._is_live_url(url):
-            raise ParseException("暂不支持抖音直播解析")
 
         info = await self.downloader.ytdlp_extract_info(url)
         contents = []

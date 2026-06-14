@@ -427,6 +427,7 @@ class ParserPlugin(Star):
             processed_matches.add(match_key)
 
             try:
+                parser.source_text = text
                 parse_res = await parser.parse(keyword, searched)
                 await self._send_parse_result(event, parse_res)
             except SizeLimitException as e:

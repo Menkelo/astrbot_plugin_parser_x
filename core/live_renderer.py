@@ -17,13 +17,15 @@ class LiveCardRenderer:
         avatar: str | None,
         status_text: str,
         area_text: str | None,
-        online: int | None,
+        online: int | str | None,
         room_label: str = "房间号",
         online_label: str = "人气",
     ):
-        def fmt_num(n: int | None) -> str:
+        def fmt_num(n: int | str | None) -> str:
             if n is None or isinstance(n, bool):
                 return "-"
+            if isinstance(n, str):
+                return n or "-"
             if n >= 10000:
                 return f"{n / 10000:.1f}万"
             return str(n)
@@ -93,7 +95,7 @@ class LiveCardRenderer:
             .uname {{ font-size: 16px; font-weight: 700; }}
             .meta {{ margin-top: 10px; color: #6b7280; font-size: 13px; }}
             .stats {{
-              margin-top: 12px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;
+              margin-top: 12px; display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px;
             }}
             .item {{
               border: 1px solid #edf0f3; border-radius: 10px; padding: 8px 10px; background: #fafbfd;
@@ -117,7 +119,6 @@ class LiveCardRenderer:
               <div class="stats">
                 <div class="item"><div class="k">{esc(room_label)}</div><div class="v">{esc(room_id)}</div></div>
                 <div class="item"><div class="k">{esc(online_label)}</div><div class="v">{fmt_num(online)}</div></div>
-                <div class="item"><div class="k">状态</div><div class="v">{esc(status_text)}</div></div>
               </div>
               <div class="footer">Menkelo/astrbot_plugin_r_parser</div>
             </div>

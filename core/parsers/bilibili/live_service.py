@@ -134,6 +134,19 @@ class BiliLiveService:
 
         return {"room_info": room, "anchor_base": anchor}
 
+    async def _fetch_anchor_info(self, uid: int | str | None, room_id: int):
+        if not uid:
+            return {}
+
+        api = "https://api.live.bilibili.com/live_user/v1/Master/info"
+        raw = await self._get_json(api, {"uid": uid}, room_id, retry=2)
+        if raw.get("code") != 0:
+            return {}
+
+        data = raw.get("data") or {}
+        info = data.get("info") or {}
+        return info if isinstance(info, dict) else {}
+
     async def parse_live(self, room_id: int):
         init_api = "https://api.live.bilibili.com/room/v1/Room/room_init"
         info_api = "https://api.live.bilibili.com/xlive/web-room/v1/index/getInfoByRoom"
@@ -165,17 +178,22 @@ class BiliLiveService:
                 room_info = html_data.get("room_info") or {}
                 anchor_base = html_data.get("anchor_base") or {}
 
+        uid = anchor_base.get("uid") or room_info.get("uid")
+        anchor_fallback = {}
+        if uid and (not anchor_base.get("face") or not anchor_base.get("uname")):
+            anchor_fallback = await self._fetch_anchor_info(uid, real_room_id)
+
         title = room_info.get("title") or f"B站直播间 {real_room_id}"
-        uname = anchor_base.get("uname") or "B站主播"
-        cover = room_info.get("cover") or room_info.get("keyframe")
-        avatar = anchor_base.get("face")
+        uname = anchor_base.get("uname") or anchor_fallback.get("uname") or "B站主播"
+        cover = room_info.get("cover") or room_info.get("user_cover") or room_info.get("keyframe")
+        avatar = anchor_base.get("face") or anchor_fallback.get("face")
         online = room_info.get("online")
         parent_area = room_info.get("parent_area_name") or ""
         area = room_info.get("area_name") or ""
         area_text = f"{parent_area} / {area}".strip(" /")
 
         digest = hashlib.md5(
-            f"{real_room_id}|{title}|{uname}|{live_status}|{online}|live_service_v2".encode()
+            f"{real_room_id}|{title}|{uname}|{avatar}|{live_status}|{online}|live_service_v3".encode()
         ).hexdigest()[:10]
         out_path = Path(self.parser.cache_dir) / f"bili_live_{real_room_id}_{digest}.png"
 

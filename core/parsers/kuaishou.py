@@ -1,5 +1,6 @@
 import re
 import asyncio
+from html import unescape
 from random import choice
 from typing import ClassVar, TypeAlias
 
@@ -11,6 +12,7 @@ from astrbot.core.config.astrbot_config import AstrBotConfig
 
 from ..data import Platform, VideoContent
 from ..download import Downloader
+from ..utils import normalize_image_url
 from .base import BaseParser, ParseException, handle
 
 
@@ -23,6 +25,139 @@ class KuaiShouParser(BaseParser):
             "Referer": "https://v.kuaishou.com/",
             "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.0.3 Mobile/15E148 Safari/604.1"
         })
+
+    @staticmethod
+    def _is_live_url(url: str | None) -> bool:
+        u = (url or "").lower()
+        return any(
+            key in u
+            for key in (
+                "live.kuaishou.com",
+                "/live/",
+                "/fw/live/",
+                "livestream",
+            )
+        )
+
+    def _source_mentions_live(self) -> bool:
+        text = self.source_text or ""
+        return any(
+            key in text
+            for key in (
+                "正在直播",
+                "直接观看直播",
+                "观看直播",
+                "直播很精彩",
+            )
+        )
+
+    def _extract_live_name_from_source(self) -> str | None:
+        text = self.source_text or ""
+        for pattern in (
+            r"【([^】]{1,30})】正在直播",
+            r"([^\s，,。！!【】#]{1,30})正在直播",
+            r"([^\s，,。！!【】#]{1,30})的直播",
+        ):
+            if matched := re.search(pattern, text):
+                name = matched.group(1).strip()
+                if name and "快手" not in name:
+                    return name
+        return None
+
+    @staticmethod
+    def _clean_html_text(value: str | None) -> str | None:
+        if not value:
+            return None
+        text = re.sub(r"<[^>]+>", "", value)
+        text = unescape(text).strip()
+        return text or None
+
+    @classmethod
+    def _clean_live_url(cls, value: str | None) -> str | None:
+        text = cls._clean_html_text(value)
+        if not text:
+            return None
+        text = text.strip("'\"")
+        if text.startswith("//"):
+            text = "https:" + text
+        return normalize_image_url(text)
+
+    @classmethod
+    def _extract_meta_content(cls, html: str, key: str) -> str | None:
+        for tag in re.findall(r"<meta\b[^>]*>", html, flags=re.IGNORECASE | re.DOTALL):
+            if key not in tag:
+                continue
+            matched = re.search(
+                r"\bcontent=([\"'])(.*?)\1",
+                tag,
+                flags=re.IGNORECASE | re.DOTALL,
+            )
+            if matched:
+                return cls._clean_html_text(matched.group(2))
+        return None
+
+    @staticmethod
+    def _extract_live_room_id(url: str) -> str:
+        path = re.sub(r"^https?://", "", url, flags=re.IGNORECASE).split("?", 1)[0]
+        parts = [p for p in path.split("/") if p]
+        if parts:
+            return parts[-1]
+        return "-"
+
+    @handle("live.kuaishou.com", r"(?:https?://)?live\.kuaishou\.com/[A-Za-z\d._?%&+\-=/#]+")
+    async def _parse_live_kuaishou(self, searched: re.Match[str]):
+        raw = searched.group(0)
+        url = raw if raw.startswith(("http://", "https://")) else f"https://{raw}"
+        return await self._parse_live_card(url)
+
+    async def _parse_live_card(self, url: str, final_url: str | None = None):
+        target_url = final_url or url
+        html = ""
+
+        if target_url and not re.search(r"^https?://(?:www\.)?kuaishou\.com/?$", target_url):
+            try:
+                resp = await self.http_get(
+                    target_url,
+                    headers=self.ios_headers,
+                    allow_redirects=True,
+                    timeout=8,
+                )
+                html = resp.text or ""
+                target_url = str(getattr(resp, "url", "") or target_url)
+            except Exception as e:
+                logger.debug(f"[快手-live] 页面获取失败，使用分享文案兜底: {e}")
+
+        source_name = self._extract_live_name_from_source()
+        meta_title = self._extract_meta_content(html, "og:title")
+        if meta_title and "快手，拥抱每一种生活" in meta_title:
+            meta_title = None
+
+        streamer_name = source_name or "快手主播"
+        title = meta_title or (f"{streamer_name}的直播" if source_name else "快手直播")
+        cover = self._clean_live_url(
+            self._extract_meta_content(html, "og:image")
+            or self._extract_meta_content(html, "image")
+        )
+
+        status_text = "直播中" if self._source_mentions_live() else "直播"
+        room_id = self._extract_live_room_id(target_url)
+        if room_id in {"kuaishou.com", "www.kuaishou.com"}:
+            room_id = self._extract_live_room_id(url)
+
+        return await self.create_live_card_result(
+            platform_name="Kuaishou",
+            title=title,
+            streamer_name=streamer_name,
+            room_id=room_id,
+            cover=cover,
+            avatar=None,
+            status_text=status_text,
+            area_text="直播",
+            online=None,
+            online_label="观看",
+            cache_key=target_url or url,
+            url=target_url or url,
+        )
 
     @handle("v.kuaishou", r"v\.kuaishou\.com/[A-Za-z\d._?%&+\-=/#]+")
     @handle("kuaishou", r"(?:www\.)?kuaishou\.com/[A-Za-z\d._?%&+\-=/#]+")
@@ -55,6 +190,9 @@ class KuaiShouParser(BaseParser):
 
         if not real_url:
             raise ParseException(f"获取重定向失败: {last_err}")
+
+        if self._is_live_url(real_url) or self._source_mentions_live():
+            return await self._parse_live_card(url, real_url)
 
         real_url = real_url.replace("/fw/long-video/", "/fw/photo/")
         logger.debug(f"[快手] 目标页面: {real_url}")
