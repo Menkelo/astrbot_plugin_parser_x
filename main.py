@@ -141,12 +141,13 @@ class ParserPlugin(Star):
 
     def _format_text_fallback(self, result: ParseResult) -> str:
         parts = []
-        if result.header:
-            parts.append(result.header)
+        header = result.platform.display_name
+        if result.author:
+            header += f" @{result.author.name}"
+        if header:
+            parts.append(header)
         if result.text and result.text.strip():
             parts.append(result.text.strip())
-        if result.url:
-            parts.append(result.url)
         return "\n\n".join(parts).replace("@", "@\u200b")
 
     async def _ensure_text_only_content(self, result: ParseResult) -> bool:
@@ -158,6 +159,9 @@ class ParserPlugin(Star):
             return False
 
         author_name = result.author.name if result.author else None
+        author_avatar = result.extra.get("text_card_avatar")
+        if not isinstance(author_avatar, str) or not author_avatar.strip():
+            author_avatar = None
         platform_name = result.platform.display_name or result.platform.name
         title = (result.title or "").strip() or None
         timestamp_text = result.formatted_datetime
@@ -167,11 +171,12 @@ class ParserPlugin(Star):
                 [
                     result.platform.name,
                     author_name or "",
+                    author_avatar or "",
                     title or "",
                     timestamp_text or "",
                     result.url or "",
                     text,
-                    "text_card_v1",
+                    "text_card_v2",
                 ]
             ).encode("utf-8")
         ).hexdigest()[:12]
@@ -188,10 +193,9 @@ class ParserPlugin(Star):
                 out_path=out_path,
                 platform_name=platform_name,
                 author_name=author_name,
-                title=title,
+                author_avatar=author_avatar,
                 text=text,
                 timestamp_text=timestamp_text,
-                url=result.url,
             )
 
         result.contents = [ImageContent(out_path)]

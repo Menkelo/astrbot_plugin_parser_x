@@ -117,6 +117,7 @@ class WeiboParser(BaseParser):
             contents=contents,
             timestamp=timestamp,
             url=original_url,
+            extra={"text_card_avatar": author_avatar},
         )
 
     async def _parse_with_ytdlp(self, url: str):

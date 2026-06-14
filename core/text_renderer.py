@@ -11,19 +11,21 @@ class TextCardRenderer:
         *,
         platform_name: str,
         author_name: str | None,
-        title: str | None,
         text: str,
+        author_avatar: str | None = None,
         timestamp_text: str | None = None,
-        url: str | None = None,
     ):
+        avatar_html = (
+            f'<img class="avatar" src="{escape(author_avatar)}" alt="">'
+            if author_avatar
+            else '<div class="avatar avatar-ph"></div>'
+        )
         author_html = (
             f'<div class="author">{escape(author_name)}</div>' if author_name else ""
         )
-        title_html = f'<div class="title">{escape(title)}</div>' if title else ""
         time_html = (
             f'<div class="time">{escape(timestamp_text)}</div>' if timestamp_text else ""
         )
-        url_html = f'<div class="url">{escape(url)}</div>' if url else ""
 
         html = f"""
         <!doctype html>
@@ -63,7 +65,7 @@ class TextCardRenderer:
 
             .meta {{
               display: flex;
-              align-items: flex-start;
+              align-items: center;
               justify-content: space-between;
               gap: 16px;
             }}
@@ -74,8 +76,8 @@ class TextCardRenderer:
               min-height: 24px;
               padding: 3px 9px;
               border-radius: 999px;
-              background: #eef5ff;
-              color: #2b65b1;
+              background: #edf8ff;
+              color: #6aa9e9;
               font-size: 13px;
               font-weight: 750;
               line-height: 1.2;
@@ -90,8 +92,29 @@ class TextCardRenderer:
               word-break: break-word;
             }}
 
-            .author {{
+            .profile {{
               margin-top: 16px;
+              display: flex;
+              align-items: center;
+              gap: 14px;
+            }}
+
+            .avatar {{
+              width: 54px;
+              height: 54px;
+              border-radius: 50%;
+              object-fit: cover;
+              background: #eef3f7;
+              border: 1px solid #e7edf3;
+              flex-shrink: 0;
+              display: block;
+            }}
+
+            .avatar-ph {{
+              background: linear-gradient(135deg, #eef5fb, #e4edf6);
+            }}
+
+            .author {{
               color: #20242c;
               font-size: 21px;
               font-weight: 850;
@@ -141,12 +164,23 @@ class TextCardRenderer:
               <div class="platform">{escape(platform_name)}</div>
               {time_html}
             </div>
-            {author_html}
-            {title_html}
+            <div class="profile">
+              {avatar_html}
+              {author_html}
+            </div>
             <div class="text">{escape(text)}</div>
-            {url_html}
             <div class="footer">Menkelo/astrbot_plugin_r_parser</div>
           </div>
+
+          <script>
+            for (const img of document.querySelectorAll("img")) {{
+              img.addEventListener("error", () => {{
+                img.replaceWith(Object.assign(document.createElement("div"), {{
+                  className: "avatar avatar-ph"
+                }}));
+              }});
+            }}
+          </script>
         </body>
         </html>
         """
