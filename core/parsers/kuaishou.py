@@ -11,7 +11,7 @@ from astrbot.core.config.astrbot_config import AstrBotConfig
 
 from ..data import Platform, VideoContent
 from ..download import Downloader
-from .base import BaseParser, ParseException, handle
+from .base import BaseParser, ParseException, SkipParseException, handle
 
 
 class KuaiShouParser(BaseParser):
@@ -24,11 +24,48 @@ class KuaiShouParser(BaseParser):
             "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.0.3 Mobile/15E148 Safari/604.1"
         })
 
+    @staticmethod
+    def _is_live_url(url: str | None) -> bool:
+        u = (url or "").lower()
+        return any(
+            key in u
+            for key in (
+                "live.kuaishou.com",
+                "/live/",
+                "/fw/live/",
+                "livestream",
+            )
+        )
+
+    def _source_mentions_live(self) -> bool:
+        text = self.source_text or ""
+        low = text.lower()
+        return any(
+            key in text
+            for key in (
+                "正在直播",
+                "直接观看直播",
+                "观看直播",
+                "直播很精彩",
+                "来看直播",
+            )
+        ) or any(
+            key in low
+            for key in (
+                "live.kuaishou.com",
+                "/live/",
+                "livestream",
+            )
+        )
+
     @handle("v.kuaishou", r"v\.kuaishou\.com/[A-Za-z\d._?%&+\-=/#]+")
     @handle("kuaishou", r"(?:www\.)?kuaishou\.com/[A-Za-z\d._?%&+\-=/#]+")
     @handle("chenzhongtech", r"(?:v\.m\.)?chenzhongtech\.com/fw/[A-Za-z\d._?%&+\-=/#]+")
     async def _parse_v_kuaishou(self, searched: re.Match[str]):
         url = f"https://{searched.group(0)}"
+
+        if self._is_live_url(url) or self._source_mentions_live():
+            raise SkipParseException()
         
         real_url = None
         last_err = None
@@ -55,6 +92,9 @@ class KuaiShouParser(BaseParser):
 
         if not real_url:
             raise ParseException(f"获取重定向失败: {last_err}")
+
+        if self._is_live_url(real_url):
+            raise SkipParseException()
 
         real_url = real_url.replace("/fw/long-video/", "/fw/photo/")
         logger.debug(f"[快手] 目标页面: {real_url}")

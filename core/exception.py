@@ -12,6 +12,13 @@ class TipException(ParseException):
     pass
 
 
+class SkipParseException(ParseException):
+    """内部静默跳过，不向聊天窗口发送失败提示。"""
+
+    def __init__(self, message: str | None = None):
+        super().__init__(message or "skip parse")
+
+
 class DownloadException(ParseException):
     """下载异常"""
 

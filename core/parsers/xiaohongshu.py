@@ -10,7 +10,7 @@ from astrbot.api import logger
 from astrbot.core.config.astrbot_config import AstrBotConfig
 
 from ..download import Downloader
-from .base import BaseParser, ParseException, Platform, handle
+from .base import BaseParser, ParseException, Platform, SkipParseException, handle
 
 
 class XiaoHongShuParser(BaseParser):
@@ -101,6 +101,30 @@ class XiaoHongShuParser(BaseParser):
         return out
 
     @staticmethod
+    def _is_live_url(url: str | None) -> bool:
+        u = (url or "").lower()
+        return "xiaohongshu.com/livestream" in u or "/livestream/" in u
+
+    def _source_mentions_live(self) -> bool:
+        text = self.source_text or ""
+        low = text.lower()
+        return any(
+            key in text
+            for key in (
+                "正在直播",
+                "直接观看直播",
+                "观看直播",
+                "来看直播",
+            )
+        ) or any(
+            key in low
+            for key in (
+                "xiaohongshu.com/livestream",
+                "/livestream/",
+            )
+        )
+
+    @staticmethod
     def _unwrap_sec_redirect(url: str) -> str:
         """
         小红书安全中转页：
@@ -188,12 +212,18 @@ class XiaoHongShuParser(BaseParser):
     async def _parse_short_link(self, searched: re.Match[str]):
         url = f"https://{searched.group(0)}"
 
+        if self._source_mentions_live():
+            raise SkipParseException()
+
         final_url = self._cache_get_redirect(url)
         if not final_url:
             final_url = await self.get_final_url(url, headers=self.ios_headers)
             # 解包 /404/sec 安全中转页，取出 originalUrl 真实笔记地址（保留 xsec_token）
             final_url = self._unwrap_sec_redirect(final_url)
             self._cache_set_redirect(url, final_url)
+
+        if self._is_live_url(final_url):
+            raise SkipParseException()
 
         if final_url == url:
             raise ParseException(f"小红书短链跳转失败: {url}")

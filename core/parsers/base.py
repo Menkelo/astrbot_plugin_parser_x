@@ -30,7 +30,7 @@ from ..data import (
     VideoContent,
 )
 from ..download import Downloader
-from ..exception import ParseException
+from ..exception import ParseException, SkipParseException
 from ..utils import maybe_close_session
 
 T = TypeVar("T", bound="BaseParser")

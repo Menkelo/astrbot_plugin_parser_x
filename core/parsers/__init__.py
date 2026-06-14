@@ -1,4 +1,4 @@
-from .base import BaseParser, ParseException, handle
+from .base import BaseParser, ParseException, SkipParseException, handle
 from .bilibili import BilibiliParser
 from .douyin import DouyinParser
 from .kuaishou import KuaiShouParser
@@ -10,6 +10,7 @@ __all__ = [
     "BaseParser",
     "Downloader",
     "ParseException",
+    "SkipParseException",
     "handle",
     "BilibiliParser",
     "DouyinParser",

@@ -1,17 +1,12 @@
-import hashlib
 import re
-from html import unescape
 from typing import TYPE_CHECKING, ClassVar
 
 import msgspec
 from astrbot.api import logger
 from astrbot.core.config.astrbot_config import AstrBotConfig
 
-from ...data import ImageContent
 from ...download import Downloader
-from ...live_renderer import LiveCardRenderer
-from ...utils import image_to_data_uri, normalize_image_url
-from ..base import BaseParser, ParseException, Platform, handle
+from ..base import BaseParser, ParseException, Platform, SkipParseException, handle
 from .extractor import (
     extract_id_from_query,
     extract_router_data_json_str,
@@ -64,280 +59,6 @@ class DouyinParser(BaseParser):
             "enterfrom=live",
         ]
         return any(k in u for k in live_keys)
-
-    @staticmethod
-    def _clean_html_text(value: str | None) -> str | None:
-        if not value:
-            return None
-        text = re.sub(r"<[^>]+>", "", value)
-        text = unescape(text).strip()
-        return text or None
-
-    @classmethod
-    def _clean_live_url(cls, value: str | None) -> str | None:
-        text = cls._clean_html_text(value)
-        if not text:
-            return None
-        text = text.strip("'\"")
-        if text.startswith("//"):
-            text = "https:" + text
-        return normalize_image_url(text)
-
-    @staticmethod
-    def _extract_input_value(html: str, name: str) -> str | None:
-        for matched in re.finditer(r"<input\b[^>]*>", html, flags=re.IGNORECASE | re.DOTALL):
-            tag = matched.group(0)
-            name_attr = re.search(
-                r"\bname=([\"'])(.*?)\1",
-                tag,
-                flags=re.IGNORECASE | re.DOTALL,
-            )
-            if not name_attr or name_attr.group(2) != name:
-                continue
-            value_attr = re.search(
-                r"\bvalue=([\"'])(.*?)\1",
-                tag,
-                flags=re.IGNORECASE | re.DOTALL,
-            )
-            if value_attr:
-                return unescape(value_attr.group(2)).strip()
-        return None
-
-    @classmethod
-    def _extract_text(cls, html: str, pattern: str) -> str | None:
-        matched = re.search(pattern, html, flags=re.IGNORECASE | re.DOTALL)
-        if not matched:
-            return None
-        return cls._clean_html_text(matched.group(1))
-
-    @staticmethod
-    def _normalize_live_html(html: str) -> str:
-        return (
-            html.replace("\\u002F", "/")
-            .replace("\\/", "/")
-            .replace("\\u0026", "&")
-            .replace("\\u003D", "=")
-            .replace("\\u003F", "?")
-            .replace("&amp;", "&")
-        )
-
-    @classmethod
-    def _extract_json_text(cls, html: str, *keys: str) -> str | None:
-        normalized = cls._normalize_live_html(html)
-        for key in keys:
-            matched = re.search(
-                rf'"{re.escape(key)}"\s*:\s*"([^"]+)"',
-                normalized,
-                flags=re.IGNORECASE,
-            )
-            if matched:
-                return cls._clean_html_text(matched.group(1))
-        return None
-
-    @classmethod
-    def _extract_live_image_urls(cls, html: str) -> list[str]:
-        normalized = cls._normalize_live_html(html)
-        urls: list[str] = []
-        seen: set[str] = set()
-
-        for matched in re.finditer(r'https?://[^"\'<>\s\\]+', normalized):
-            url = cls._clean_live_url(matched.group(0))
-            if not url:
-                continue
-
-            low = url.lower()
-            if "douyinpic.com" not in low and "bytednsdoc.com" not in low:
-                continue
-            if any(skip in low for skip in ("logo", "launcher", "button_call", "medal", "grade_level")):
-                continue
-            if url not in seen:
-                seen.add(url)
-                urls.append(url)
-
-        return urls
-
-    @staticmethod
-    def _pick_live_cover_url(urls: list[str]) -> str | None:
-        def score(url: str) -> int:
-            low = url.lower()
-            value = 0
-            if "webcast_cover" in low:
-                value += 100
-            if "room.pack" in low or "reflow_room_info" in low:
-                value += 60
-            if "cover" in low:
-                value += 40
-            if "tplv-resize:0:0.image" in low:
-                value += 30
-            if "100x100" in low or "/avatar/" in low:
-                value -= 60
-            return value
-
-        ranked = [(score(url), url) for url in urls]
-        ranked = [item for item in ranked if item[0] > 0]
-        ranked.sort(reverse=True)
-        return ranked[0][1] if ranked else None
-
-    @staticmethod
-    def _pick_live_avatar_url(urls: list[str]) -> str | None:
-        def score(url: str) -> int:
-            low = url.lower()
-            value = 0
-            if "aweme-avatar" in low or "/avatar/" in low:
-                value += 80
-            if "100x100" in low:
-                value += 40
-            if "webcast_cover" in low or "room.pack" in low:
-                value -= 100
-            return value
-
-        ranked = [(score(url), url) for url in urls]
-        ranked = [item for item in ranked if item[0] > 0]
-        ranked.sort(reverse=True)
-        return ranked[0][1] if ranked else None
-
-    async def _live_image_to_data_uri(self, url: str | None) -> str | None:
-        return await image_to_data_uri(
-            self.http_get,
-            url,
-            headers=self.ios_headers,
-            referer="https://www.douyin.com/",
-            max_bytes=4 * 1024 * 1024,
-            timeout=8,
-            debug_label="[Douyin-live] image",
-        )
-
-    def _extract_live_name_from_source(self) -> str | None:
-        text = self.source_text or ""
-        for pattern in (
-            r"【([^】]{1,30})】正在直播",
-            r"([^\s，,。！!【】#]{1,30})正在直播",
-            r"([^\s，,。！!【】#]{1,30})的直播",
-        ):
-            if matched := re.search(pattern, text):
-                name = matched.group(1).strip()
-                if name and "抖音" not in name:
-                    return name
-        return None
-
-    async def _parse_live_url(self, url: str):
-        html = ""
-        final_url = url
-
-        try:
-            resp = await self.http_get(
-                url,
-                headers=self.ios_headers,
-                allow_redirects=True,
-                timeout=10,
-            )
-            html = resp.text or ""
-            final_url = str(getattr(resp, "url", "") or url)
-        except Exception as e:
-            logger.debug(f"[Douyin-live] 页面获取失败，使用分享文案兜底: {e}")
-
-        normalized_html = self._normalize_live_html(html)
-        image_urls = self._extract_live_image_urls(html)
-        source_name = self._extract_live_name_from_source()
-        share_title = self._extract_input_value(html, "shareTitle")
-        title = share_title or (f"{source_name}的直播" if source_name else "抖音直播")
-        streamer_name = (
-            self._extract_text(normalized_html, r'<h2[^>]*class="[^"]*anchor-name[^"]*"[^>]*>(.*?)</h2>')
-            or self._extract_json_text(html, "nickname", "webcastNick")
-            or (share_title[:-3] if share_title and share_title.endswith("的直播") else None)
-            or source_name
-            or "抖音主播"
-        )
-
-        cover = self._clean_live_url(self._extract_input_value(html, "shareImage"))
-        if not cover:
-            cover = self._clean_live_url(
-                self._extract_text(
-                    normalized_html,
-                    r'<div[^>]*class="[^"]*cover[^"]*"[^>]*>\s*<img[^>]*src="([^"]+)"',
-                )
-            )
-        if not cover:
-            cover = self._clean_live_url(
-                self._extract_text(normalized_html, r"background-image:url\(([^)]+)\)")
-            )
-        if not cover:
-            cover = self._pick_live_cover_url(image_urls)
-
-        avatar = self._clean_live_url(
-            self._extract_text(
-                normalized_html,
-                r'<div[^>]*class="[^"]*avatar[^"]*"[^>]*>\s*<img[^>]*src="([^"]+)"',
-            )
-        )
-        if not avatar:
-            avatar = self._pick_live_avatar_url(image_urls)
-
-        cover_data_uri = await self._live_image_to_data_uri(cover)
-        avatar_data_uri = await self._live_image_to_data_uri(avatar)
-
-        reason = self._extract_text(normalized_html, r'<div[^>]*class="[^"]*reason[^"]*"[^>]*>(.*?)</div>')
-        if reason and "结束" in reason:
-            status_text = "已结束"
-        elif "正在直播" in (self.source_text or "") or "直播中" in html:
-            status_text = "直播中"
-        else:
-            status_text = reason or "直播"
-
-        return await self._render_live_card_result(
-            title=title,
-            streamer_name=streamer_name,
-            cover=cover_data_uri or cover,
-            avatar=avatar_data_uri or avatar,
-            status_text=status_text,
-            cache_key=final_url,
-            url=final_url,
-        )
-
-    async def _render_live_card_result(
-        self,
-        *,
-        title: str,
-        streamer_name: str,
-        cover: str | None,
-        avatar: str | None,
-        status_text: str,
-        cache_key: str,
-        url: str,
-    ):
-        digest = hashlib.md5(
-            "\n".join(
-                [
-                    cache_key,
-                    title,
-                    streamer_name,
-                    cover or "",
-                    avatar or "",
-                    status_text,
-                    "douyin_live_card_v2",
-                ]
-            ).encode("utf-8")
-        ).hexdigest()[:12]
-        out_path = self.cache_dir / f"douyin_live_{digest}.png"
-
-        if not out_path.exists():
-            await LiveCardRenderer().render_live_card(
-                out_path=out_path,
-                platform_name="Douyin",
-                title=title,
-                streamer_name=streamer_name,
-                cover=cover,
-                avatar=avatar,
-                status_text=status_text,
-                area_text=None,
-            )
-
-        return self.result(
-            title=title,
-            contents=[ImageContent(out_path)],
-            url=url,
-            extra={"force_direct_media": True},
-        )
 
     def _create_image_contents_with_headers(self, urls: list[str], headers: dict[str, str]):
         """
@@ -401,16 +122,6 @@ class DouyinParser(BaseParser):
             )
         )
 
-    # 直播链接走通用直播卡，不下载直播流。
-    @handle("live.douyin.com", r"(?:https?://)?live\.douyin\.com/[A-Za-z0-9_/?.=&%-]+")
-    @handle("douyin.com/live", r"(?:https?://)?(?:www\.)?douyin\.com/live/[A-Za-z0-9_/?.=&%-]+")
-    @handle("webcast.douyin.com", r"(?:https?://)?webcast\.douyin\.com/[A-Za-z0-9_/?.=&%-]+")
-    @handle("webcast.amemv.com", r"(?:https?://)?webcast\.amemv\.com/[A-Za-z0-9_/?.=&%-]+")
-    async def _parse_live_link(self, searched: re.Match[str]):
-        raw = searched.group(0)
-        url = raw if raw.startswith(("http://", "https://")) else f"https://{raw}"
-        return await self._parse_live_url(url)
-
     @handle("v.douyin", r"v\.douyin\.com/[a-zA-Z0-9_\-]+")
     @handle("jx.douyin", r"jx\.douyin\.com/[a-zA-Z0-9_\-]+")
     async def _parse_short_link(self, searched: re.Match[str]):
@@ -418,7 +129,7 @@ class DouyinParser(BaseParser):
         final_url = await self.get_final_url(short_url, headers=self.ios_headers)
 
         if self._is_live_url(final_url):
-            return await self._parse_live_url(final_url)
+            raise SkipParseException()
 
         try:
             keyword, m = self.search_url(final_url)
@@ -499,7 +210,7 @@ class DouyinParser(BaseParser):
 
     async def parse_video(self, url: str, vid: str):
         if self._is_live_url(url):
-            return await self._parse_live_url(url)
+            raise SkipParseException()
 
         resp = await self.http_get(
             url,
@@ -513,7 +224,7 @@ class DouyinParser(BaseParser):
 
         final_resp_url = str(getattr(resp, "url", "") or "")
         if self._is_live_url(final_resp_url):
-            return await self._parse_live_url(final_resp_url)
+            raise SkipParseException()
 
         from .video import VideoData, recursive_collect_videos
 

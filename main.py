@@ -44,6 +44,7 @@ from .core.exception import (
     DownloadException,
     DownloadLimitException,
     ParseException,
+    SkipParseException,
     SizeLimitException,
     ZeroSizeException,
 )
@@ -363,6 +364,56 @@ class ParserPlugin(Star):
 
     # region 事件监听
 
+    @staticmethod
+    def _looks_like_live_share(text: str) -> bool:
+        low = (text or "").lower()
+        return any(
+            key in text
+            for key in (
+                "正在直播",
+                "直接观看直播",
+                "观看直播",
+                "直播很精彩",
+                "来看直播",
+            )
+        ) or any(
+            key in low
+            for key in (
+                "livestream",
+                "live.kuaishou.com",
+                "live.douyin.com",
+                "webcast.douyin",
+                "/live/",
+            )
+        )
+
+    def _should_ignore_live_share(
+        self,
+        keyword: str,
+        raw_match: str,
+        text: str,
+    ) -> bool:
+        low_url = (raw_match or "").lower()
+        low_text = (text or "").lower()
+
+        if keyword in {"v.kuaishou", "kuaishou", "chenzhongtech"}:
+            return (
+                "live.kuaishou.com" in low_url
+                or "/live/" in low_url
+                or self._looks_like_live_share(text)
+            )
+
+        if keyword == "xhslink.com":
+            return (
+                "livestream" in low_text
+                or ("小红书" in text and self._looks_like_live_share(text))
+            )
+
+        if keyword in {"v.douyin", "jx.douyin"}:
+            return self._looks_like_live_share(text)
+
+        return False
+
     @filter.event_message_type(filter.EventMessageType.ALL)
     async def on_message(self, event: AstrMessageEvent):
         umo = event.unified_msg_origin
@@ -401,6 +452,12 @@ class ParserPlugin(Star):
             for m in pat.finditer(text):
                 matches.append((m.start(), kw, m))
 
+        matches = [
+            (start, kw, m)
+            for start, kw, m in matches
+            if not self._should_ignore_live_share(kw, m.group(0), text)
+        ]
+
         if not matches:
             return
 
@@ -430,6 +487,8 @@ class ParserPlugin(Star):
                 parser.source_text = text
                 parse_res = await parser.parse(keyword, searched)
                 await self._send_parse_result(event, parse_res)
+            except SkipParseException:
+                continue
             except SizeLimitException as e:
                 await event.send(event.plain_result(f"⚠️ {e}"))
             except ParseException as e:
