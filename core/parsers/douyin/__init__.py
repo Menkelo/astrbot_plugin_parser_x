@@ -21,6 +21,7 @@ if TYPE_CHECKING:
 
 class DouyinParser(BaseParser):
     platform: ClassVar[Platform] = Platform(name="douyin", display_name="抖音")
+    DAILY_UNSUPPORTED_TEXT: ClassVar[str] = "无法识别抖音限时日常内容"
 
     def __init__(self, config: AstrBotConfig, downloader: Downloader):
         super().__init__(config, downloader)
@@ -144,6 +145,51 @@ class DouyinParser(BaseParser):
         images = aweme.get("images")
         return isinstance(images, list) and len(images) > 0
 
+    @classmethod
+    def _unsupported_daily_result(cls) -> "ParseResult":
+        return cls.result(
+            text=cls.DAILY_UNSUPPORTED_TEXT,
+            extra={"plain_text_only": True},
+        )
+
+    @staticmethod
+    def _looks_like_daily_share_url(text: str | None) -> bool:
+        if not text:
+            return False
+
+        candidates = re.findall(r"https?://[^\s\"'<>]+", text)
+        if not candidates:
+            candidates = [text]
+
+        for candidate in candidates:
+            try:
+                query = parse_qs(urlparse(candidate).query)
+            except Exception:
+                continue
+
+            activity_text = " ".join(query.get("activity_info") or []).lower()
+            extra_text = " ".join(query.get("share_extra_params") or []).lower()
+            compact_extra = re.sub(r"\s+", "", extra_text)
+
+            has_social_activity = any(
+                key in activity_text
+                for key in (
+                    "social_author_id",
+                    "social_share_id",
+                    "social_share_time",
+                    "social_share_user_id",
+                )
+            )
+            has_daily_schema = (
+                '"schema_type":"1"' in compact_extra
+                or "'schema_type':'1'" in compact_extra
+            )
+
+            if has_social_activity and has_daily_schema:
+                return True
+
+        return False
+
     @handle("v.douyin", r"v\.douyin\.com/[a-zA-Z0-9_\-]+")
     @handle("jx.douyin", r"jx\.douyin\.com/[a-zA-Z0-9_\-]+")
     async def _parse_short_link(self, searched: re.Match[str]):
@@ -152,6 +198,8 @@ class DouyinParser(BaseParser):
 
         if self._is_live_url(final_url):
             raise SkipParseException()
+        if self._looks_like_daily_share_url(final_url):
+            return self._unsupported_daily_result()
 
         try:
             keyword, m = self.search_url(final_url)
@@ -193,6 +241,9 @@ class DouyinParser(BaseParser):
     async def _parse_douyin(self, searched: re.Match[str]):
         ty, vid = searched.group("ty"), searched.group("vid")
 
+        if self._looks_like_daily_share_url(self.source_text):
+            return self._unsupported_daily_result()
+
         if ty == "slides":
             return await self.parse_slides(vid)
 
@@ -215,6 +266,9 @@ class DouyinParser(BaseParser):
         return await self._parse_with_ytdlp(vid)
 
     async def _parse_by_id_fallback(self, vid: str):
+        if self._looks_like_daily_share_url(self.source_text):
+            return self._unsupported_daily_result()
+
         last_err: Exception | None = None
 
         for ty in ("video", "note"):
@@ -247,6 +301,8 @@ class DouyinParser(BaseParser):
         final_resp_url = str(getattr(resp, "url", "") or "")
         if self._is_live_url(final_resp_url):
             raise SkipParseException()
+        if self._looks_like_daily_share_url(final_resp_url):
+            return self._unsupported_daily_result()
 
         from .video import VideoData, recursive_collect_videos
 
