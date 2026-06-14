@@ -83,22 +83,14 @@ class WeiboParser(BaseParser):
         
         contents = []
 
-        page_info = data.get("page_info") or {}
-        if isinstance(page_info, dict) and page_info.get("type") == "video":
-            media_info = page_info.get("media_info") or {}
-            if not isinstance(media_info, dict):
-                media_info = {}
-            video_url = self._pick_video_url(page_info)
-            if video_url:
-                duration = media_info.get("duration", 0)
-                
-                video_task = self.downloader.download_video(
-                    video_url, 
-                    video_name=f"weibo_{bid}",
-                    ext_headers=self.headers
-                )
-                # 提纯：不下载封面
-                contents.append(VideoContent(video_task, None, duration=duration))
+        for index, (video_url, duration) in enumerate(self._collect_video_items(data), start=1):
+            video_task = self.downloader.download_video(
+                video_url,
+                video_name=f"weibo_{bid}_{index}.mp4",
+                ext_headers=self.headers,
+            )
+            # 提纯：不下载封面
+            contents.append(VideoContent(video_task, None, duration=duration))
 
         for url in self._collect_static_pic_urls(data):
             img_task = self.downloader.download_img(
@@ -166,6 +158,121 @@ class WeiboParser(BaseParser):
             if isinstance(url, str) and url:
                 return url
         return None
+
+    @classmethod
+    def _collect_video_items(cls, data: dict) -> list[tuple[str, float | int]]:
+        if not isinstance(data, dict):
+            return []
+
+        items: list[tuple[str, float | int, str]] = []
+
+        page_info = data.get("page_info") or {}
+        if isinstance(page_info, dict) and page_info.get("type") == "video":
+            video_url = cls._pick_video_url(page_info)
+            if video_url:
+                media_info = page_info.get("media_info") or {}
+                if not isinstance(media_info, dict):
+                    media_info = {}
+                items.append((video_url, media_info.get("duration", 0), "page_info"))
+
+        pics = data.get("pics")
+        if isinstance(pics, list):
+            for pic in pics:
+                if not isinstance(pic, dict) or not cls._is_video_pic(pic):
+                    continue
+
+                video_url = pic.get("videoSrc") or pic.get("video_src")
+                if isinstance(video_url, str) and video_url:
+                    items.append((video_url, 0, f"pic:{pic.get('pid') or video_url}"))
+
+        # url_objects 和 page_info 往往指向同一个视频；只有前面没拿到视频时才兜底。
+        if not items:
+            for video_obj in cls._iter_url_object_videos(data):
+                video_url = cls._pick_video_url(video_obj)
+                if not video_url:
+                    continue
+                media_info = video_obj.get("media_info") or {}
+                if not isinstance(media_info, dict):
+                    media_info = {}
+                duration = media_info.get("duration", video_obj.get("duration", 0))
+                items.append((video_url, duration, cls._video_key(video_obj, video_url)))
+
+        out: list[tuple[str, float | int]] = []
+        seen: set[str] = set()
+        for video_url, duration, key in items:
+            # 保留 page_info 和 pics 中的不同媒体位；兜底对象再按 key 去重。
+            dedupe_key = (
+                key
+                if key.startswith(("page_info", "pic:"))
+                else cls._normalize_video_url_key(video_url)
+            )
+            if dedupe_key in seen:
+                continue
+            seen.add(dedupe_key)
+            out.append((video_url, duration))
+
+        return out
+
+    @classmethod
+    def _iter_url_object_videos(cls, data: dict):
+        containers = []
+        for key in ("url_objects", "url_struct"):
+            value = data.get(key)
+            if isinstance(value, list):
+                containers.extend(value)
+
+        long_text = data.get("longText")
+        if isinstance(long_text, dict):
+            value = long_text.get("url_objects")
+            if isinstance(value, list):
+                containers.extend(value)
+
+        seen_ids: set[int] = set()
+        for item in containers:
+            if not isinstance(item, dict):
+                continue
+
+            video_obj = cls._extract_video_object(item)
+            if not video_obj:
+                continue
+
+            marker = id(video_obj)
+            if marker in seen_ids:
+                continue
+            seen_ids.add(marker)
+            yield video_obj
+
+    @classmethod
+    def _extract_video_object(cls, item: dict) -> dict | None:
+        if not isinstance(item, dict):
+            return None
+
+        if item.get("type") == "video" or item.get("object_type") == "video":
+            return item
+
+        obj = item.get("object")
+        if isinstance(obj, dict):
+            if obj.get("object_type") == "video":
+                nested = obj.get("object")
+                return nested if isinstance(nested, dict) else obj
+
+            nested = obj.get("object")
+            if isinstance(nested, dict) and nested.get("object_type") == "video":
+                return nested
+
+        return None
+
+    @staticmethod
+    def _video_key(video_obj: dict, video_url: str) -> str:
+        for key in ("object_id", "id", "fid", "mid"):
+            value = video_obj.get(key)
+            if value:
+                return str(value)
+        return WeiboParser._normalize_video_url_key(video_url)
+
+    @staticmethod
+    def _normalize_video_url_key(url: str) -> str:
+        return re.sub(r"^https?://", "", (url or "").split("?", 1)[0], flags=re.IGNORECASE)
 
     @classmethod
     def _collect_static_pic_urls(cls, data: dict) -> list[str]:

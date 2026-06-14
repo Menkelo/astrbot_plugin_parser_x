@@ -21,7 +21,7 @@ if TYPE_CHECKING:
 
 class DouyinParser(BaseParser):
     platform: ClassVar[Platform] = Platform(name="douyin", display_name="抖音")
-    DAILY_UNSUPPORTED_TEXT: ClassVar[str] = "无法识别抖音限时日常内容"
+    DAILY_UNSUPPORTED_TEXT: ClassVar[str] = "无法解析抖音限时日常内容"
 
     def __init__(self, config: AstrBotConfig, downloader: Downloader):
         super().__init__(config, downloader)
