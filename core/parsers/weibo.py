@@ -83,7 +83,6 @@ class WeiboParser(BaseParser):
         
         contents = []
         image_urls: list[str] = []
-        has_video = False
 
         page_info = data.get("page_info", {})
         if page_info and page_info.get("type") == "video":
@@ -104,7 +103,6 @@ class WeiboParser(BaseParser):
                 )
                 # 提纯：不下载封面
                 contents.append(VideoContent(video_task, None, duration=duration))
-                has_video = True
 
         if "pics" in data:
             for pic in data["pics"]:
@@ -120,28 +118,23 @@ class WeiboParser(BaseParser):
         # 移除了评论区抓取逻辑
 
         extra = {}
-        if contents:
-            # 微博图文经常有多张图片，合并转发在部分 OneBot 实现里容易超时。
-            extra["force_direct_media"] = True
-
-        if text:
+        if text and not contents:
             text_card_avatar = await self._img_to_data_uri(author_avatar) or author_avatar
             if text_card_avatar:
                 extra["text_card_avatar"] = text_card_avatar
 
-            if not has_video:
-                try:
-                    text_card = await self._render_text_card(
-                        bid=bid,
-                        author_name=author_name,
-                        author_avatar=text_card_avatar,
-                        text=text,
-                        timestamp=timestamp,
-                        image_urls=image_urls,
-                    )
-                    contents.insert(0, text_card)
-                except Exception as e:
-                    logger.warning(f"[Weibo] 正文卡渲染失败: {e}")
+            try:
+                text_card = await self._render_text_card(
+                    bid=bid,
+                    author_name=author_name,
+                    author_avatar=text_card_avatar,
+                    text=text,
+                    timestamp=timestamp,
+                    image_urls=[],
+                )
+                contents.append(text_card)
+            except Exception as e:
+                logger.warning(f"[Weibo] 正文卡渲染失败: {e}")
 
         author = self.create_author(author_name, author_avatar, ext_headers=self.headers)
         original_url = f"https://weibo.com/{user.get('id')}/{bid}"
