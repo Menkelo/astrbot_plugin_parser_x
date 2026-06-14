@@ -114,6 +114,16 @@ class BilibiliParser(BaseParser):
     async def _parse_short_link(self, searched: Match[str]):
         raw = searched.group(0)
         url = raw if raw.startswith(("http://", "https://")) else f"https://{raw}"
+
+        final_url = await self._resolve_short_link_by_head(url)
+        if final_url:
+            try:
+                keyword, matched = self.search_url(final_url)
+                if keyword not in {"b23.tv", "bili2233"}:
+                    return await self.parse(keyword, matched)
+            except ParseException as e:
+                logger.debug(f"[Bilibili] HEAD短链解析未命中，回退GET重定向: {e}")
+
         return await self.parse_with_redirect(url)
 
     @handle("BV", r"^(?P<bvid>BV[0-9a-zA-Z]{10})(?:\s)?(?P<page_num>\d{1,3})?$")
@@ -184,6 +194,32 @@ class BilibiliParser(BaseParser):
     # endregion
 
     # region 通用工具
+
+    async def _resolve_short_link_by_head(self, url: str) -> str | None:
+        """
+        b23/bili2233 只需要最终落点；优先用 HEAD 跟随跳转，避免拉取页面正文。
+        HEAD 被拒或未拿到可解析 URL 时，调用方会回退到原有 GET 重定向逻辑。
+        """
+        try:
+            resp = await self.client.head(
+                url,
+                headers=self.headers,
+                allow_redirects=True,
+                timeout=8,
+                verify=False,
+            )
+        except Exception as e:
+            logger.debug(f"[Bilibili] HEAD短链解析失败: {url} | {e}")
+            return None
+
+        if getattr(resp, "status_code", 0) >= 400:
+            return None
+
+        final_url = str(getattr(resp, "url", "") or "").strip()
+        if not final_url or final_url == url:
+            return None
+
+        return final_url
 
     @staticmethod
     def norm_bili_img(url: str | None) -> str | None:
