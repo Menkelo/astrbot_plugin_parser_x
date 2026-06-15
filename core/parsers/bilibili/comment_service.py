@@ -181,18 +181,19 @@ class BiliCommentService:
         url = "https://api.bilibili.com/x/v2/reply/main"
         strict_list = []
         relaxed_list = []
+        fallback_list = []
         seen = set()
 
         next_cursor = 0
         is_end = False
 
-        # 为了跳过默认头像后还能补满评论，多翻几页
-        max_pages = 10
+        max_pages = 3
 
         qr_check_counter = [0]
 
         for _ in range(max_pages):
-            if is_end or len(strict_list) >= self.comment_limit:
+            candidate_count = len(strict_list) + len(relaxed_list) + len(fallback_list)
+            if is_end or len(strict_list) >= self.comment_limit or candidate_count >= self.comment_limit:
                 break
 
             params = {
@@ -247,24 +248,25 @@ class BiliCommentService:
 
                     avatar = member.get("avatar", "")
 
-                    # 核心：不显示小电视，不显示纯色块，默认头像评论直接跳过
-                    if self._is_bili_default_avatar(avatar):
-                        continue
-
                     data_obj = {
-                        "avatar": avatar,
+                        "avatar": "" if self._is_bili_default_avatar(avatar) else avatar,
                         "uname": self._neutralize_at_text(member.get("uname", "")),
                         "message": message,
                         "pic": pic_url,
                         "comment_time": self._format_ts(item.get("ctime")),
                     }
 
+                    if self._is_bili_default_avatar(avatar):
+                        fallback_list.append(data_obj)
+                        continue
+
                     if "＠" in message:
                         relaxed_list.append(data_obj)
                     else:
                         strict_list.append(data_obj)
 
-                    if len(strict_list) >= self.comment_limit:
+                    candidate_count = len(strict_list) + len(relaxed_list) + len(fallback_list)
+                    if len(strict_list) >= self.comment_limit or candidate_count >= self.comment_limit:
                         break
 
             except Exception as e:
@@ -274,6 +276,10 @@ class BiliCommentService:
         if len(strict_list) < self.comment_limit:
             need = self.comment_limit - len(strict_list)
             strict_list.extend(relaxed_list[:need])
+
+        if len(strict_list) < self.comment_limit:
+            need = self.comment_limit - len(strict_list)
+            strict_list.extend(fallback_list[:need])
 
         comments_data = strict_list[: self.comment_limit]
         if not comments_data:

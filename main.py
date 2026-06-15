@@ -331,12 +331,21 @@ class ParserPlugin(Star):
                     await event.send(event.chain_result([nodes]))
 
         async def process_comment_content():
-            # 评论区在解析阶段被放到后台任务(避免抓取/二维码识别阻塞主视频)，
-            # 这里与主视频发送并行地等待它完成。
+            # 评论区独立后台生成和发送，不阻塞主视频下载/发送。
             comment_task = result.extra.get("comment_task")
+            comment_task_factory = result.extra.get("comment_task_factory")
+            if comment_task is None and callable(comment_task_factory):
+                comment_task = asyncio.create_task(
+                    comment_task_factory(),
+                    name="r_parser_comment_build",
+                )
             if comment_task is not None:
                 try:
-                    result.comment_contents = await comment_task
+                    timeout = float(result.extra.get("comment_timeout", 90))
+                    result.comment_contents = await asyncio.wait_for(comment_task, timeout=timeout)
+                except asyncio.TimeoutError:
+                    logger.warning("评论区生成超时，已跳过发送")
+                    return
                 except Exception as e:
                     logger.warning(f"评论区生成失败: {e}")
                     return
@@ -364,7 +373,16 @@ class ParserPlugin(Star):
                 nodes.nodes.append(Node(uin=node_uin, name=node_name, content=[seg]))
             await event.send(event.chain_result([nodes]))
 
-        await asyncio.gather(process_main_content(), process_comment_content())
+        if result.extra.get("comment_task") is not None or result.extra.get("comment_task_factory") is not None:
+            async def run_comment_content():
+                try:
+                    await process_comment_content()
+                except Exception as e:
+                    logger.warning(f"评论区后台发送失败: {e}")
+
+            asyncio.create_task(run_comment_content(), name="r_parser_comment_send")
+
+        await process_main_content()
 
     # endregion
 

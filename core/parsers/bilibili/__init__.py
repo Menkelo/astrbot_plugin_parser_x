@@ -656,20 +656,19 @@ class BilibiliParser(BaseParser):
         url += f"?p={page_info.index + 1}" if page_info.index > 0 else ""
 
         # === B站评论区总开关 ===
-        # 开启：在后台异步抓取并渲染评论区，不阻塞主视频解析与发送
+        # 开启：发送阶段独立抓取并渲染评论区，不阻塞主视频解析返回
         # 关闭：直接跳过，减少请求和渲染耗时
-        comment_task: asyncio.Task | None = None
+        comment_task_factory = None
         if self.enable_comment_card:
-            comment_task = asyncio.create_task(
-                self.comment_service.build_comment_image_content(
+            comment_task_factory = (
+                lambda: self.comment_service.build_comment_image_content(
                     video_info.aid,
                     1,
                     video_title=page_info.title,
                     video_cover=self.norm_bili_img(page_info.cover),
                     video_author=video_info.owner.name,
                     video_timestamp=self.norm_bili_ts(page_info.timestamp),
-                ),
-                name=f"bili_comments_{video_info.aid}",
+                )
             )
 
         stream_task = self._get_stream_ladders_with_qn_fallback(
@@ -780,7 +779,7 @@ class BilibiliParser(BaseParser):
             text=text,
             author=author,
             contents=[video_content],
-            extra={"comment_task": comment_task} if comment_task else {},
+            extra={"comment_task_factory": comment_task_factory} if comment_task_factory else {},
         )
 
     async def parse_dynamic(self, dynamic_id: int):
