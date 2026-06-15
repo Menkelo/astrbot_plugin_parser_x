@@ -130,15 +130,28 @@ class Downloader:
 
         limit = max_size_mb if max_size_mb is not None else self.default_max_size
 
+        import time as _t
+        _start = _t.monotonic()
+        _wait_start = _t.monotonic()
         async with self.sem:
+            _queued = _t.monotonic() - _wait_start
             if "douyinpic.com" in url:
-                return await self._download_douyin_image(url, file_path, file_name, limit)
+                result = await self._download_douyin_image(url, file_path, file_name, limit)
+            else:
+                headers = self.headers.copy()
+                if ext_headers:
+                    headers.update(ext_headers)
+                result = await self._download_generic(url, file_path, file_name, headers, limit)
 
-            headers = self.headers.copy()
-            if ext_headers:
-                headers.update(ext_headers)
-
-            return await self._download_generic(url, file_path, file_name, headers, limit)
+        try:
+            size_mb = result.stat().st_size / 1024 / 1024
+        except Exception:
+            size_mb = -1
+        logger.info(
+            f"[下载][计时] {file_name} 大小 {size_mb:.2f}MB "
+            f"耗时 {_t.monotonic() - _start:.2f}s (排队 {_queued:.2f}s)"
+        )
+        return result
 
     async def _download_douyin_image(
         self,
