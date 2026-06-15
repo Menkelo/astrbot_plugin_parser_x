@@ -1,4 +1,5 @@
 import re
+import time
 from typing import TYPE_CHECKING, ClassVar
 from urllib.parse import parse_qs, urlparse
 
@@ -210,7 +211,7 @@ class DouyinParser(BaseParser):
                 url,
                 headers=self.ios_headers,
                 allow_redirects=True,
-                timeout=8,
+                timeout=5,
                 verify=False,
             )
         except Exception as e:
@@ -230,8 +231,11 @@ class DouyinParser(BaseParser):
     @handle("jx.douyin", r"jx\.douyin\.com/[a-zA-Z0-9_\-]+")
     async def _parse_short_link(self, searched: re.Match[str]):
         short_url = f"https://{searched.group(0)}"
+        t0 = time.monotonic()
+
         # HEAD 优先（不下载正文），失败再退回完整 GET 跟随重定向。
         final_url = await self._resolve_final_url_by_head(short_url)
+        used = "HEAD"
         if not final_url:
             final_url = await self.get_final_url(
                 short_url,
@@ -239,6 +243,8 @@ class DouyinParser(BaseParser):
                 timeout=8,
                 retries=1,
             )
+            used = "HEAD-fail+GET"
+        logger.info(f"[Douyin][计时] 短链解析({used}) 耗时 {time.monotonic() - t0:.2f}s -> {final_url}")
 
         if self._is_live_url(final_url):
             raise SkipParseException()
@@ -250,14 +256,20 @@ class DouyinParser(BaseParser):
 
         if keyword and m:
             try:
-                return await self.parse(keyword, m)
+                t1 = time.monotonic()
+                res = await self.parse(keyword, m)
+                logger.info(f"[Douyin][计时] 路由解析(keyword={keyword}) 耗时 {time.monotonic() - t1:.2f}s")
+                return res
             except Exception as e:
                 logger.warning(f"[Douyin] 短链路由后解析失败，尝试ID兜底: {e}")
 
         vid = extract_id_from_query(final_url)
         if vid and not self._is_live_url(final_url):
             try:
-                return await self._parse_by_id_fallback(vid)
+                t2 = time.monotonic()
+                res = await self._parse_by_id_fallback(vid)
+                logger.info(f"[Douyin][计时] ID兜底解析(vid={vid}) 耗时 {time.monotonic() - t2:.2f}s")
+                return res
             except Exception as e:
                 if self._looks_like_daily_share_url(final_url) and self._is_fresh_cookies_error(e):
                     return self._unsupported_daily_result()
@@ -352,7 +364,9 @@ class DouyinParser(BaseParser):
         return resp
 
     async def parse_video(self, url: str, vid: str):
+        t = time.monotonic()
         resp = await self._fetch_router_resp(url)
+        logger.info(f"[Douyin][计时] 抓取分享页 耗时 {time.monotonic() - t:.2f}s <- {url}")
         return self._process_router_resp(resp, vid)
 
     def _process_router_resp(self, resp, vid: str):
