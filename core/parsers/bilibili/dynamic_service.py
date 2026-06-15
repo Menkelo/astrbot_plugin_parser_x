@@ -737,6 +737,15 @@ class BiliDynamicService:
                 timestamp_text=time_text,
             )
 
+        try:
+            _card_kb = out_path.stat().st_size / 1024
+            logger.info(
+                f"[Bilibili][诊断] 动态卡片图 {out_path.name} 大小 {_card_kb:.0f}KB; "
+                f"附加图片 {len(full_images)} 张; 正文 {len(full_text or '')} 字"
+            )
+        except Exception:
+            pass
+
         contents: list[MediaContent] = [ImageContent(out_path)]
         contents.extend(full_images)
 
