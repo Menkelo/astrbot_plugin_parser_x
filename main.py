@@ -324,11 +324,24 @@ class ParserPlugin(Star):
                     await event.send(event.chain_result([segs[0]]))
                     return
 
-                nodes = Nodes([])
+                # 先尝试合并转发；若 send_group_forward_msg 超时/失败（NapCat 上传多图
+                # 时较常见的 WebSocket API call timeout），降级为逐条发送，避免整条消息
+                # 因合并转发失败而完全发不出（此前图文/图集分支无兜底，超时即静默丢失）。
+                try:
+                    nodes = Nodes([])
+                    for seg in segs:
+                        nodes.nodes.append(Node(uin=node_uin, name=node_name, content=[seg]))
+                    if nodes.nodes:
+                        await event.send(event.chain_result([nodes]))
+                    return
+                except Exception as e:
+                    logger.warning(f"合并转发发送失败，降级逐条发送: {e}")
+
                 for seg in segs:
-                    nodes.nodes.append(Node(uin=node_uin, name=node_name, content=[seg]))
-                if nodes.nodes:
-                    await event.send(event.chain_result([nodes]))
+                    try:
+                        await event.send(event.chain_result([seg]))
+                    except Exception as e:
+                        logger.warning(f"图片逐条发送失败: {e}")
 
         async def process_comment_content():
             # 评论区在解析阶段被放到后台任务(避免抓取/二维码识别阻塞主视频)，
