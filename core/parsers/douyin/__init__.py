@@ -163,7 +163,7 @@ class DouyinParser(BaseParser):
 
         for candidate in candidates:
             try:
-                query = parse_qs(urlparse(candidate).query)
+                query = parse_qs(urlparse(candidate).query, keep_blank_values=True)
             except Exception:
                 continue
 
@@ -184,11 +184,20 @@ class DouyinParser(BaseParser):
                 '"schema_type":"1"' in compact_extra
                 or "'schema_type':'1'" in compact_extra
             )
+            has_empty_title_type = any(
+                value == ""
+                for value in query.get("titleType") or []
+            )
 
-            if has_social_activity and has_daily_schema:
+            if has_social_activity and has_daily_schema and has_empty_title_type:
                 return True
 
         return False
+
+    @staticmethod
+    def _is_fresh_cookies_error(error: Exception) -> bool:
+        text = str(error).lower()
+        return "fresh cookies" in text and "needed" in text
 
     @handle("v.douyin", r"v\.douyin\.com/[a-zA-Z0-9_\-]+")
     @handle("jx.douyin", r"jx\.douyin\.com/[a-zA-Z0-9_\-]+")
@@ -198,8 +207,6 @@ class DouyinParser(BaseParser):
 
         if self._is_live_url(final_url):
             raise SkipParseException()
-        if self._looks_like_daily_share_url(final_url):
-            return self._unsupported_daily_result()
 
         try:
             keyword, m = self.search_url(final_url)
@@ -217,6 +224,8 @@ class DouyinParser(BaseParser):
             try:
                 return await self._parse_by_id_fallback(vid)
             except Exception as e:
+                if self._looks_like_daily_share_url(final_url) and self._is_fresh_cookies_error(e):
+                    return self._unsupported_daily_result()
                 raise ParseException(f"短链解析失败，ID兜底失败: {e} | 最终链接: {final_url}")
 
         raise ParseException(f"短链解析失败，无法识别最终链接: {final_url}")
@@ -241,9 +250,6 @@ class DouyinParser(BaseParser):
     async def _parse_douyin(self, searched: re.Match[str]):
         ty, vid = searched.group("ty"), searched.group("vid")
 
-        if self._looks_like_daily_share_url(self.source_text):
-            return self._unsupported_daily_result()
-
         if ty == "slides":
             return await self.parse_slides(vid)
 
@@ -266,9 +272,6 @@ class DouyinParser(BaseParser):
         return await self._parse_with_ytdlp(vid)
 
     async def _parse_by_id_fallback(self, vid: str):
-        if self._looks_like_daily_share_url(self.source_text):
-            return self._unsupported_daily_result()
-
         last_err: Exception | None = None
 
         for ty in ("video", "note"):
@@ -301,8 +304,6 @@ class DouyinParser(BaseParser):
         final_resp_url = str(getattr(resp, "url", "") or "")
         if self._is_live_url(final_resp_url):
             raise SkipParseException()
-        if self._looks_like_daily_share_url(final_resp_url):
-            return self._unsupported_daily_result()
 
         from .video import VideoData, recursive_collect_videos
 
@@ -443,7 +444,13 @@ class DouyinParser(BaseParser):
     async def _parse_with_ytdlp(self, vid: str):
         url = f"https://www.douyin.com/video/{vid}"
 
-        info = await self.downloader.ytdlp_extract_info(url)
+        try:
+            info = await self.downloader.ytdlp_extract_info(url)
+        except Exception as e:
+            if self._looks_like_daily_share_url(self.source_text) and self._is_fresh_cookies_error(e):
+                return self._unsupported_daily_result()
+            raise
+
         contents = []
 
         if info.duration:
