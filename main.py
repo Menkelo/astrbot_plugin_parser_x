@@ -494,10 +494,19 @@ class ParserPlugin(Star):
 
         matches.sort(key=lambda x: (x[0], -len(x[1])))
         processed_matches: set[tuple[str, str]] = set()
+        accepted_spans: list[tuple[int, int]] = []
 
         for _, keyword, searched in matches:
             parser = self.parser_map.get(keyword)
             if parser is None:
+                continue
+
+            # 同一段文字被多个关键词规则命中时只处理一次。
+            # 例如 https://v.kuaishou.com/xxx 会同时匹配 "v.kuaishou" 与 "kuaishou"
+            # （后者是前者的子串），此前会被解析两次：第一次出视频、第二次失败
+            # 又补发一条 ⚠️ 提示。按字符区间去重可避免重复解析/重复发送。
+            span = (searched.start(), searched.end())
+            if any(span[0] < a_end and a_start < span[1] for a_start, a_end in accepted_spans):
                 continue
 
             raw_match = searched.group(0).strip()
@@ -507,6 +516,7 @@ class ParserPlugin(Star):
             if match_key in processed_matches:
                 continue
             processed_matches.add(match_key)
+            accepted_spans.append(span)
 
             try:
                 parser.source_text = text

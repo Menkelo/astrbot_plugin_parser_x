@@ -143,8 +143,8 @@ class Downloader:
 
         try:
             size_mb = result.stat().st_size / 1024 / 1024
-            logger.info(
-                f"[下载][计时] {file_name} {size_mb:.2f}MB / 总 {time.monotonic() - _start:.2f}s"
+            logger.debug(
+                f"[下载] {file_name} {size_mb:.2f}MB / {time.monotonic() - _start:.2f}s"
             )
         except Exception:
             pass
@@ -196,7 +196,6 @@ class Downloader:
             current_idx = (start_idx + i) % strategy_count
             strategy = strategies[current_idx]
 
-            _attempt_start = time.monotonic()
             try:
                 temp_session = self._get_douyin_session(
                     strategy["impersonate"],
@@ -209,10 +208,6 @@ class Downloader:
                 )
 
                 if response.status_code >= 400:
-                    logger.info(
-                        f"[抖音图片][计时] 策略 {strategy['name']} 返回 {response.status_code} "
-                        f"({time.monotonic() - _attempt_start:.2f}s) {file_name}"
-                    )
                     if response.status_code in [502, 503, 504]:
                         await asyncio.sleep(1)
                     raise RequestsError(f"HTTP {response.status_code}", response=response)
@@ -222,10 +217,8 @@ class Downloader:
                 if self.douyin_strategy_idx != current_idx:
                     self.douyin_strategy_idx = current_idx
 
-                logger.info(
-                    f"[抖音图片][计时] 策略 {strategy['name']} 成功 第{i + 1}次尝试 "
-                    f"({time.monotonic() - _attempt_start:.2f}s) {file_name}"
-                )
+                if i > 0:
+                    logger.debug(f"[抖音图片] 策略 {strategy['name']} 第{i + 1}次尝试成功 {file_name}")
                 return file_path
 
             except Exception as e:
