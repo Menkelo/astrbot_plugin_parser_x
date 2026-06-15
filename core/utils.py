@@ -10,7 +10,8 @@ from collections.abc import Awaitable, Callable, MutableMapping
 from collections import OrderedDict
 from pathlib import Path
 from typing import Any, TypeVar
-from urllib.parse import urlparse
+from html import unescape
+from urllib.parse import parse_qsl, unquote, urlparse
 
 from astrbot.api import logger
 
@@ -290,6 +291,122 @@ def ck2dict(cookies_str: str) -> dict[str, str]:
     return res
 
 
+_JSON_URL_RE = re.compile(r"https?://[^\s<>\"']+")
+_JSON_URL_TRAILING_CHARS = ").,;!?:，。；：！？、）】》\"'"
+
+
+def _strip_json_url(url: str) -> str:
+    return url.strip().rstrip(_JSON_URL_TRAILING_CHARS)
+
+
+def _iter_urls_from_text(text: str) -> list[str]:
+    if not text:
+        return []
+
+    variants = []
+    normalized = unescape(str(text)).replace("\\/", "/")
+    variants.append(normalized)
+    decoded = unquote(normalized)
+    if decoded != normalized:
+        variants.append(decoded)
+
+    urls: list[str] = []
+    seen: set[str] = set()
+
+    def add_url(raw_url: str) -> None:
+        url = _strip_json_url(raw_url)
+        if not url or url in seen:
+            return
+        seen.add(url)
+        urls.append(url)
+
+        try:
+            parsed = urlparse(url)
+            for _, value in parse_qsl(parsed.query, keep_blank_values=True):
+                if "http" not in value:
+                    continue
+                for inner_url in _iter_urls_from_text(value):
+                    add_url(inner_url)
+        except Exception:
+            pass
+
+    for variant in variants:
+        for match in _JSON_URL_RE.finditer(variant):
+            add_url(match.group(0))
+
+    return urls
+
+
+def _walk_json_urls(obj: Any) -> list[str]:
+    urls: list[str] = []
+
+    def walk(value: Any) -> None:
+        if isinstance(value, str):
+            urls.extend(_iter_urls_from_text(value))
+        elif isinstance(value, dict):
+            for item in value.values():
+                walk(item)
+        elif isinstance(value, list):
+            for item in value:
+                walk(item)
+
+    walk(obj)
+    return urls
+
+
+def _json_url_priority(url: str) -> int | None:
+    low = url.lower()
+
+    if re.search(r"bilibili\.com/(?:video/)?(?:bv[0-9a-z]{10}|av\d{6,})", low):
+        return 0
+    if "b23.tv/" in low or "bili2233.cn/" in low:
+        return 1
+    if "bilibili.com/opus/" in low or "t.bilibili.com/" in low:
+        return 2
+    if "live.bilibili.com/" in low:
+        return 3
+    if (
+        "v.douyin.com/" in low
+        or "jx.douyin.com/" in low
+        or "douyin.com/" in low
+        or "iesdouyin.com/" in low
+    ):
+        return 10
+    if "xhslink.com/" in low or "xiaohongshu.com/" in low:
+        return 11
+    if (
+        "v.kuaishou.com/" in low
+        or "kuaishou.com/" in low
+        or "chenzhongtech.com/" in low
+    ):
+        return 12
+    if "weibo.com/" in low or "weibo.cn/" in low:
+        return 13
+
+    return None
+
+
+def _pick_supported_json_url(urls: list[str]) -> str | None:
+    best: tuple[int, int, str] | None = None
+    seen: set[str] = set()
+
+    for index, url in enumerate(urls):
+        url = _strip_json_url(url).replace("&amp;", "&")
+        if not url or url in seen:
+            continue
+        seen.add(url)
+
+        priority = _json_url_priority(url)
+        if priority is None:
+            continue
+
+        item = (priority, index, url)
+        if best is None or item < best:
+            best = item
+
+    return best[2] if best else None
+
+
 def extract_json_url(data: dict | str) -> str | None:
     if isinstance(data, str):
         try:
@@ -299,6 +416,11 @@ def extract_json_url(data: dict | str) -> str | None:
 
     if not isinstance(data, dict):
         return None
+
+    priority_urls = _walk_json_urls(data)
+    found_url = _pick_supported_json_url(priority_urls)
+    if found_url:
+        return found_url
 
     meta: dict[str, Any] | None = data.get("meta")
     if meta:
@@ -313,10 +435,8 @@ def extract_json_url(data: dict | str) -> str | None:
         for key1, key2 in keys_to_check:
             val = meta.get(key1, {}).get(key2)
             if val and isinstance(val, str):
-                val = val.replace("&amp;", "&")
-                if "http" in val:
-                    if m := re.search(r'https?://[^\s,"]+', val):
-                        return m.group(0)
+                for url in _iter_urls_from_text(val):
+                    return url.replace("&amp;", "&")
 
     found_url = _recursive_find_xhs_url(data)
     if found_url:

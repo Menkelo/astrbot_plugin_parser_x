@@ -287,15 +287,25 @@ class BiliCommentService:
 
         video_time_text = self._format_ts(video_timestamp)
 
+        comments_digest = "|".join(
+            (
+                f"{item.get('uname', '')}\0"
+                f"{item.get('message', '')}\0"
+                f"{item.get('pic', '')}\0"
+                f"{item.get('comment_time', '')}"
+            )
+            for item in comments_data
+        )
         c_hash = hashlib.md5(
             (
-                f"{comments_data[0]}"
+                f"{comments_digest}"
+                f"{len(comments_data)}"
                 f"{self.comment_limit}"
                 f"{video_title}"
                 f"{video_cover}"
                 f"{video_author}"
                 f"{video_timestamp}"
-                f"_skip_default_avatar_v1"
+                f"_full_comment_digest_v1"
             ).encode()
         ).hexdigest()[:8]
 
