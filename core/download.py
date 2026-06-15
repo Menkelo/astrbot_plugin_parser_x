@@ -1,5 +1,6 @@
 import asyncio
 import socket
+import time
 from asyncio import Task, create_task
 from collections.abc import Callable, Coroutine
 from functools import wraps
@@ -130,11 +131,8 @@ class Downloader:
 
         limit = max_size_mb if max_size_mb is not None else self.default_max_size
 
-        import time as _t
-        _start = _t.monotonic()
-        _wait_start = _t.monotonic()
+        _start = time.monotonic()
         async with self.sem:
-            _queued = _t.monotonic() - _wait_start
             if "douyinpic.com" in url:
                 result = await self._download_douyin_image(url, file_path, file_name, limit)
             else:
@@ -145,12 +143,11 @@ class Downloader:
 
         try:
             size_mb = result.stat().st_size / 1024 / 1024
+            logger.debug(
+                f"[下载] {file_name} {size_mb:.2f}MB / {time.monotonic() - _start:.2f}s"
+            )
         except Exception:
-            size_mb = -1
-        logger.info(
-            f"[下载][计时] {file_name} 大小 {size_mb:.2f}MB "
-            f"耗时 {_t.monotonic() - _start:.2f}s (排队 {_queued:.2f}s)"
-        )
+            pass
         return result
 
     async def _download_douyin_image(
