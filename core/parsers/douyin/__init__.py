@@ -199,11 +199,46 @@ class DouyinParser(BaseParser):
         text = str(error).lower()
         return "fresh cookies" in text and "needed" in text
 
+    async def _resolve_final_url_by_head(self, url: str) -> str | None:
+        """
+        抖音短链只需要最终落点。优先用 HEAD 跟随跳转，避免像 get_final_url
+        那样把整页 HTML 正文全部下载下来再丢弃（短链解析的主要耗时点）。
+        HEAD 被拒或拿不到可用 URL 时返回 None，调用方回退到 GET 方案。
+        """
+        try:
+            resp = await self.client.head(
+                url,
+                headers=self.ios_headers,
+                allow_redirects=True,
+                timeout=8,
+                verify=False,
+            )
+        except Exception as e:
+            logger.debug(f"[Douyin] HEAD 短链解析失败: {url} | {e}")
+            return None
+
+        if getattr(resp, "status_code", 0) >= 400:
+            return None
+
+        final_url = str(getattr(resp, "url", "") or "").strip()
+        if not final_url or final_url == url:
+            return None
+
+        return final_url
+
     @handle("v.douyin", r"v\.douyin\.com/[a-zA-Z0-9_\-]+")
     @handle("jx.douyin", r"jx\.douyin\.com/[a-zA-Z0-9_\-]+")
     async def _parse_short_link(self, searched: re.Match[str]):
         short_url = f"https://{searched.group(0)}"
-        final_url = await self.get_final_url(short_url, headers=self.ios_headers)
+        # HEAD 优先（不下载正文），失败再退回完整 GET 跟随重定向。
+        final_url = await self._resolve_final_url_by_head(short_url)
+        if not final_url:
+            final_url = await self.get_final_url(
+                short_url,
+                headers=self.ios_headers,
+                timeout=8,
+                retries=1,
+            )
 
         if self._is_live_url(final_url):
             raise SkipParseException()
@@ -304,6 +339,7 @@ class DouyinParser(BaseParser):
             headers=self.ios_headers,
             allow_redirects=True,
             timeout=timeout,
+            retries=1,
         )
 
         if resp.status_code != 200:
@@ -385,7 +421,8 @@ class DouyinParser(BaseParser):
             params=params,
             headers=self.android_headers,
             allow_redirects=True,
-            timeout=20,
+            timeout=10,
+            retries=1,
         )
 
         if resp.status_code >= 400:

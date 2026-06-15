@@ -201,15 +201,20 @@ class BaseParser:
         params: dict[str, Any] | None = None,
         allow_redirects: bool = True,
         timeout: int = 15,
+        retries: int = 3,
     ):
         """
         统一 GET 请求入口：
         1. 优先 curl_cffi，支持 TLS 指纹；
         2. 失败后 aiohttp fallback，强制 IPv4；
         3. 返回对象统一支持 status_code / headers / url / text / content / json()。
+
+        retries: curl 与 aiohttp 各自的最大尝试次数。
+        解析类请求（拿 JSON / 探测重定向）建议传 1，失败时快速换下一个
+        域名/兜底，而不是在单个域名上把 3×3 重试矩阵跑满（最坏可达数十秒）。
         """
         headers = headers or self.headers
-        retries = 3
+        retries = max(1, int(retries))
 
         last_curl_err: Exception | None = None
 
@@ -304,6 +309,9 @@ class BaseParser:
         self,
         url: str,
         headers: dict[str, str] | None = None,
+        *,
+        timeout: int = 15,
+        retries: int = 3,
     ) -> str:
         headers = headers or COMMON_HEADER.copy()
 
@@ -312,7 +320,8 @@ class BaseParser:
                 url,
                 headers=headers,
                 allow_redirects=True,
-                timeout=15,
+                timeout=timeout,
+                retries=retries,
             )
             return str(resp.url)
         except Exception:
