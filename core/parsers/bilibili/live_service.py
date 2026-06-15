@@ -7,12 +7,37 @@ from pathlib import Path
 from astrbot.api import logger
 
 from ...data import ImageContent
+from ...utils import cached_image_to_data_uri, normalize_image_url
 from ..base import ParseException
 
 
 class BiliLiveService:
     def __init__(self, parser):
         self.parser = parser
+        self._img_data_uri_cache: dict[str, str | None] = {}
+
+    @staticmethod
+    def _first_str(*values) -> str | None:
+        for value in values:
+            if value is None:
+                continue
+            text = str(value).strip()
+            if text:
+                return text
+        return None
+
+    @staticmethod
+    def _first_key(source: dict | None, *keys: str) -> str | None:
+        if not isinstance(source, dict):
+            return None
+        for key in keys:
+            value = source.get(key)
+            if value is None:
+                continue
+            text = str(value).strip()
+            if text:
+                return text
+        return None
 
     @staticmethod
     def _format_time_value(value) -> str | None:
@@ -187,6 +212,42 @@ class BiliLiveService:
         info = data.get("info") or {}
         return info if isinstance(info, dict) else {}
 
+    async def _fetch_member_card(self, uid: int | str | None, room_id: int):
+        if not uid:
+            return {}
+
+        api = "https://api.bilibili.com/x/web-interface/card"
+        raw = await self._get_json(api, {"mid": uid, "photo": "true"}, room_id, retry=2)
+        if raw.get("code") != 0:
+            return {}
+
+        data = raw.get("data") or {}
+        card = data.get("card") or {}
+        return card if isinstance(card, dict) else {}
+
+    async def _img_to_data_uri(
+        self,
+        img_url: str | None,
+        *,
+        referer: str,
+    ) -> str | None:
+        headers = self.parser.headers.copy()
+        headers["Cache-Control"] = "no-cache"
+        if self.parser.bili_ck:
+            headers["Cookie"] = self.parser.bili_ck
+
+        return await cached_image_to_data_uri(
+            self._img_data_uri_cache,
+            self.parser.http_get,
+            img_url,
+            headers=headers,
+            referer=referer,
+            normalizer=normalize_image_url,
+            max_bytes=2 * 1024 * 1024,
+            timeout=8,
+            debug_label="[Bilibili-live] image",
+        )
+
     async def parse_live(self, room_id: int):
         init_api = "https://api.live.bilibili.com/room/v1/Room/room_init"
         info_api = "https://api.live.bilibili.com/xlive/web-room/v1/index/getInfoByRoom"
@@ -210,13 +271,17 @@ class BiliLiveService:
             data = info_raw.get("data") or {}
             room_info = data.get("room_info") or {}
             anchor_base = ((data.get("anchor_info") or {}).get("base_info") or {})
-        else:
+
+        if not room_info:
             fb_raw = await self._get_json(fallback_info_api, {"room_id": real_room_id}, real_room_id)
             if fb_raw.get("code") == 0:
                 room_info = fb_raw.get("data") or {}
-            else:
-                html_data = await self._fetch_live_html_info(real_room_id)
+
+        if not room_info or not anchor_base:
+            html_data = await self._fetch_live_html_info(real_room_id)
+            if not room_info:
                 room_info = html_data.get("room_info") or {}
+            if not anchor_base:
                 anchor_base = html_data.get("anchor_base") or {}
 
         title = room_info.get("title") or "B站直播间"
@@ -226,14 +291,42 @@ class BiliLiveService:
                 extra={"plain_text_only": True},
             )
 
-        uid = anchor_base.get("uid") or room_info.get("uid")
+        uid = self._first_str(
+            self._first_key(anchor_base, "uid", "mid"),
+            self._first_key(room_info, "uid", "mid"),
+            init_data.get("uid"),
+        )
         anchor_fallback = {}
-        if uid and (not anchor_base.get("face") or not anchor_base.get("uname")):
+        if uid and (not self._first_key(anchor_base, "face", "avatar") or not self._first_key(anchor_base, "uname", "name")):
             anchor_fallback = await self._fetch_anchor_info(uid, real_room_id)
 
-        uname = anchor_base.get("uname") or anchor_fallback.get("uname") or "B站主播"
+        member_card = {}
+        if uid and (
+            not self._first_key(anchor_base, "face", "avatar")
+            and not self._first_key(anchor_fallback, "face", "avatar")
+            or not self._first_key(anchor_base, "uname", "name")
+            and not self._first_key(anchor_fallback, "uname", "name")
+        ):
+            member_card = await self._fetch_member_card(uid, real_room_id)
+
+        uname = self._first_str(
+            self._first_key(anchor_base, "uname", "name"),
+            self._first_key(anchor_fallback, "uname", "name"),
+            self._first_key(member_card, "name", "uname"),
+            "B站主播",
+        )
         cover = room_info.get("cover") or room_info.get("user_cover") or room_info.get("keyframe")
-        avatar = anchor_base.get("face") or anchor_fallback.get("face")
+        avatar = normalize_image_url(
+            self._first_str(
+                self._first_key(anchor_base, "face", "avatar"),
+                self._first_key(anchor_fallback, "face", "avatar"),
+                self._first_key(member_card, "face", "avatar"),
+            )
+        )
+        avatar_data_uri = await self._img_to_data_uri(
+            avatar,
+            referer=f"https://live.bilibili.com/{real_room_id}",
+        )
         parent_area = room_info.get("parent_area_name") or ""
         area = room_info.get("area_name") or ""
         area_text = f"{parent_area} / {area}".strip(" /")
@@ -252,7 +345,7 @@ class BiliLiveService:
         user_time_text = f"开播时间 {start_time_text}" if start_time_text else None
 
         digest = hashlib.md5(
-            f"{real_room_id}|{title}|{uname}|{avatar}|{cover}|{live_status}|{user_time_text or ''}|live_service_v5".encode()
+            f"{real_room_id}|{title}|{uname}|{avatar}|{cover}|{live_status}|{user_time_text or ''}|live_service_v6".encode()
         ).hexdigest()[:10]
         out_path = Path(self.parser.cache_dir) / f"bili_live_{real_room_id}_{digest}.png"
 
@@ -263,7 +356,7 @@ class BiliLiveService:
                 title=title,
                 streamer_name=uname,
                 cover=cover,
-                avatar=avatar,
+                avatar=avatar_data_uri or avatar,
                 status_text=status_text,
                 area_text=area_text,
                 user_time_text=user_time_text,

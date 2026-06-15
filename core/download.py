@@ -70,11 +70,15 @@ class Downloader:
         self.headers: dict[str, str] = COMMON_HEADER.copy()
         self.info_cache: LimitedSizeDict[str, VideoInfo] = LimitedSizeDict()
 
-        concurrency = perf_conf.get("max_concurrent_downloads", 5)
+        concurrency = perf_conf.get("max_concurrent_downloads", 8)
         self.sem = asyncio.Semaphore(concurrency)
         logger.info(f"下载器已初始化，最大并发数: {concurrency}")
 
         self.douyin_strategy_idx = 0
+
+        # 抖音图集按 impersonate 策略复用的长生命周期 session，
+        # 避免每张图都新建/销毁 session 造成重复 TLS 握手。
+        self._douyin_sessions: dict[str, AsyncSession] = {}
 
         self.session = AsyncSession(
             impersonate="chrome120",
@@ -83,6 +87,22 @@ class Downloader:
             verify=False,
             http_version=CurlHttpVersion.V1_1,
         )
+
+    def _get_douyin_session(self, impersonate: str, headers: dict[str, str]) -> AsyncSession:
+        """
+        按 impersonate 复用 curl_cffi session。
+        headers 仍在每次 .get() 时单独传入，这里只缓存连接/指纹层。
+        """
+        sess = self._douyin_sessions.get(impersonate)
+        if sess is None:
+            sess = AsyncSession(
+                impersonate=impersonate,
+                timeout=30,
+                verify=False,
+                http_version=CurlHttpVersion.V1_1,
+            )
+            self._douyin_sessions[impersonate] = sess
+        return sess
 
     @staticmethod
     def _ensure_parent_dir(file_path: Path) -> None:
@@ -167,26 +187,27 @@ class Downloader:
             strategy = strategies[current_idx]
 
             try:
-                async with AsyncSession(
-                    impersonate=strategy["impersonate"],
-                    timeout=30,
-                    verify=False,
+                temp_session = self._get_douyin_session(
+                    strategy["impersonate"],
+                    strategy["headers"],
+                )
+                response = await temp_session.get(
+                    url,
                     headers=strategy["headers"],
-                    http_version=CurlHttpVersion.V1_1,
-                ) as temp_session:
-                    response = await temp_session.get(url, stream=True)
+                    stream=True,
+                )
 
-                    if response.status_code >= 400:
-                        if response.status_code in [502, 503, 504]:
-                            await asyncio.sleep(1)
-                        raise RequestsError(f"HTTP {response.status_code}", response=response)
+                if response.status_code >= 400:
+                    if response.status_code in [502, 503, 504]:
+                        await asyncio.sleep(1)
+                    raise RequestsError(f"HTTP {response.status_code}", response=response)
 
-                    await self._save_response_to_file(response, file_path, file_name, limit)
+                await self._save_response_to_file(response, file_path, file_name, limit)
 
-                    if self.douyin_strategy_idx != current_idx:
-                        self.douyin_strategy_idx = current_idx
+                if self.douyin_strategy_idx != current_idx:
+                    self.douyin_strategy_idx = current_idx
 
-                    return file_path
+                return file_path
 
             except Exception as e:
                 last_error = e
@@ -346,7 +367,7 @@ class Downloader:
                 if content_length and (content_length / 1024 / 1024) > limit:
                     raise SizeLimitException(f"媒体大小({content_length / 1024 / 1024:.1f}MB)超过限制")
 
-                chunk_size = 256 * 1024
+                chunk_size = 1024 * 1024
 
                 self._ensure_parent_dir(file_path)
                 with self.get_progress_bar(file_name, content_length) as bar:
@@ -422,7 +443,7 @@ class Downloader:
                 f"媒体大小({content_length / 1024 / 1024:.1f}MB)超过限制({limit_mb}MB)"
             )
 
-        chunk_size = 256 * 1024
+        chunk_size = 1024 * 1024
 
         with self.get_progress_bar(file_name, content_length) as bar:
             async with aiofiles.open(file_path, "wb") as file:
@@ -649,3 +670,6 @@ class Downloader:
 
     async def close(self):
         await maybe_close_session(self.session)
+        for sess in self._douyin_sessions.values():
+            await maybe_close_session(sess)
+        self._douyin_sessions.clear()

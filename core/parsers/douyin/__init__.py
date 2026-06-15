@@ -1,3 +1,4 @@
+import asyncio
 import re
 from typing import TYPE_CHECKING, ClassVar
 from urllib.parse import parse_qs, urlparse
@@ -244,6 +245,50 @@ class DouyinParser(BaseParser):
             raise ParseException("未能从链接中提取抖音视频 ID(modal_id)")
         return await self._parse_by_id_fallback(vid)
 
+    async def _race_parse_video(self, urls: list[str], vid: str):
+        """
+        并发竞速抓取多个抖音分享域名，谁先成功拿到可解析页面就用谁，
+        其余请求立即取消。相比此前的串行逐域名 20s 超时，可显著降低首字节延迟。
+
+        - 任一任务抛出 SkipParseException(直播) → 直接向上抛，取消其余；
+        - 全部失败 → 抛出最后一个错误，由调用方走 ytdlp 兜底。
+        """
+        tasks = {
+            asyncio.create_task(self._fetch_router_resp(url)): url
+            for url in urls
+        }
+        last_err: Exception | None = None
+
+        try:
+            pending = set(tasks.keys())
+            while pending:
+                done, pending = await asyncio.wait(
+                    pending,
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                for task in done:
+                    try:
+                        resp = task.result()
+                    except SkipParseException:
+                        raise
+                    except Exception as e:
+                        last_err = e
+                        continue
+
+                    # 抓取成功，解析处理（同步，无 IO）
+                    try:
+                        return self._process_router_resp(resp, vid)
+                    except Exception as e:
+                        last_err = e
+        finally:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+
+        if last_err:
+            raise last_err
+        raise ParseException("抖音多域名竞速均未返回可解析数据")
+
     @handle("douyin", r"douyin\.com/(?P<ty>video|note)/(?P<vid>\d+)")
     @handle("iesdouyin", r"iesdouyin\.com/share/(?P<ty>slides|video|note)/(?P<vid>\d+)")
     @handle("m.douyin", r"m\.douyin\.com/share/(?P<ty>slides|video|note)/(?P<vid>\d+)")
@@ -253,41 +298,43 @@ class DouyinParser(BaseParser):
         if ty == "slides":
             return await self.parse_slides(vid)
 
-        last_err: Exception | None = None
-
-        # www.douyin.com 反爬较重、经常拿不到 _ROUTER_DATA（甚至超时），
-        # 之前被排在第一个尝试，导致每次解析都先在它身上空耗一轮。
-        # 这里优先更稳定的移动端分享域名(m / iesdouyin)，www 降为最后兜底。
-        for url in (
+        # www.douyin.com 反爬较重、经常拿不到 _ROUTER_DATA（甚至超时）；
+        # 移动端分享域名(m / iesdouyin)更稳定。三者并发竞速，谁先成功用谁。
+        urls = [
             self._build_m_douyin_url(ty, vid),
             self._build_iesdouyin_url(ty, vid),
             f"https://www.douyin.com/{ty}/{vid}",
-        ):
-            try:
-                return await self.parse_video(url, vid)
-            except Exception as e:
-                last_err = e
+        ]
 
-        logger.warning(f"[Douyin] 直连解析失败，切换 ytdlp 兜底: {last_err}")
-        return await self._parse_with_ytdlp(vid)
+        try:
+            return await self._race_parse_video(urls, vid)
+        except SkipParseException:
+            raise
+        except Exception as last_err:
+            logger.warning(f"[Douyin] 直连解析失败，切换 ytdlp 兜底: {last_err}")
+            return await self._parse_with_ytdlp(vid)
 
     async def _parse_by_id_fallback(self, vid: str):
-        last_err: Exception | None = None
+        urls = [
+            self._build_m_douyin_url("video", vid),
+            self._build_iesdouyin_url("video", vid),
+            self._build_m_douyin_url("note", vid),
+            self._build_iesdouyin_url("note", vid),
+        ]
 
-        for ty in ("video", "note"):
-            for url in (
-                self._build_m_douyin_url(ty, vid),
-                self._build_iesdouyin_url(ty, vid),
-            ):
-                try:
-                    return await self.parse_video(url, vid)
-                except Exception as e:
-                    last_err = e
+        try:
+            return await self._race_parse_video(urls, vid)
+        except SkipParseException:
+            raise
+        except Exception as last_err:
+            logger.warning(f"[Douyin] _parse_by_id_fallback 失败，切换 ytdlp: {last_err}")
+            return await self._parse_with_ytdlp(vid)
 
-        logger.warning(f"[Douyin] _parse_by_id_fallback 失败，切换 ytdlp: {last_err}")
-        return await self._parse_with_ytdlp(vid)
-
-    async def parse_video(self, url: str, vid: str):
+    async def _fetch_router_resp(self, url: str, timeout: int = 8):
+        """
+        仅负责抓取抖音分享页并做直播/状态码校验，返回响应对象。
+        与解析处理拆开，便于多域名竞速。
+        """
         if self._is_live_url(url):
             raise SkipParseException()
 
@@ -295,7 +342,7 @@ class DouyinParser(BaseParser):
             url,
             headers=self.ios_headers,
             allow_redirects=True,
-            timeout=20,
+            timeout=timeout,
         )
 
         if resp.status_code != 200:
@@ -305,6 +352,13 @@ class DouyinParser(BaseParser):
         if self._is_live_url(final_resp_url):
             raise SkipParseException()
 
+        return resp
+
+    async def parse_video(self, url: str, vid: str):
+        resp = await self._fetch_router_resp(url)
+        return self._process_router_resp(resp, vid)
+
+    def _process_router_resp(self, resp, vid: str):
         from .video import VideoData, recursive_collect_videos
 
         raw_data = msgspec.json.decode(extract_router_data_json_str(resp.text))

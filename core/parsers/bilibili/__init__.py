@@ -582,9 +582,13 @@ class BilibiliParser(BaseParser):
     ) -> tuple[list[tuple[int, list[str]]], list[str], dict]:
         """
         B站 get_download_url 默认可能只返回当前/高画质。
-        如果没拿到 <=720P，则按 qn=64/32/16/6 重新请求。
+        如果没拿到 <=720P，则按 qn=64 重新请求一次。
+
+        说明：此前会逐级 64→32→16→6 串行打满 5 次 API。实际上 qn=64(720P)
+        已是体积上限内最常见的目标档，命中即返回；仍拿不到时再用
+        allow_higher_fallback 兜底，无需把每个低清档都串行请求一遍。
         """
-        qn_order = [None, 64, 32, 16, 6]
+        qn_order = [None, 64]
         last_data: dict = {}
 
         for qn in qn_order:
@@ -656,7 +660,7 @@ class BilibiliParser(BaseParser):
         url += f"?p={page_info.index + 1}" if page_info.index > 0 else ""
 
         # === B站评论区总开关 ===
-        # 开启：发送阶段独立抓取并渲染评论区，不阻塞主视频解析返回
+        # 开启：主视频发送完成后再后台抓取并渲染评论区，不抢主视频解析/下载资源
         # 关闭：直接跳过，减少请求和渲染耗时
         comment_task_factory = None
         if self.enable_comment_card:

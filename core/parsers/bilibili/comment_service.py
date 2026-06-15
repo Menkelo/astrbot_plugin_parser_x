@@ -2,6 +2,7 @@ import asyncio
 import hashlib
 import re
 import time
+import urllib.parse
 from pathlib import Path
 
 from msgspec import json as msgjson
@@ -10,6 +11,18 @@ from astrbot.api import logger
 
 from ...data import ImageContent
 from .comment_renderer import BiliCommentRenderer
+
+
+MIXIN_KEY_ENC_TAB = [
+    46, 47, 18, 2, 53, 8, 23, 32,
+    15, 50, 10, 31, 58, 3, 45, 35,
+    27, 43, 5, 49, 33, 9, 42, 19,
+    29, 28, 14, 39, 12, 38, 41, 13,
+    37, 48, 7, 16, 24, 55, 40, 61,
+    26, 17, 0, 1, 60, 51, 30, 4,
+    22, 25, 54, 21, 56, 59, 6, 63,
+    57, 62, 11, 36, 20, 34, 44, 52,
+]
 
 
 class BiliCommentService:
@@ -46,6 +59,8 @@ class BiliCommentService:
         )
 
         self._qr_detect_cache: dict[str, bool] = {}
+        self._wbi_mixin_key: str | None = None
+        self._wbi_mixin_key_expire = 0.0
 
     @property
     def headers(self) -> dict[str, str]:
@@ -103,6 +118,168 @@ class BiliCommentService:
             or self._contact_re.search(text)
             or self._shortlink_re.search(text)
         )
+
+    def _comment_headers(self, referer: str | None = None) -> dict[str, str]:
+        headers = self.headers.copy()
+        headers["Referer"] = referer or "https://www.bilibili.com/"
+        if self.parser.bili_ck:
+            headers["Cookie"] = self.parser.bili_ck
+        return headers
+
+    @staticmethod
+    def _wbi_key_part(url: str | None) -> str | None:
+        if not url:
+            return None
+        name = str(url).rsplit("/", 1)[-1].split(".", 1)[0].strip()
+        return name or None
+
+    async def _get_wbi_mixin_key(self) -> str | None:
+        now = time.time()
+        if self._wbi_mixin_key and now < self._wbi_mixin_key_expire:
+            return self._wbi_mixin_key
+
+        try:
+            resp = await self.parser.http_get(
+                "https://api.bilibili.com/x/web-interface/nav",
+                headers=self._comment_headers(),
+                allow_redirects=True,
+                timeout=8,
+            )
+            data = msgjson.decode(resp.content)
+            wbi_img = ((data.get("data") or {}).get("wbi_img") or {})
+            img_key = self._wbi_key_part(wbi_img.get("img_url"))
+            sub_key = self._wbi_key_part(wbi_img.get("sub_url"))
+            raw_key = f"{img_key or ''}{sub_key or ''}"
+            if len(raw_key) < 64:
+                return None
+
+            mixin_key = "".join(raw_key[i] for i in MIXIN_KEY_ENC_TAB)[:32]
+            self._wbi_mixin_key = mixin_key
+            self._wbi_mixin_key_expire = now + 12 * 60 * 60
+            return mixin_key
+        except Exception as e:
+            logger.debug(f"[Bilibili] WBI key 获取失败: {e}")
+            return None
+
+    @staticmethod
+    def _sign_wbi_params(params: dict, mixin_key: str) -> dict:
+        signed = dict(params)
+        signed["wts"] = int(time.time())
+
+        filtered = {}
+        for key, value in signed.items():
+            if isinstance(value, str):
+                value = "".join(ch for ch in value if ch not in "!'()*")
+            filtered[key] = value
+
+        query = urllib.parse.urlencode(sorted(filtered.items()))
+        filtered["w_rid"] = hashlib.md5(f"{query}{mixin_key}".encode()).hexdigest()
+        return filtered
+
+    async def _get_comment_json(
+        self,
+        url: str,
+        params: dict,
+        *,
+        referer: str,
+    ) -> dict:
+        resp = await self.parser.http_get(
+            url,
+            params=params,
+            headers=self._comment_headers(referer),
+            allow_redirects=True,
+            timeout=8,
+        )
+        if resp.status_code != 200 or not resp.content:
+            return {}
+        try:
+            data = msgjson.decode(resp.content)
+        except Exception:
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    @staticmethod
+    def _normalize_legacy_reply_page(block: dict, page_num: int) -> dict:
+        page = block.get("page") or {}
+        try:
+            total = int(page.get("count") or 0)
+            size = int(page.get("size") or 20)
+            current = int(page.get("num") or page_num)
+        except Exception:
+            total = 0
+            size = 20
+            current = page_num
+
+        replies = block.get("replies") or []
+        block["cursor"] = {
+            "is_end": (not replies) or (total > 0 and current * size >= total),
+            "next": current + 1,
+        }
+        return block
+
+    async def _fetch_comment_page(
+        self,
+        *,
+        oid: int,
+        type_: int,
+        next_cursor: int,
+        referer: str,
+    ) -> dict:
+        base_params = {
+            "oid": oid,
+            "type": type_,
+            "mode": 3,
+            "next": next_cursor,
+            "ps": 20,
+        }
+
+        mixin_key = await self._get_wbi_mixin_key()
+        if mixin_key:
+            try:
+                data = await self._get_comment_json(
+                    "https://api.bilibili.com/x/v2/reply/wbi/main",
+                    self._sign_wbi_params(base_params, mixin_key),
+                    referer=referer,
+                )
+                if data.get("code") == 0:
+                    return data.get("data") or {}
+                logger.debug(
+                    "[Bilibili] WBI 评论接口失败 "
+                    f"oid={oid} code={data.get('code')} msg={data.get('message') or data.get('msg')}"
+                )
+            except Exception as e:
+                logger.debug(f"[Bilibili] WBI 评论接口异常 oid={oid}: {e}")
+
+        try:
+            data = await self._get_comment_json(
+                "https://api.bilibili.com/x/v2/reply/main",
+                base_params,
+                referer=referer,
+            )
+            if data.get("code") == 0:
+                return data.get("data") or {}
+        except Exception as e:
+            logger.debug(f"[Bilibili] 评论 main 兜底异常 oid={oid}: {e}")
+
+        try:
+            page_num = max(1, int(next_cursor or 1))
+            data = await self._get_comment_json(
+                "https://api.bilibili.com/x/v2/reply",
+                {
+                    "oid": oid,
+                    "type": type_,
+                    "sort": 2,
+                    "pn": page_num,
+                    "ps": 20,
+                },
+                referer=referer,
+            )
+            if data.get("code") == 0:
+                return self._normalize_legacy_reply_page(data.get("data") or {}, page_num)
+        except Exception as e:
+            logger.debug(f"[Bilibili] 评论 legacy 兜底异常 oid={oid}: {e}")
+
+        return {}
 
     async def _has_qr_in_image(self, img_url: str) -> bool:
         if not img_url:
@@ -178,7 +355,6 @@ class BiliCommentService:
         video_author: str | None = None,
         video_timestamp: int | None = None,
     ) -> list[ImageContent]:
-        url = "https://api.bilibili.com/x/v2/reply/main"
         strict_list = []
         relaxed_list = []
         fallback_list = []
@@ -187,7 +363,8 @@ class BiliCommentService:
         next_cursor = 0
         is_end = False
 
-        max_pages = 3
+        max_pages = 5
+        referer = f"https://www.bilibili.com/video/av{oid}"
 
         qr_check_counter = [0]
 
@@ -196,36 +373,27 @@ class BiliCommentService:
             if is_end or len(strict_list) >= self.comment_limit or candidate_count >= self.comment_limit:
                 break
 
-            params = {
-                "oid": oid,
-                "type": type_,
-                "mode": 3,
-                "next": next_cursor,
-                "ps": 20,
-            }
-
             try:
-                resp = await self.client.get(
-                    url,
-                    params=params,
-                    headers=self.headers,
-                    timeout=5,
+                block = await self._fetch_comment_page(
+                    oid=oid,
+                    type_=type_,
+                    next_cursor=next_cursor,
+                    referer=referer,
                 )
-                if resp.status_code != 200:
+                if not block:
                     break
 
-                data = msgjson.decode(resp.content)
-                if data.get("code") != 0:
-                    break
-
-                block = data.get("data") or {}
-                replies = block.get("replies") or []
+                top_replies = block.get("top_replies") or []
+                replies = [*top_replies, *(block.get("replies") or [])]
                 cursor = block.get("cursor") or {}
                 is_end = bool(cursor.get("is_end"))
-                next_cursor = cursor.get("next", next_cursor + 1)
+                try:
+                    next_cursor = int(cursor.get("next", next_cursor + 1))
+                except Exception:
+                    next_cursor += 1
 
                 for item in replies:
-                    rpid = item.get("rpid")
+                    rpid = item.get("rpid") or item.get("rpid_str")
                     if rpid in seen:
                         continue
                     seen.add(rpid)
@@ -238,7 +406,7 @@ class BiliCommentService:
                     message = self._neutralize_at_text(message)
 
                     pics = content.get("pictures") or []
-                    pic_url = pics[0].get("img_src") if pics else None
+                    pic_url = self.parser.norm_bili_img(pics[0].get("img_src")) if pics else None
 
                     if not message and not pic_url:
                         continue
@@ -246,7 +414,7 @@ class BiliCommentService:
                     if await self._should_skip_comment(message, pic_url, qr_check_counter):
                         continue
 
-                    avatar = member.get("avatar", "")
+                    avatar = self.parser.norm_bili_img(member.get("avatar", "")) or ""
 
                     data_obj = {
                         "avatar": "" if self._is_bili_default_avatar(avatar) else avatar,
