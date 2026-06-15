@@ -128,6 +128,36 @@ class BiliDynamicService:
                 return module
         return None
 
+    @staticmethod
+    def cap_bili_image_url(url: str, *, width: int = 1280, quality: int = 85) -> str:
+        """
+        给 B站图片 URL 追加 CDN 尺寸/质量参数，显著降低单图体积。
+
+        B站 hdslb CDN 支持 `@<宽>w_<质量>q.<格式>` 语法，例如
+        `.../abc.jpg@1280w_85q.jpg`，服务端会直接返回缩放压缩后的图。
+        动态原图常达数 MB，10 张一起走合并转发极易触发 NapCat 上传超时；
+        限到 1280 宽后单图通常只剩几百 KB，既能成功合并转发又更快。
+
+        - 仅处理 hdslb / bilivideo 图片域名；
+        - 已带 `@` 参数的 URL 不重复追加；
+        - 非图片或异常一律原样返回，保证安全。
+        """
+        if not isinstance(url, str) or not url:
+            return url
+
+        low = url.lower()
+        if "@" in url:
+            return url
+        if not any(d in low for d in ("hdslb.com", "bilivideo.com", "biliimg.com")):
+            return url
+
+        # @ 尺寸参数必须接在路径末尾、查询串之前
+        path_part, sep, query = url.partition("?")
+        if not any(path_part.lower().endswith(ext) for ext in (".jpg", ".jpeg", ".png", ".webp", ".gif")):
+            return url
+
+        return f"{path_part}@{width}w_{quality}q.jpg{sep}{query}"
+
     @classmethod
     def _dedupe_image_urls(cls, image_urls: list[str]) -> list[str]:
         seen = set()
@@ -706,9 +736,11 @@ class BiliDynamicService:
 
         media_headers = self.parser.headers.copy()
         media_headers["Referer"] = f"https://www.bilibili.com/opus/{dynamic_id}"
+        # 限制单图尺寸/体积，避免 10+ 张高清原图合并转发时撑爆 NapCat 上传超时
+        capped_image_urls = [self.cap_bili_image_url(u) for u in image_urls]
         full_images: list[MediaContent] = (
-            self.parser.create_image_contents(image_urls, ext_headers=media_headers)
-            if image_urls
+            self.parser.create_image_contents(capped_image_urls, ext_headers=media_headers)
+            if capped_image_urls
             else []
         )
 
