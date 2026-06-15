@@ -1,4 +1,6 @@
+import asyncio
 import re
+import time
 from typing import TYPE_CHECKING, ClassVar
 from urllib.parse import parse_qs, urlparse
 
@@ -232,6 +234,7 @@ class DouyinParser(BaseParser):
         short_url = f"https://{searched.group(0)}"
 
         # HEAD 优先（不下载正文），失败再退回完整 GET 跟随重定向。
+        _t0 = time.monotonic()
         final_url = await self._resolve_final_url_by_head(short_url)
         if not final_url:
             final_url = await self.get_final_url(
@@ -239,6 +242,15 @@ class DouyinParser(BaseParser):
                 headers=self.ios_headers,
                 timeout=8,
                 retries=1,
+            )
+            logger.debug(
+                f"[Douyin][计时] 短链解析(HEAD失败→GET兜底) "
+                f"{time.monotonic() - _t0:.2f}s → {final_url}"
+            )
+        else:
+            logger.debug(
+                f"[Douyin][计时] 短链解析(HEAD) "
+                f"{time.monotonic() - _t0:.2f}s → {final_url}"
             )
 
         if self._is_live_url(final_url):
@@ -289,43 +301,43 @@ class DouyinParser(BaseParser):
         if ty == "slides":
             return await self.parse_slides(vid)
 
-        last_err: Exception | None = None
-
-        # 移动端分享域名(m / iesdouyin)更稳定，优先；www.douyin.com 反爬较重，
-        # 降为最后兜底。串行尝试：m 通常一次即成功，避免并发请求挤占共享 session。
-        # 提速点仅保留单域名超时 20s → 8s（见 _fetch_router_resp 默认 timeout）。
-        for url in (
-            self._build_m_douyin_url(ty, vid),
-            self._build_iesdouyin_url(ty, vid),
-            f"https://www.douyin.com/{ty}/{vid}",
-        ):
-            try:
-                return await self.parse_video(url, vid)
-            except SkipParseException:
-                raise
-            except Exception as e:
-                last_err = e
-
-        logger.warning(f"[Douyin] 直连解析失败，切换 ytdlp 兜底: {last_err}")
-        return await self._parse_with_ytdlp(vid)
+        # 移动端分享域名(m / iesdouyin)更稳定，www.douyin.com 反爬较重。
+        # 以前是串行逐个尝试，m 慢或失败就要等满单域名超时(8s)才试下一个，
+        # 最坏可累计 ~24s。现改为三域名并发竞速：谁先成功用谁、取消其余，
+        # 总耗时≈最快可用域名的单次耗时。
+        try:
+            return await self._race_parse_video(
+                [
+                    self._build_m_douyin_url(ty, vid),
+                    self._build_iesdouyin_url(ty, vid),
+                    f"https://www.douyin.com/{ty}/{vid}",
+                ],
+                vid,
+            )
+        except SkipParseException:
+            raise
+        except Exception as last_err:
+            logger.warning(f"[Douyin] 直连解析失败，切换 ytdlp 兜底: {last_err}")
+            return await self._parse_with_ytdlp(vid)
 
     async def _parse_by_id_fallback(self, vid: str):
-        last_err: Exception | None = None
+        # video / note 两种类型 × m / iesdouyin 两个域名，共 4 个候选。
+        # 旧实现 4 个串行 await，最坏累计 ~32s；改为全部并发竞速。
+        candidates = [
+            self._build_m_douyin_url(ty, vid)
+            for ty in ("video", "note")
+        ] + [
+            self._build_iesdouyin_url(ty, vid)
+            for ty in ("video", "note")
+        ]
 
-        for ty in ("video", "note"):
-            for url in (
-                self._build_m_douyin_url(ty, vid),
-                self._build_iesdouyin_url(ty, vid),
-            ):
-                try:
-                    return await self.parse_video(url, vid)
-                except SkipParseException:
-                    raise
-                except Exception as e:
-                    last_err = e
-
-        logger.warning(f"[Douyin] _parse_by_id_fallback 失败，切换 ytdlp: {last_err}")
-        return await self._parse_with_ytdlp(vid)
+        try:
+            return await self._race_parse_video(candidates, vid)
+        except SkipParseException:
+            raise
+        except Exception as last_err:
+            logger.warning(f"[Douyin] _parse_by_id_fallback 失败，切换 ytdlp: {last_err}")
+            return await self._parse_with_ytdlp(vid)
 
     async def _fetch_router_resp(self, url: str, timeout: int = 8):
         """
@@ -351,6 +363,68 @@ class DouyinParser(BaseParser):
             raise SkipParseException()
 
         return resp
+
+    async def _race_parse_video(self, urls: list[str], vid: str):
+        """
+        多域名并发竞速解析：同时向所有候选分享域名发起抓取，
+        谁先成功就用谁，立即取消其余在途请求。
+
+        这是抖音解析提速的关键点：旧实现是串行 for 循环逐个 await，
+        m.douyin 一旦慢/失败就要等满单域名超时(8s)才试下一个，最坏
+        3 个域名串行可累计 ~24s。改为并发后总耗时≈最快可用域名的单次耗时。
+
+        语义保持与原串行版本一致：
+        - 任一域名抛 SkipParseException(直播等) → 立即上抛，不再等其它；
+        - 全部失败 → 抛出最后一个非 Skip 异常，交由上层走 ytdlp 兜底。
+        """
+        urls = [u for u in urls if u]
+        if not urls:
+            raise ParseException("没有可用的抖音解析域名")
+
+        _start = time.monotonic()
+
+        tasks = [
+            asyncio.create_task(self.parse_video(url, vid), name=f"douyin_parse:{url}")
+            for url in urls
+        ]
+        pending = set(tasks)
+        last_err: Exception | None = None
+        result = None
+
+        try:
+            while pending:
+                done, pending = await asyncio.wait(
+                    pending, return_when=asyncio.FIRST_COMPLETED
+                )
+                for task in done:
+                    try:
+                        result = task.result()
+                    except SkipParseException:
+                        # 直播等场景：语义上应直接跳过，不再尝试其它域名。
+                        raise
+                    except Exception as e:
+                        last_err = e
+                        continue
+
+                    if result is not None:
+                        logger.debug(
+                            f"[Douyin][计时] 并发解析成功 {task.get_name()} "
+                            f"/ {time.monotonic() - _start:.2f}s"
+                        )
+                        return result
+        finally:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            # 回收已取消任务，避免 "Task was destroyed but it is pending" 噪声。
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+        logger.debug(
+            f"[Douyin][计时] 并发解析全部失败 / {time.monotonic() - _start:.2f}s"
+        )
+        if last_err:
+            raise last_err
+        raise ParseException("抖音多域名解析均失败")
 
     async def parse_video(self, url: str, vid: str):
         resp = await self._fetch_router_resp(url)
