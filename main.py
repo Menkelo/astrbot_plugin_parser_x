@@ -441,7 +441,7 @@ class ParserPlugin(Star):
                 or self._looks_like_live_share(text)
             )
 
-        if keyword == "xhslink.com":
+        if keyword in {"xhslink.com", "xhslink.cn"}:
             return (
                 "livestream" in low_text
                 or ("小红书" in text and self._looks_like_live_share(text))

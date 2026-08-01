@@ -372,7 +372,7 @@ def _json_url_priority(url: str) -> int | None:
         or "iesdouyin.com/" in low
     ):
         return 10
-    if "xhslink.com/" in low or "xiaohongshu.com/" in low:
+    if "xhslink.com/" in low or "xhslink.cn/" in low or "xiaohongshu.com/" in low:
         return 11
     if (
         "v.kuaishou.com/" in low
@@ -447,9 +447,9 @@ def extract_json_url(data: dict | str) -> str | None:
 
 def _recursive_find_xhs_url(obj: Any) -> str | None:
     if isinstance(obj, str):
-        if "xhslink.com" in obj or "xiaohongshu.com" in obj:
+        if "xhslink.com" in obj or "xhslink.cn" in obj or "xiaohongshu.com" in obj:
             if m := re.search(
-                r'https?://[a-zA-Z0-9./?=&_%#@:-]*(?:xhslink\.com|xiaohongshu\.com)[a-zA-Z0-9./?=&_%#@:-]*',
+                r'https?://[a-zA-Z0-9./?=&_%#@:-]*(?:xhslink\.com|xhslink\.cn|xiaohongshu\.com)[a-zA-Z0-9./?=&_%#@:-]*',
                 obj,
             ):
                 return m.group(0)

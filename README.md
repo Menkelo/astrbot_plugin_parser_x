@@ -55,7 +55,7 @@
 
 ### 小红书
 
-- 支持 `xhslink.com`、`xiaohongshu.com/explore`、`discovery/item` 等常见链接。
+- 支持 `xhslink.com`、`xhslink.cn`、`xiaohongshu.com/explore`、`discovery/item` 等常见链接。
 - 支持视频、图片、图文笔记解析。
 - 直播分享会被跳过。
 - live 图目前按静态图片发送。
