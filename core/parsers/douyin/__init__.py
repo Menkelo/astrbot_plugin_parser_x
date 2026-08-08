@@ -223,6 +223,11 @@ class DouyinParser(BaseParser):
         text = str(error).lower()
         return "fresh cookies" in text and "needed" in text
 
+    @staticmethod
+    def _is_cookie_error(error: Exception) -> bool:
+        text = str(error).lower()
+        return any(kw in text for kw in ("cookie", "douyin_ck", "fresh cookies"))
+
     async def _resolve_final_url_by_head(self, url: str) -> str | None:
         """
         抖音短链只需要最终落点。优先用 HEAD 跟随跳转，避免像 get_final_url
@@ -296,6 +301,8 @@ class DouyinParser(BaseParser):
             except Exception as e:
                 if self._looks_like_daily_share_url(final_url) and self._is_fresh_cookies_error(e):
                     return self._unsupported_daily_result()
+                if self._is_cookie_error(e):
+                    raise ParseException("未配置抖音 cookie (douyin_ck)，无法解析")
                 raise ParseException(f"短链解析失败，ID兜底失败: {e} | 最终链接: {final_url}")
 
         raise ParseException(f"短链解析失败，无法识别最终链接: {final_url}")
@@ -657,10 +664,14 @@ class DouyinParser(BaseParser):
         )
 
     async def _parse_with_ytdlp(self, vid: str):
+        if not self.cookies:
+            raise ParseException("未配置抖音 cookie (douyin_ck)")
+
         url = f"https://www.douyin.com/video/{vid}"
+        cookiefile = self._cookiefile
 
         try:
-            info = await self.downloader.ytdlp_extract_info(url)
+            info = await self.downloader.ytdlp_extract_info(url, cookiefile)
         except Exception as e:
             if self._looks_like_daily_share_url(self.source_text) and self._is_fresh_cookies_error(e):
                 return self._unsupported_daily_result()
@@ -673,6 +684,7 @@ class DouyinParser(BaseParser):
                 url,
                 use_ytdlp=True,
                 video_name=f"douyin_{vid}.mp4",
+                cookiefile=cookiefile,
             )
             contents.append(
                 self.create_video_content(
