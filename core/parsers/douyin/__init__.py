@@ -462,40 +462,55 @@ class DouyinParser(BaseParser):
         """
         抖音分享页 SSR 改版后不再内嵌 aweme 数据，回退到 detail API。
         需要 PC UA + Referer + Cookie。
+
+        图文作品(notes)在默认参数下会被 filter_reason="images_base" 过滤，
+        加 aid=6383 可绕过该过滤，返回完整图文数据。
         """
         if not self.cookies:
             raise ParseException("detail API 需要 cookie，但未配置 douyin_ck")
 
-        url = "https://www.douyin.com/aweme/v1/web/aweme/detail/"
-        params = {"aweme_id": vid}
-        headers = {
+        base_headers = {
             "User-Agent": self.headers.get("User-Agent", ""),
             "Referer": "https://www.douyin.com/",
             "Cookie": self.cookies,
         }
 
-        resp = await self.http_get(
-            url,
-            params=params,
-            headers=headers,
-            allow_redirects=True,
-            timeout=10,
-            retries=1,
-        )
+        # 先用默认参数；图文被过滤时带 aid=6383 重试
+        for params in (
+            {"aweme_id": vid},
+            {"aweme_id": vid, "aid": "6383"},
+        ):
+            resp = await self.http_get(
+                "https://www.douyin.com/aweme/v1/web/aweme/detail/",
+                params=params,
+                headers=base_headers,
+                allow_redirects=True,
+                timeout=10,
+                retries=1,
+            )
 
-        if resp.status_code != 200:
-            raise ParseException(f"detail API 请求失败 Status: {resp.status_code}")
+            if resp.status_code != 200:
+                continue
 
-        try:
-            data = msgspec.json.decode(resp.text)
-        except Exception as e:
-            raise ParseException(f"detail API JSON 解析失败: {e}")
+            try:
+                data = msgspec.json.decode(resp.text)
+            except Exception as e:
+                raise ParseException(f"detail API JSON 解析失败: {e}")
 
-        aweme = data.get("aweme_detail") if isinstance(data, dict) else None
-        if not aweme or not isinstance(aweme, dict):
-            raise ParseException("detail API 未返回 aweme_detail")
+            aweme = data.get("aweme_detail") if isinstance(data, dict) else None
+            if aweme and isinstance(aweme, dict):
+                return self._build_result_from_aweme(aweme, vid)
 
-        return self._build_result_from_aweme(aweme, vid)
+            filter_reason = ""
+            fd = data.get("filter_detail") if isinstance(data, dict) else None
+            if isinstance(fd, dict):
+                filter_reason = fd.get("filter_reason") or ""
+
+            if "images" not in filter_reason:
+                # 不是图文过滤导致的空，没必要再试 aid=6383
+                raise ParseException("detail API 未返回 aweme_detail")
+
+        raise ParseException("detail API 未返回 aweme_detail (图文过滤已绕过仍为空)")
 
     def _process_router_resp(self, resp, vid: str):
         from .video import VideoData, recursive_collect_videos
