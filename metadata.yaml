@@ -1,7 +1,7 @@
 name: astrbot_plugin_r_parser
 display_name: R-Parser
 desc: 一个面向B站、抖音、快手、微博、小红书的解析插件
-version: 1.4.8
+version: 1.4.9
 author: Menkelo
 support_platforms:
   - aiocqhttp

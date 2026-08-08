@@ -1,6 +1,7 @@
 import asyncio
 import re
 import time
+from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar
 from urllib.parse import parse_qs, urlparse
 
@@ -9,6 +10,7 @@ from astrbot.api import logger
 from astrbot.core.config.astrbot_config import AstrBotConfig
 
 from ...download import Downloader
+from ...utils import cookies_str_to_netscape
 from ..base import BaseParser, ParseException, Platform, SkipParseException, handle
 from .extractor import (
     extract_id_from_query,
@@ -29,18 +31,38 @@ class DouyinParser(BaseParser):
         super().__init__(config, downloader)
 
         self.cookies = ""
+        self._cookiefile: Path | None = None
         ck_conf = config.get("cookies", {})
         if isinstance(ck_conf, dict):
             self.cookies = ck_conf.get("douyin_ck", "")
 
         if self.cookies:
             self._set_cookies(self.cookies)
+            self._cookiefile = self._write_cookiefile(self.cookies)
 
     def _set_cookies(self, cookies: str):
         cleaned = cookies.replace("\n", "").replace("\r", "").strip()
         if cleaned:
             self.ios_headers["Cookie"] = cleaned
             self.android_headers["Cookie"] = cleaned
+
+    def _write_cookiefile(self, cookies: str) -> Path | None:
+        """
+        将用户配置的 douyin_ck 写成 yt-dlp 可读的 Netscape cookiefile，
+        供 _parse_with_ytdlp 兜底时传给 ytdlp_extract_info / download_video。
+        """
+        if not cookies:
+            return None
+        try:
+            path = self.cache_dir / "douyin_cookies.txt"
+            path.write_text(
+                cookies_str_to_netscape(cookies),
+                encoding="utf-8",
+            )
+            return path
+        except Exception as e:
+            logger.warning(f"[Douyin] cookie 文件写入失败: {e}")
+            return None
 
     @staticmethod
     def _build_iesdouyin_url(ty: str, vid: str) -> str:
@@ -428,7 +450,52 @@ class DouyinParser(BaseParser):
 
     async def parse_video(self, url: str, vid: str):
         resp = await self._fetch_router_resp(url)
-        return self._process_router_resp(resp, vid)
+        try:
+            return self._process_router_resp(resp, vid)
+        except ParseException as e:
+            if "未找到 aweme 数据" in str(e):
+                logger.debug(f"[Douyin] SSR 无数据，回退 detail API: {vid}")
+                return await self._parse_via_detail_api(vid)
+            raise
+
+    async def _parse_via_detail_api(self, vid: str):
+        """
+        抖音分享页 SSR 改版后不再内嵌 aweme 数据，回退到 detail API。
+        需要 PC UA + Referer + Cookie。
+        """
+        if not self.cookies:
+            raise ParseException("detail API 需要 cookie，但未配置 douyin_ck")
+
+        url = "https://www.douyin.com/aweme/v1/web/aweme/detail/"
+        params = {"aweme_id": vid}
+        headers = {
+            "User-Agent": self.headers.get("User-Agent", ""),
+            "Referer": "https://www.douyin.com/",
+            "Cookie": self.cookies,
+        }
+
+        resp = await self.http_get(
+            url,
+            params=params,
+            headers=headers,
+            allow_redirects=True,
+            timeout=10,
+            retries=1,
+        )
+
+        if resp.status_code != 200:
+            raise ParseException(f"detail API 请求失败 Status: {resp.status_code}")
+
+        try:
+            data = msgspec.json.decode(resp.text)
+        except Exception as e:
+            raise ParseException(f"detail API JSON 解析失败: {e}")
+
+        aweme = data.get("aweme_detail") if isinstance(data, dict) else None
+        if not aweme or not isinstance(aweme, dict):
+            raise ParseException("detail API 未返回 aweme_detail")
+
+        return self._build_result_from_aweme(aweme, vid)
 
     def _process_router_resp(self, resp, vid: str):
         from .video import VideoData, recursive_collect_videos
@@ -439,6 +506,12 @@ class DouyinParser(BaseParser):
             raise ParseException("未找到 aweme 数据")
 
         aweme = pick_primary_aweme(targets, vid)
+        return self._build_result_from_aweme(aweme, vid)
+
+    def _build_result_from_aweme(self, aweme: dict, vid: str):
+        """从单个 aweme dict 构建 ParseResult，SSR 与 detail API 共用。"""
+        from .video import VideoData
+
         meta = msgspec.convert(aweme, VideoData)
 
         contents = []
