@@ -2,9 +2,8 @@ import re
 from html import escape
 from pathlib import Path
 
-from playwright.async_api import async_playwright
-
 from astrbot.api import logger
+from playwright.async_api import async_playwright
 
 RICH_TEXT_RE = re.compile(
     r"(?P<topic>#[^#\s\r\n][^#\r\n]{0,60}?#)"
@@ -75,7 +74,9 @@ class TextCardRenderer:
             f'<div class="author">{escape(author_name)}</div>' if author_name else ""
         )
         time_html = (
-            f'<div class="time">{escape(timestamp_text)}</div>' if timestamp_text else ""
+            f'<div class="time">{escape(timestamp_text)}</div>'
+            if timestamp_text
+            else ""
         )
         title_html = f'<div class="title">{escape(title)}</div>' if title else ""
         text_html = self._render_text_html(text)

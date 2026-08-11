@@ -1,107 +1,103 @@
-# astrbot_plugin_r_parser
+# astrbot_plugin_parser_x
 
-一个给 AstrBot 使用的多平台链接解析插件。它会自动识别消息里的分享链接，提取并发送视频、图片、图文、B站动态、B站评论截图与B站直播卡片。
+Parser X 是面向 AstrBot `aiocqhttp`（OneBot v11）的多平台分享链接解析插件。项目以
+[rconsole-plugin](https://github.com/zhiyu1998/rconsole-plugin) 的平台覆盖和交互习惯为功能基线，
+使用原生 Python 解析器、AstrBot 消息链与 `yt-dlp` 兼容层实现，不依赖 Yunzai 运行时。
 
-## 当前支持
+## 支持范围
 
-- Bilibili
-- 抖音
-- 快手
-- 微博
-- 小红书
+### 原生解析器
 
-## 功能概览
+- Bilibili：视频、分 P、动态/opus、直播卡片、可选评论区卡片。
+- 抖音：视频、图文和图集；短链跳转；Cookie 与 yt-dlp 兜底。
+- 快手：视频、图片和图文作品。
+- 微博：视频、图片与纯文本卡片。
+- 小红书：视频、图片和图文笔记。
 
-- 自动识别常见长链、短链和分享口令里的链接。
-- 自动跳转短链并路由到对应平台解析器。
-- 支持视频、图片、图集、图文作品解析与下载。
-- 支持媒体大小限制、并发下载限制、缓存复用与每日自动清理。
-- 支持 B站评论区截图卡片，可按配置关闭。
-- 支持 B站直播卡片；未开播时只发送 `B站直播间未开播` 提示。
-- 会跳过抖音、快手、小红书等平台的直播分享，避免无效解析响应。
+### yt-dlp 兼容层
 
-## 平台能力
+- TikTok
+- Twitter / X
+- Instagram
+- YouTube
+- AcFun
+- 西瓜视频
+- 皮皮虾
+- 微视
+- 网易云音乐
+- 汽水音乐
 
-### Bilibili
+各平台均可在 AstrBot 插件配置页单独启停。完整的上游功能映射和未移植项见
+[docs/UPSTREAM_COMPATIBILITY.md](docs/UPSTREAM_COMPATIBILITY.md)。
 
-- 支持 BV、AV、b23.tv、bili2233 等常见视频分享链接。
-- 支持分P视频下载。
-- 支持动态/opus 图文卡片渲染，保留标题、作者、时间、平台标签与正文图片。
-- 支持评论区截图卡片，带文本广告与二维码图片过滤。
-- 支持直播间卡片；只有正在直播时渲染卡片，未开播时发送文字提示。
+## 安装
 
-### 抖音
+在 AstrBot WebUI 的插件管理中使用本仓库地址安装：
 
-- 支持 `v.douyin.com`、`jx.douyin.com`、`douyin.com/video`、`douyin.com/note` 等链接。
-- 支持视频作品解析与下载。
-- 支持图文、图集、slides 静态图片解析。
-- 直播链接会被跳过。
-- 限时日常分享会提示 `无法解析抖音限时日常内容`。
-- 图文里的 live photo / 动态图目前按静态图片发送。
+```text
+https://github.com/Menkelo/astrbot_plugin_parser_x
+```
 
-### 快手
+运行环境还应提供：
 
-- 支持常见分享短链与作品页。
-- 支持视频、图片、图文内容解析。
-- 直播分享会被跳过。
+- `ffmpeg`：音视频合并、格式转换和 H.264 发送兜底。
+- Playwright Chromium：动态、评论、直播和纯文本卡片渲染。
 
-### 微博
+如 AstrBot 没有自动安装浏览器，可在 AstrBot 的 Python 环境中执行：
 
-- 支持微博正文链接与移动端详情页。
-- 支持视频和图片内容解析。
-- 有图片或视频时直接发送媒体，不额外渲染正文卡片。
-- 只有纯文本微博才会渲染成图片卡片。
-- 正文中的话题、@用户与链接会按微博样式高亮。
+```bash
+playwright install chromium
+```
 
-### 小红书
+## 使用
 
-- 支持 `xhslink.com`、`xhslink.cn`、`xiaohongshu.com/explore`、`discovery/item` 等常见链接。
-- 支持视频、图片、图文笔记解析。
-- 直播分享会被跳过。
-- live 图目前按静态图片发送。
+直接在 QQ 群聊或私聊发送支持平台的分享链接。插件不会处理 AstrBot 指令消息，也会忽略
+非 B站平台的直播分享。
 
-## 配置项
+会话管理命令：
 
-插件配置来自 AstrBot 的插件配置面板，主要可调项如下：
+- `/开启解析`
+- `/关闭解析`
+- `/解析状态`
 
-- `disabled_sessions`：关闭解析的会话列表，也可以用会话内命令开关。
-- `bili_comment`：是否在解析 B站视频时额外生成评论区截图卡片。
-- `performance.max_concurrent_downloads`：最大并发下载数。
-- `performance.source_max_size`：允许下载的媒体最大体积，单位 MB。
-- `performance.video_codec`：B站视频流编码偏好，可选 `auto`、`hevc`、`avc`。
-- `cookies.douyin_ck`：抖音 Cookie，用于提升解析稳定性。
-- `cookies.bili_ck`：B站 Cookie，用于提升接口稳定性和可访问性。
+## 配置重点
 
-缓存目录会在每天 00:00 自动清理，默认只保留 24 小时内的缓存文件。
+- `platforms.*`：逐个平台启停。
+- `performance.max_concurrent_downloads`：下载并发上限。
+- `performance.source_max_size`：单个媒体的最大体积（MB）。
+- `performance.video_codec`：B站编码偏好。
+- `cookies.douyin_ck`、`cookies.bili_ck`：原生解析器 Cookie。
+- `cookies.ytdlp_cookie_file`：Netscape 格式 Cookie 文件，用于需要登录的平台。
+- `bili_comment`：是否发送 B站评论区卡片。
 
-## 依赖
+缓存只写入 AstrBot 官方约定的 `data/plugin_data/astrbot_plugin_parser_x/`，默认每天清理一次。
 
-Python 依赖见 `requirements.txt`。
+## 上游兼容维护
 
-额外建议：
+仓库记录了上游 commit 和功能映射。检查是否有上游更新：
 
-- 系统可执行 `ffmpeg`，用于音视频合并、转码和部分平台下载兜底。
-- 安装 Playwright 浏览器依赖，用于渲染动态卡片、评论卡片、直播卡片和纯文本卡片。
-- `opencv-python` 与 `numpy` 用于 B站评论区二维码图片过滤。
+```bash
+python tools/check_upstream.py
+```
 
-## 常见问题
+定时 GitHub Actions 也会执行同一检查。发现漂移后，按
+[docs/UPSTREAM_SYNC.md](docs/UPSTREAM_SYNC.md) 的流程更新兼容矩阵、实现和测试，最后再修改
+`upstream/manifest.json` 中的 commit。这样可以区分“上游有更新”和“本插件已完成兼容”两个状态，
+避免盲目覆盖本地适配层。
 
-### 为什么动态图只发成静态图？
+## 开发与检查
 
-抖音、小红书、B站图文里的 live photo / 动态图音频与直链稳定性都不理想。当前版本统一回退为静态图片，优先保证解析速度和发送成功率。
+```bash
+python -m compileall -q .
+python -m pytest
+ruff check .
+ruff format --check .
+```
 
-### 为什么某些直播链接没有响应？
+项目只声明支持 `aiocqhttp`。OneBot 合并转发、文件与媒体发送均使用 AstrBot 当前公开组件，
+必要时通过 `AiocqhttpMessageEvent` 调用协议端能力。
 
-除 B站直播间外，其他平台直播分享会被主动跳过，避免触发无意义的解析失败提示。B站直播间未开播时只发送 `B站直播间未开播`。
+## 许可与声明
 
-### 为什么 B站评论区没有出现？
-
-先确认配置项 `bili_comment` 是否开启。评论接口被风控、内容为空、渲染失败或过滤后没有可展示内容时，插件会跳过评论卡片，不影响视频本体发送。
-
-### 为什么视频下载失败或体积超限？
-
-检查 `performance.source_max_size` 是否过小，并确认系统能执行 `ffmpeg -version`。部分平台也可能需要配置对应 Cookie。
-
-## 说明
-
-本插件仅用于学习交流和个人合法合规的内容处理。请遵守目标平台用户协议、版权要求及所在地法律法规。
+本项目以 MIT License 发布。上游和参考实现的许可、来源与用途说明见
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。请遵守目标平台协议、版权要求及所在地法律法规。

@@ -6,11 +6,11 @@ import json
 import mimetypes
 import re
 import shutil
-from collections.abc import Awaitable, Callable, MutableMapping
 from collections import OrderedDict
+from collections.abc import Awaitable, Callable, MutableMapping
+from html import unescape
 from pathlib import Path
 from typing import Any, TypeVar
-from html import unescape
 from urllib.parse import parse_qsl, unquote, urlparse
 
 from astrbot.api import logger
@@ -82,7 +82,9 @@ async def image_to_data_uri(
         if not content or len(content) > max_bytes:
             return None
 
-        content_type = (resp.headers.get("Content-Type", "") or "").split(";", 1)[0].strip()
+        content_type = (
+            (resp.headers.get("Content-Type", "") or "").split(";", 1)[0].strip()
+        )
         if not content_type.lower().startswith("image/"):
             guessed, _ = mimetypes.guess_type(urlparse(url).path)
             content_type = guessed or "image/jpeg"
@@ -477,7 +479,7 @@ def _recursive_find_xhs_url(obj: Any) -> str | None:
     if isinstance(obj, str):
         if "xhslink.com" in obj or "xhslink.cn" in obj or "xiaohongshu.com" in obj:
             if m := re.search(
-                r'https?://[a-zA-Z0-9./?=&_%#@:-]*(?:xhslink\.com|xhslink\.cn|xiaohongshu\.com)[a-zA-Z0-9./?=&_%#@:-]*',
+                r"https?://[a-zA-Z0-9./?=&_%#@:-]*(?:xhslink\.com|xhslink\.cn|xiaohongshu\.com)[a-zA-Z0-9./?=&_%#@:-]*",
                 obj,
             ):
                 return m.group(0)

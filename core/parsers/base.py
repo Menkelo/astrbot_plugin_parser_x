@@ -10,11 +10,10 @@ from re import Match, Pattern, compile
 from typing import Any, ClassVar, TypeVar
 
 import aiohttp
-from curl_cffi.requests import AsyncSession
-from typing_extensions import Unpack
-
 from astrbot.api import logger
 from astrbot.core.config.astrbot_config import AstrBotConfig
+from curl_cffi.requests import AsyncSession
+from typing_extensions import Unpack
 
 from ..constants import ANDROID_HEADER, COMMON_HEADER, IOS_HEADER
 from ..data import (
@@ -38,6 +37,15 @@ HandlerFunc = Callable[[T, Match[str]], Coroutine[Any, Any, ParseResult]]
 KeyPatterns = list[tuple[str, Pattern[str]]]
 
 _PARSER_META = "_parser_meta"
+
+__all__ = [
+    "BaseParser",
+    "ParseException",
+    "SkipParseException",
+    "Platform",
+    "Downloader",
+    "handle",
+]
 
 
 class HttpResponseAdapter:
@@ -116,13 +124,24 @@ class BaseParser:
         super().__init_subclass__(**kwargs)
 
         if ABC not in cls.__bases__:
+            identity = (cls.__module__, cls.__qualname__)
+            BaseParser._registry = [
+                item
+                for item in BaseParser._registry
+                if (item.__module__, item.__qualname__) != identity
+            ]
             BaseParser._registry.append(cls)
 
         cls._dispatch_map = {}
         cls._key_patterns = []
 
         for attr_name in dir(cls):
-            attr = getattr(cls, attr_name)
+            try:
+                attr = getattr(cls, attr_name)
+            except AttributeError:
+                # ABCMeta exposes a few descriptors before it has finished
+                # calculating abstract methods during class creation.
+                continue
             if callable(attr) and hasattr(attr, _PARSER_META):
                 meta = getattr(attr, _PARSER_META)
                 for keyword, pattern in meta:
@@ -133,7 +152,7 @@ class BaseParser:
 
     @classmethod
     def get_all_subclass(cls) -> list[type["BaseParser"]]:
-        return cls._registry
+        return list(cls._registry)
 
     @property
     def client(self) -> AsyncSession:
@@ -280,7 +299,9 @@ class BaseParser:
         finally:
             await conn.close()
 
-        raise ParseException(f"HTTP GET失败(curl+aiohttp): {last_aio_err or last_curl_err}")
+        raise ParseException(
+            f"HTTP GET失败(curl+aiohttp): {last_aio_err or last_curl_err}"
+        )
 
     async def get_redirect_url(
         self,
@@ -360,7 +381,9 @@ class BaseParser:
         """
         avatar = None
 
-        if avatar_url and self._as_bool(self.config.get("download_author_avatar", False), False):
+        if avatar_url and self._as_bool(
+            self.config.get("download_author_avatar", False), False
+        ):
             avatar = self.downloader.download_img(
                 avatar_url,
                 ext_headers=ext_headers or self.headers,
@@ -382,7 +405,9 @@ class BaseParser:
             )
 
         cover_task = None
-        if cover_url and self._as_bool(self.config.get("download_video_cover", False), False):
+        if cover_url and self._as_bool(
+            self.config.get("download_video_cover", False), False
+        ):
             cover_task = self.downloader.download_img(
                 cover_url,
                 ext_headers=ext_headers or self.headers,

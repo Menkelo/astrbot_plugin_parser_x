@@ -1,16 +1,11 @@
-import nest_asyncio
-nest_asyncio.apply()
-
 import asyncio
 import hashlib
 import re
 from pathlib import Path
 
-from astrbot.api import logger
-from astrbot.api.event import filter
-from astrbot.api.star import Context, Star, StarTools
-from astrbot.core import AstrBotConfig
-from astrbot.core.message.components import (
+from astrbot.api import AstrBotConfig, logger
+from astrbot.api.event import AstrMessageEvent, filter
+from astrbot.api.message_components import (
     At,
     BaseMessageComponent,
     File,
@@ -22,7 +17,7 @@ from astrbot.core.message.components import (
     Record,
     Video,
 )
-from astrbot.core.platform.astr_message_event import AstrMessageEvent
+from astrbot.api.star import Context, Star, StarTools
 from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import (
     AiocqhttpMessageEvent,
 )
@@ -44,22 +39,24 @@ from .core.exception import (
     DownloadException,
     DownloadLimitException,
     ParseException,
-    SkipParseException,
     SizeLimitException,
+    SkipParseException,
     ZeroSizeException,
 )
 from .core.parsers import BaseParser
 from .core.text_renderer import TextCardRenderer
-from .core.utils import extract_json_url, exec_ffmpeg_cmd
+from .core.utils import exec_ffmpeg_cmd, extract_json_url
+
+PLUGIN_NAME = "astrbot_plugin_parser_x"
 
 
-class ParserPlugin(Star):
+class ParserXPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
         self.context = context
         self.config = config
 
-        self.data_dir: Path = StarTools.get_data_dir("astrbot_plugin_r_parser")
+        self.data_dir: Path = StarTools.get_data_dir(PLUGIN_NAME)
         config["data_dir"] = str(self.data_dir)
         self.cache_dir: Path = self.data_dir / "cache_dir"
         self.cache_dir.mkdir(parents=True, exist_ok=True)
@@ -90,26 +87,40 @@ class ParserPlugin(Star):
         all_subclass = BaseParser.get_all_subclass()
         platform_names = []
         for _cls in all_subclass:
+            platform_name = _cls.platform.name
+            if not self._platform_enabled(platform_name):
+                logger.info(f"Parser X 已禁用平台: {_cls.platform.display_name}")
+                continue
             parser = _cls(self.config, self.downloader)
             platform_names.append(parser.platform.display_name)
             for keyword, _ in _cls._key_patterns:
                 self.parser_map[keyword] = parser
 
-        logger.info(f"已加载平台: {'、'.join(platform_names)}")
+        logger.info(f"Parser X 已加载平台: {'、'.join(platform_names) or '无'}")
 
         patterns: list[tuple[str, re.Pattern[str]]] = [
             (kw, re.compile(pt) if isinstance(pt, str) else pt)
             for cls in all_subclass
+            if self._platform_enabled(cls.platform.name)
             for kw, pt in cls._key_patterns
         ]
         patterns.sort(key=lambda x: -len(x[0]))
         self.key_pattern_list = patterns
 
+    def _platform_enabled(self, platform_name: str) -> bool:
+        platforms = self.config.get("platforms", {})
+        value = platforms.get(platform_name, True)
+        if isinstance(value, str):
+            return value.strip().lower() not in {"0", "false", "off", "no"}
+        return bool(value)
+
     # endregion
 
     # region 核心逻辑 (Download / Convert / Send)
 
-    async def _download_content(self, cont: MediaContent) -> tuple[MediaContent, Path | None, str | None]:
+    async def _download_content(
+        self, cont: MediaContent
+    ) -> tuple[MediaContent, Path | None, str | None]:
         try:
             path = await cont.get_path()
             return cont, path, None
@@ -125,7 +136,9 @@ class ParserPlugin(Star):
             logger.error(f"下载未知错误: {e}")
             return cont, None, "[下载错误]"
 
-    def _convert_to_seg(self, cont: MediaContent, path: Path) -> BaseMessageComponent | None:
+    def _convert_to_seg(
+        self, cont: MediaContent, path: Path
+    ) -> BaseMessageComponent | None:
         match cont:
             case ImageContent():
                 return Image(str(path))
@@ -205,19 +218,32 @@ class ParserPlugin(Star):
 
     async def _transcode_to_h264(self, input_path: Path) -> Path:
         output_path = input_path.with_name(f"{input_path.stem}_h264.mp4")
-        logger.info(f"正在转码视频为 H.264 (极速模式): {input_path.name} -> {output_path.name}")
+        logger.info(
+            f"正在转码视频为 H.264 (极速模式): {input_path.name} -> {output_path.name}"
+        )
         cmd = [
-            "ffmpeg", "-y",
-            "-i", str(input_path),
-            "-c:v", "libx264",
-            "-preset", "superfast",
-            "-tune", "zerolatency",
-            "-crf", "28",
-            "-vf", "scale='min(1280,iw)':-2",
-            "-maxrate", "1.5M",
-            "-bufsize", "3M",
-            "-c:a", "aac",
-            "-b:a", "128k",
+            "ffmpeg",
+            "-y",
+            "-i",
+            str(input_path),
+            "-c:v",
+            "libx264",
+            "-preset",
+            "superfast",
+            "-tune",
+            "zerolatency",
+            "-crf",
+            "28",
+            "-vf",
+            "scale='min(1280,iw)':-2",
+            "-maxrate",
+            "1.5M",
+            "-bufsize",
+            "3M",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "128k",
             str(output_path),
         ]
         await exec_ffmpeg_cmd(cmd)
@@ -234,7 +260,9 @@ class ParserPlugin(Star):
                 if result.extra.get("plain_text_only"):
                     text = (result.text or "").strip()
                     if text:
-                        await event.send(event.plain_result(text.replace("@", "@\u200b")))
+                        await event.send(
+                            event.plain_result(text.replace("@", "@\u200b"))
+                        )
                     return
 
                 try:
@@ -242,7 +270,9 @@ class ParserPlugin(Star):
                 except Exception as e:
                     logger.warning(f"text-only render failed: {e}")
                     if result.text and result.text.strip():
-                        await event.send(event.plain_result(self._format_text_fallback(result)))
+                        await event.send(
+                            event.plain_result(self._format_text_fallback(result))
+                        )
                     return
 
                 if not result.contents:
@@ -278,15 +308,21 @@ class ParserPlugin(Star):
                     await event.send(event.chain_result([seg]))
                 return
 
-            has_video = any(isinstance(c, (VideoContent, DynamicContent)) for c in result.contents)
+            has_video = any(
+                isinstance(c, (VideoContent, DynamicContent)) for c in result.contents
+            )
 
             if has_video:
-                media_count = sum(1 for s in segs if isinstance(s, (Video, Image, File, Record)))
+                media_count = sum(
+                    1 for s in segs if isinstance(s, (Video, Image, File, Record))
+                )
                 if media_count >= 2:
                     try:
                         nodes = Nodes([])
                         for seg in segs:
-                            nodes.nodes.append(Node(uin=node_uin, name=node_name, content=[seg]))
+                            nodes.nodes.append(
+                                Node(uin=node_uin, name=node_name, content=[seg])
+                            )
                         await event.send(event.chain_result([nodes]))
                         return
                     except Exception as e:
@@ -298,15 +334,21 @@ class ParserPlugin(Star):
                     except Exception as e:
                         err_msg = str(e)
                         if isinstance(seg, Video) and (
-                            "rich media" in err_msg or "1200" in err_msg or "Timeout" in err_msg
+                            "rich media" in err_msg
+                            or "1200" in err_msg
+                            or "Timeout" in err_msg
                         ):
-                            logger.warning("视频发送失败(编码不兼容/超时)，尝试转码 H.264 重试...")
+                            logger.warning(
+                                "视频发送失败(编码不兼容/超时)，尝试转码 H.264 重试..."
+                            )
                             path_str = getattr(seg, "file", None)
                             if path_str:
                                 try:
                                     input_path = Path(path_str)
                                     new_path = await self._transcode_to_h264(input_path)
-                                    await event.send(event.chain_result([Video(str(new_path))]))
+                                    await event.send(
+                                        event.chain_result([Video(str(new_path))])
+                                    )
                                     try:
                                         if input_path.exists():
                                             await asyncio.to_thread(input_path.unlink)
@@ -317,7 +359,9 @@ class ParserPlugin(Star):
                                     pass
 
                         await event.send(
-                            event.plain_result(f"⚠️ 媒体发送失败\n🔗 原链接: {result.url or '未知'}")
+                            event.plain_result(
+                                f"⚠️ 媒体发送失败\n🔗 原链接: {result.url or '未知'}"
+                            )
                         )
             else:
                 if len(segs) == 1:
@@ -330,7 +374,9 @@ class ParserPlugin(Star):
                 try:
                     nodes = Nodes([])
                     for seg in segs:
-                        nodes.nodes.append(Node(uin=node_uin, name=node_name, content=[seg]))
+                        nodes.nodes.append(
+                            Node(uin=node_uin, name=node_name, content=[seg])
+                        )
                     if nodes.nodes:
                         await event.send(event.chain_result([nodes]))
                     return
@@ -351,12 +397,14 @@ class ParserPlugin(Star):
             if comment_task is None and callable(comment_task_factory):
                 comment_task = asyncio.create_task(
                     comment_task_factory(),
-                    name="r_parser_comment_build",
+                    name="parser_x_comment_build",
                 )
             if comment_task is not None:
                 try:
                     timeout = float(result.extra.get("comment_timeout", 90))
-                    result.comment_contents = await asyncio.wait_for(comment_task, timeout=timeout)
+                    result.comment_contents = await asyncio.wait_for(
+                        comment_task, timeout=timeout
+                    )
                 except asyncio.TimeoutError:
                     logger.warning("评论区生成超时，已跳过发送")
                     return
@@ -382,19 +430,25 @@ class ParserPlugin(Star):
                 return
 
             nodes = Nodes([])
-            nodes.nodes.append(Node(uin=node_uin, name=node_name, content=[Plain("评论区↓")]))
+            nodes.nodes.append(
+                Node(uin=node_uin, name=node_name, content=[Plain("评论区↓")])
+            )
             for seg in segs:
                 nodes.nodes.append(Node(uin=node_uin, name=node_name, content=[seg]))
             await event.send(event.chain_result([nodes]))
 
-        if result.extra.get("comment_task") is not None or result.extra.get("comment_task_factory") is not None:
+        if (
+            result.extra.get("comment_task") is not None
+            or result.extra.get("comment_task_factory") is not None
+        ):
+
             async def run_comment_content():
                 try:
                     await process_comment_content()
                 except Exception as e:
                     logger.warning(f"评论区后台发送失败: {e}")
 
-            asyncio.create_task(run_comment_content(), name="r_parser_comment_send")
+            asyncio.create_task(run_comment_content(), name="parser_x_comment_send")
 
         await process_main_content()
 
@@ -442,9 +496,8 @@ class ParserPlugin(Star):
             )
 
         if keyword in {"xhslink.com", "xhslink.cn"}:
-            return (
-                "livestream" in low_text
-                or ("小红书" in text and self._looks_like_live_share(text))
+            return "livestream" in low_text or (
+                "小红书" in text and self._looks_like_live_share(text)
             )
 
         if keyword in {"v.douyin", "jx.douyin"}:
@@ -452,10 +505,13 @@ class ParserPlugin(Star):
 
         return False
 
+    @filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP)
     @filter.event_message_type(filter.EventMessageType.ALL)
     async def on_message(self, event: AstrMessageEvent):
+        if not isinstance(event, AiocqhttpMessageEvent):
+            return
         umo = event.unified_msg_origin
-        text = event.message_str.strip()
+        text = (event.message_str or "").strip()
 
         if umo in self.config["disabled_sessions"]:
             return
@@ -463,12 +519,15 @@ class ParserPlugin(Star):
         if not text:
             chain = event.get_messages()
             if chain:
-                seg1 = chain[0]
-                if isinstance(seg1, Json):
+                for segment in chain:
+                    if not isinstance(segment, Json):
+                        continue
                     try:
-                        text = extract_json_url(seg1.data)
+                        text = extract_json_url(segment.data) or ""
                     except Exception:
-                        pass
+                        text = ""
+                    if text:
+                        break
 
         if not text:
             return
@@ -519,7 +578,10 @@ class ParserPlugin(Star):
             # （后者是前者的子串），此前会被解析两次：第一次出视频、第二次失败
             # 又补发一条 ⚠️ 提示。按字符区间去重可避免重复解析/重复发送。
             span = (searched.start(), searched.end())
-            if any(span[0] < a_end and a_start < span[1] for a_start, a_end in accepted_spans):
+            if any(
+                span[0] < a_end and a_start < span[1]
+                for a_start, a_end in accepted_spans
+            ):
                 continue
 
             raw_match = searched.group(0).strip()
@@ -544,6 +606,7 @@ class ParserPlugin(Star):
             except Exception:
                 logger.exception("解析过程中发生未知错误")
 
+    @filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP)
     @filter.command("开启解析")
     async def open_parser(self, event: AstrMessageEvent):
         """开启当前会话的解析"""
@@ -555,6 +618,7 @@ class ParserPlugin(Star):
         else:
             yield event.plain_result("解析已开启，无需重复开启")
 
+    @filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP)
     @filter.command("关闭解析")
     async def close_parser(self, event: AstrMessageEvent):
         """关闭当前会话的解析"""
@@ -565,3 +629,17 @@ class ParserPlugin(Star):
             yield event.plain_result("解析已关闭")
         else:
             yield event.plain_result("解析已关闭，无需重复关闭")
+
+    @filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP)
+    @filter.command("解析状态")
+    async def parser_status(self, event: AstrMessageEvent):
+        """查看 Parser X 当前会话状态与已启用平台。"""
+        enabled = sorted({p.platform.display_name for p in self.parser_map.values()})
+        state = (
+            "关闭"
+            if event.unified_msg_origin in self.config["disabled_sessions"]
+            else "开启"
+        )
+        yield event.plain_result(
+            f"Parser X 当前会话：{state}\n已启用平台：{'、'.join(enabled) or '无'}"
+        )

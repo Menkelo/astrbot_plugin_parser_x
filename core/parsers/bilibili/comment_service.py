@@ -5,23 +5,77 @@ import time
 import urllib.parse
 from pathlib import Path
 
-from msgspec import json as msgjson
-
 from astrbot.api import logger
+from msgspec import json as msgjson
 
 from ...data import ImageContent
 from .comment_renderer import BiliCommentRenderer
 
-
 MIXIN_KEY_ENC_TAB = [
-    46, 47, 18, 2, 53, 8, 23, 32,
-    15, 50, 10, 31, 58, 3, 45, 35,
-    27, 43, 5, 49, 33, 9, 42, 19,
-    29, 28, 14, 39, 12, 38, 41, 13,
-    37, 48, 7, 16, 24, 55, 40, 61,
-    26, 17, 0, 1, 60, 51, 30, 4,
-    22, 25, 54, 21, 56, 59, 6, 63,
-    57, 62, 11, 36, 20, 34, 44, 52,
+    46,
+    47,
+    18,
+    2,
+    53,
+    8,
+    23,
+    32,
+    15,
+    50,
+    10,
+    31,
+    58,
+    3,
+    45,
+    35,
+    27,
+    43,
+    5,
+    49,
+    33,
+    9,
+    42,
+    19,
+    29,
+    28,
+    14,
+    39,
+    12,
+    38,
+    41,
+    13,
+    37,
+    48,
+    7,
+    16,
+    24,
+    55,
+    40,
+    61,
+    26,
+    17,
+    0,
+    1,
+    60,
+    51,
+    30,
+    4,
+    22,
+    25,
+    54,
+    21,
+    56,
+    59,
+    6,
+    63,
+    57,
+    62,
+    11,
+    36,
+    20,
+    34,
+    44,
+    52,
 ]
 
 
@@ -146,7 +200,7 @@ class BiliCommentService:
                 timeout=8,
             )
             data = msgjson.decode(resp.content)
-            wbi_img = ((data.get("data") or {}).get("wbi_img") or {})
+            wbi_img = (data.get("data") or {}).get("wbi_img") or {}
             img_key = self._wbi_key_part(wbi_img.get("img_url"))
             sub_key = self._wbi_key_part(wbi_img.get("sub_url"))
             raw_key = f"{img_key or ''}{sub_key or ''}"
@@ -275,7 +329,9 @@ class BiliCommentService:
                 referer=referer,
             )
             if data.get("code") == 0:
-                return self._normalize_legacy_reply_page(data.get("data") or {}, page_num)
+                return self._normalize_legacy_reply_page(
+                    data.get("data") or {}, page_num
+                )
         except Exception as e:
             logger.debug(f"[Bilibili] 评论 legacy 兜底异常 oid={oid}: {e}")
 
@@ -370,7 +426,11 @@ class BiliCommentService:
 
         for _ in range(max_pages):
             candidate_count = len(strict_list) + len(relaxed_list) + len(fallback_list)
-            if is_end or len(strict_list) >= self.comment_limit or candidate_count >= self.comment_limit:
+            if (
+                is_end
+                or len(strict_list) >= self.comment_limit
+                or candidate_count >= self.comment_limit
+            ):
                 break
 
             try:
@@ -406,18 +466,26 @@ class BiliCommentService:
                     message = self._neutralize_at_text(message)
 
                     pics = content.get("pictures") or []
-                    pic_url = self.parser.norm_bili_img(pics[0].get("img_src")) if pics else None
+                    pic_url = (
+                        self.parser.norm_bili_img(pics[0].get("img_src"))
+                        if pics
+                        else None
+                    )
 
                     if not message and not pic_url:
                         continue
 
-                    if await self._should_skip_comment(message, pic_url, qr_check_counter):
+                    if await self._should_skip_comment(
+                        message, pic_url, qr_check_counter
+                    ):
                         continue
 
                     avatar = self.parser.norm_bili_img(member.get("avatar", "")) or ""
 
                     data_obj = {
-                        "avatar": "" if self._is_bili_default_avatar(avatar) else avatar,
+                        "avatar": ""
+                        if self._is_bili_default_avatar(avatar)
+                        else avatar,
                         "uname": self._neutralize_at_text(member.get("uname", "")),
                         "message": message,
                         "pic": pic_url,
@@ -433,8 +501,13 @@ class BiliCommentService:
                     else:
                         strict_list.append(data_obj)
 
-                    candidate_count = len(strict_list) + len(relaxed_list) + len(fallback_list)
-                    if len(strict_list) >= self.comment_limit or candidate_count >= self.comment_limit:
+                    candidate_count = (
+                        len(strict_list) + len(relaxed_list) + len(fallback_list)
+                    )
+                    if (
+                        len(strict_list) >= self.comment_limit
+                        or candidate_count >= self.comment_limit
+                    ):
                         break
 
             except Exception as e:

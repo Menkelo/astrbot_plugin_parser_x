@@ -1,7 +1,6 @@
 import re
 from urllib.parse import parse_qs, urlparse
 
-
 _IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".webp", ".avif", ".heic")
 _VIDEO_HINTS = (
     ".mp4",
@@ -252,7 +251,9 @@ def extract_static_image_urls_deep(aweme_obj: dict) -> list[str]:
         candidates.extend(_collect_image_urls_from_obj(root, path=(key,), max_depth=8))
 
     if not candidates:
-        candidates.extend(_collect_image_urls_from_obj(aweme_obj, path=("aweme",), max_depth=8))
+        candidates.extend(
+            _collect_image_urls_from_obj(aweme_obj, path=("aweme",), max_depth=8)
+        )
 
     filtered = []
     for url in _dedupe_keep_order(candidates):

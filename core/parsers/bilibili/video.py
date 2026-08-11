@@ -56,18 +56,20 @@ class VideoInfo(Struct):
             page_num = 1
         if page_num > len(self.pages):
             page_num = 1
-        
+
         idx = page_num - 1
         page = self.pages[idx]
-        
+
         # 如果只有 1P，直接用视频标题；如果是多P，拼接分P标题
-        display_title = self.title if len(self.pages) == 1 else f"{self.title} - {page.part}"
-        
+        display_title = (
+            self.title if len(self.pages) == 1 else f"{self.title} - {page.part}"
+        )
+
         return PageInfo(
             index=idx,
             cid=page.cid,
             title=display_title,
             duration=page.duration,
             cover=self.pic,
-            timestamp=self.pubdate
+            timestamp=self.pubdate,
         )

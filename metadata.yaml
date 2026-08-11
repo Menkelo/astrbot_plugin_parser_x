@@ -1,9 +1,14 @@
-name: astrbot_plugin_r_parser
-display_name: R-Parser
-desc: 一个面向B站、抖音、快手、微博、小红书的解析插件
-version: 1.5.0
+name: astrbot_plugin_parser_x
+display_name: Parser X
+short_desc: 面向 OneBot v11 的多平台分享链接解析器
+desc: 基于 rconsole-plugin 功能版图设计的 AstrBot 多平台链接解析插件，采用原生 Python 解析器与 yt-dlp 兼容层。
+version: 0.1.0
 author: Menkelo
 support_platforms:
   - aiocqhttp
-astrbot_version: ">=4.14.0"
-repo: https://github.com/Menkelo/astrbot_plugin_r_parser
+astrbot_version: ">=4.17,<5"
+repo: https://github.com/Menkelo/astrbot_plugin_parser_x
+tags:
+  - parser
+  - onebot
+  - media

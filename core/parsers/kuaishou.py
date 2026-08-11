@@ -1,13 +1,12 @@
-import re
 import asyncio
+import re
 from random import choice
 from typing import ClassVar, TypeAlias
 
 import msgspec
-from msgspec import Struct, field
-
 from astrbot.api import logger
 from astrbot.core.config.astrbot_config import AstrBotConfig
+from msgspec import Struct, field
 
 from ..data import Platform, VideoContent
 from ..download import Downloader
@@ -19,10 +18,12 @@ class KuaiShouParser(BaseParser):
 
     def __init__(self, config: AstrBotConfig, downloader: Downloader):
         super().__init__(config, downloader)
-        self.ios_headers.update({
-            "Referer": "https://v.kuaishou.com/",
-            "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.0.3 Mobile/15E148 Safari/604.1"
-        })
+        self.ios_headers.update(
+            {
+                "Referer": "https://v.kuaishou.com/",
+                "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.0.3 Mobile/15E148 Safari/604.1",
+            }
+        )
 
     @staticmethod
     def _is_live_url(url: str | None) -> bool:
@@ -66,28 +67,25 @@ class KuaiShouParser(BaseParser):
 
         if self._is_live_url(url) or self._source_mentions_live():
             raise SkipParseException()
-        
+
         real_url = None
         last_err = None
-        
+
         for i in range(3):
             try:
                 resp = await self.client.get(
-                    url, 
-                    headers=self.ios_headers, 
-                    allow_redirects=False, 
-                    timeout=30
+                    url, headers=self.ios_headers, allow_redirects=False, timeout=30
                 )
                 if resp.status_code in (301, 302):
                     real_url = resp.headers.get("Location")
                 else:
                     real_url = str(resp.url)
-                
+
                 if real_url:
                     break
             except Exception as e:
                 last_err = e
-                logger.debug(f"[快手] 获取重定向失败 (尝试 {i+1}/3): {e}")
+                logger.debug(f"[快手] 获取重定向失败 (尝试 {i + 1}/3): {e}")
                 await asyncio.sleep(1)
 
         if not real_url:
@@ -124,34 +122,39 @@ class KuaiShouParser(BaseParser):
 
         video_url = None
         if match := re.search(r'"srcNoMark":"(https?://[^"]+)"', response_text):
-            video_url = match.group(1).encode('utf-8').decode('unicode_escape')
+            video_url = match.group(1).encode("utf-8").decode("unicode_escape")
         elif match := re.search(r'"src":"(https?://[^"]+)"', response_text):
-            video_url = match.group(1).encode('utf-8').decode('unicode_escape')
-            
+            video_url = match.group(1).encode("utf-8").decode("unicode_escape")
+
         if video_url:
             title = "快手视频"
             if match := re.search(r'"caption":"([^"]+)"', response_text):
-                try: title = match.group(1).encode('utf-8').decode('unicode_escape')
-                except Exception: pass
-            
+                try:
+                    title = match.group(1).encode("utf-8").decode("unicode_escape")
+                except Exception:
+                    pass
+
             author = "快手用户"
             if match := re.search(r'"userName":"([^"]+)"', response_text):
-                try: author = match.group(1).encode('utf-8').decode('unicode_escape')
-                except Exception: pass
-                
-            # 提纯：手动设置为 None
-            cover = None
-            
-            contents = [VideoContent(
-                self.downloader.download_video(video_url, ext_headers=self.ios_headers),
-                None # cover task
-            )]
-            
+                try:
+                    author = match.group(1).encode("utf-8").decode("unicode_escape")
+                except Exception:
+                    pass
+
+            contents = [
+                VideoContent(
+                    self.downloader.download_video(
+                        video_url, ext_headers=self.ios_headers
+                    ),
+                    None,  # cover task
+                )
+            ]
+
             return self.result(
                 title=title,
                 author=self.create_author(author),
                 contents=contents,
-                url=real_url
+                url=real_url,
             )
 
         raise ParseException("快手解析失败: 未找到视频信息")
@@ -162,7 +165,10 @@ class KuaiShouParser(BaseParser):
             contents.append(
                 # BaseParser 已修改，create_video_content 会自动忽略传入的 cover
                 self.create_video_content(
-                    video_url, photo.cover_url, photo.duration, ext_headers=self.ios_headers
+                    video_url,
+                    photo.cover_url,
+                    photo.duration,
+                    ext_headers=self.ios_headers,
                 )
             )
         if img_urls := photo.img_urls:
@@ -171,7 +177,9 @@ class KuaiShouParser(BaseParser):
             )
         elif single_image_url := photo.single_image_url:
             contents.extend(
-                self.create_image_contents([single_image_url], ext_headers=self.ios_headers)
+                self.create_image_contents(
+                    [single_image_url], ext_headers=self.ios_headers
+                )
             )
 
         author = self.create_author(

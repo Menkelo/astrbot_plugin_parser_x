@@ -1,81 +1,92 @@
 {
-    "disabled_sessions": {
-        "description": "关闭解析的会话",
-        "hint": "在会话中使用命令 “开启解析” 和 “关闭解析” 来设置某会话的解析状态",
-        "type": "list",
-        "default": []
-    },
-    "bili_comment": {
-        "description": "B站评论区",
-        "hint": "开启后解析B站视频时会额外生成评论区截图卡片；关闭后只发送视频内容",
-        "type": "bool",
-        "default": true
-    },
-    "performance": {
-        "description": "性能配置",
-        "type": "object",
-        "items": {
-            "max_concurrent_downloads": {
-                "description": "最大并发下载数",
-                "hint": "类似于 p-queue，限制同时进行的下载任务数量，防止网络拥堵或风控。建议 3-5。",
-                "type": "int",
-                "slider": {
-                    "min": 1,
-                    "max": 20,
-                    "step": 1
-                },
-                "default": 6
-            },
-            "source_max_size": {
-                "description": "资源最大大小",
-                "hint": "允许下载的音视频最大体积，单位 MB",
-                "type": "int",
-                "slider": {
-                    "min": 10,
-                    "max": 500,
-                    "step": 10
-                },
-                "default": 90
-            },
-            "video_codec": {
-                "description": "视频编码选择",
-                "hint": "影响B站视频流选择。auto：智能选择较优编码；hevc：推荐，体积较小，现代设备支持较好；avc：兼容性最好，几乎所有设备可播放，但文件较大。",
-                "type": "string",
-                "options": [
-                    "auto",
-                    "hevc",
-                    "avc"
-                ],
-                "default": "hevc"
-            }
-        }
-    },
-    "cookies": {
-        "description": "Cookie 配置",
-        "type": "object",
-        "items": {
-            "douyin_ck": {
-                "description": "抖音 Cookie",
-                "hint": "抖音网页版 Cookie，用于获取更高画质或解决风控问题 (yt-dlp 兜底必需)",
-                "type": "string",
-                "default": ""
-            },
-            "bili_ck": {
-                "description": "Bilibili Cookies",
-                "hint": "用于B站解析的登录Cookies，留空则使用无登录状态",
-                "type": "string",
-                "default": ""
-            }
-        }
-    },
-    "data_dir": {
-        "description": "数据目录",
-        "type": "string",
-        "invisible": true
-    },
-    "cache_dir": {
-        "description": "缓存目录",
-        "type": "string",
-        "invisible": true
+  "disabled_sessions": {
+    "description": "关闭解析的会话",
+    "hint": "可在会话中使用 /开启解析、/关闭解析 管理",
+    "type": "list",
+    "default": []
+  },
+  "platforms": {
+    "description": "平台开关",
+    "hint": "原生解析器优先；通用平台由 yt-dlp 兼容层处理",
+    "type": "object",
+    "items": {
+      "bilibili": {"description": "Bilibili（原生）", "type": "bool", "default": true},
+      "douyin": {"description": "抖音（原生）", "type": "bool", "default": true},
+      "kuaishou": {"description": "快手（原生）", "type": "bool", "default": true},
+      "weibo": {"description": "微博（原生）", "type": "bool", "default": true},
+      "xiaohongshu": {"description": "小红书（原生）", "type": "bool", "default": true},
+      "tiktok": {"description": "TikTok（yt-dlp）", "type": "bool", "default": true},
+      "twitter": {"description": "Twitter / X（yt-dlp）", "type": "bool", "default": true},
+      "instagram": {"description": "Instagram（yt-dlp）", "type": "bool", "default": true},
+      "youtube": {"description": "YouTube（yt-dlp）", "type": "bool", "default": true},
+      "acfun": {"description": "AcFun（yt-dlp）", "type": "bool", "default": true},
+      "xigua": {"description": "西瓜视频（yt-dlp）", "type": "bool", "default": true},
+      "pipixia": {"description": "皮皮虾（yt-dlp）", "type": "bool", "default": true},
+      "weishi": {"description": "微视（yt-dlp）", "type": "bool", "default": true},
+      "netease_music": {"description": "网易云音乐（yt-dlp）", "type": "bool", "default": true},
+      "qishui_music": {"description": "汽水音乐（yt-dlp）", "type": "bool", "default": true}
     }
+  },
+  "bili_comment": {
+    "description": "B站评论区",
+    "hint": "解析 B站视频时额外生成评论区截图卡片",
+    "type": "bool",
+    "default": true
+  },
+  "show_download_fail_tip": {
+    "description": "显示下载失败提示",
+    "type": "bool",
+    "default": true
+  },
+  "performance": {
+    "description": "性能配置",
+    "type": "object",
+    "items": {
+      "max_concurrent_downloads": {
+        "description": "最大并发下载数",
+        "type": "int",
+        "slider": {"min": 1, "max": 12, "step": 1},
+        "default": 4
+      },
+      "source_max_size": {
+        "description": "资源最大大小（MB）",
+        "type": "int",
+        "slider": {"min": 10, "max": 500, "step": 10},
+        "default": 90
+      },
+      "video_codec": {
+        "description": "B站视频编码偏好",
+        "type": "string",
+        "options": ["auto", "hevc", "avc"],
+        "default": "hevc"
+      }
+    }
+  },
+  "cookies": {
+    "description": "Cookie 配置",
+    "type": "object",
+    "items": {
+      "douyin_ck": {
+        "description": "抖音 Cookie",
+        "hint": "用于提升抖音解析稳定性",
+        "type": "text",
+        "default": ""
+      },
+      "bili_ck": {
+        "description": "Bilibili Cookie",
+        "hint": "用于提升 B站接口稳定性与清晰度",
+        "type": "text",
+        "default": ""
+      },
+      "ytdlp_cookie_file": {
+        "description": "yt-dlp Netscape Cookie 文件",
+        "hint": "可选。用于 TikTok、Twitter、Instagram、YouTube 等需要登录的平台",
+        "type": "file",
+        "file_types": ["txt"],
+        "default": []
+      }
+    }
+  },
+  "data_dir": {"description": "数据目录", "type": "string", "invisible": true},
+  "cache_dir": {"description": "缓存目录", "type": "string", "invisible": true}
 }

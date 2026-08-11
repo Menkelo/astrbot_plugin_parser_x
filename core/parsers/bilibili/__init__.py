@@ -5,26 +5,24 @@ from pathlib import Path
 from re import Match
 from typing import ClassVar
 
+from astrbot.api import logger
+from astrbot.core.config.astrbot_config import AstrBotConfig
 from bilibili_api import Credential, request_settings, select_client
 from bilibili_api.video import Video
 from msgspec import convert
 
-from astrbot.api import logger
-from astrbot.core.config.astrbot_config import AstrBotConfig
-
 from ...constants import BILIBILI_HEADER
 from ...data import Platform
 from ...exception import SizeLimitException
+from ...live_renderer import LiveCardRenderer
 from ...utils import ck2dict
 from ..base import BaseParser, Downloader, ParseException, handle
-
 from .comment_renderer import BiliCommentRenderer
 from .comment_service import BiliCommentService
 from .dynamic_renderer import BiliDynamicRenderer
 from .dynamic_service import BiliDynamicService
 from .live_service import BiliLiveService
 from .stream_selector import BiliStreamSelector
-from ...live_renderer import LiveCardRenderer
 
 
 class BilibiliParser(BaseParser):
@@ -60,7 +58,9 @@ class BilibiliParser(BaseParser):
         video_codec_conf = perf.get("video_codec", "hevc")
 
         if isinstance(video_codec_conf, dict):
-            video_codec_conf = video_codec_conf.get("value") or video_codec_conf.get("label") or "hevc"
+            video_codec_conf = (
+                video_codec_conf.get("value") or video_codec_conf.get("label") or "hevc"
+            )
 
         self.video_codec = str(video_codec_conf).lower()
 
@@ -154,7 +154,9 @@ class BilibiliParser(BaseParser):
 
         return await self.parse_video(avid=avid, page_num=page_num)
 
-    @handle("t.bili", r"(?:https?://)?t\.bilibili\.com/(?P<dynamic_id>\d+)(?:[/?#][^\s]*)?")
+    @handle(
+        "t.bili", r"(?:https?://)?t\.bilibili\.com/(?P<dynamic_id>\d+)(?:[/?#][^\s]*)?"
+    )
     async def _parse_dynamic(self, searched: Match[str]):
         return await self.parse_dynamic(int(searched.group("dynamic_id")))
 
@@ -293,7 +295,9 @@ class BilibiliParser(BaseParser):
                 data = await video.get_download_url(page_index=page_index, qn=qn)
             except TypeError:
                 try:
-                    data = await video.get_download_url(page_index=page_index, quality=qn)
+                    data = await video.get_download_url(
+                        page_index=page_index, quality=qn
+                    )
                 except TypeError:
                     data = await video.get_download_url(page_index=page_index)
 
@@ -370,7 +374,12 @@ class BilibiliParser(BaseParser):
         if isinstance(base, str) and base:
             urls.append(base)
 
-        backups = item.get("backupUrl") or item.get("backup_url") or item.get("backup_urls") or []
+        backups = (
+            item.get("backupUrl")
+            or item.get("backup_url")
+            or item.get("backup_urls")
+            or []
+        )
         if isinstance(backups, list):
             for u in backups:
                 if isinstance(u, str) and u:
@@ -482,9 +491,9 @@ class BilibiliParser(BaseParser):
         grouped: dict[int, list[str]] = {}
 
         valid_video_streams = [
-            v for v in video_streams
-            if isinstance(v, dict)
-            and self._detect_codec_type(v.get("codecs")) != "av1"
+            v
+            for v in video_streams
+            if isinstance(v, dict) and self._detect_codec_type(v.get("codecs")) != "av1"
         ]
 
         # 按清晰度、编码偏好、码率排序。
@@ -664,8 +673,8 @@ class BilibiliParser(BaseParser):
         # 关闭：直接跳过，减少请求和渲染耗时
         comment_task_factory = None
         if self.enable_comment_card:
-            comment_task_factory = (
-                lambda: self.comment_service.build_comment_image_content(
+            comment_task_factory = lambda: (
+                self.comment_service.build_comment_image_content(
                     video_info.aid,
                     1,
                     video_title=page_info.title,
@@ -706,7 +715,9 @@ class BilibiliParser(BaseParser):
 
             for qid, v_urls in video_ladders:
                 qname = self._quality_name(qid)
-                logger.info(f"[Bilibili] 尝试下载 {video_info.bvid} P{page_num} {qname}")
+                logger.info(
+                    f"[Bilibili] 尝试下载 {video_info.bvid} P{page_num} {qname}"
+                )
 
                 if a_candidates:
                     qid_size_limited = False
@@ -726,7 +737,9 @@ class BilibiliParser(BaseParser):
                                 last_err = e
                                 hit_size_limit = True
                                 qid_size_limited = True
-                                logger.info(f"[Bilibili] {qname} 超过大小限制，降级尝试: {e}")
+                                logger.info(
+                                    f"[Bilibili] {qname} 超过大小限制，降级尝试: {e}"
+                                )
                                 break
 
                             except Exception as e:
@@ -751,7 +764,9 @@ class BilibiliParser(BaseParser):
                     except SizeLimitException as e:
                         last_err = e
                         hit_size_limit = True
-                        logger.info(f"[Bilibili] {qname} 单文件超过大小限制，降级尝试: {e}")
+                        logger.info(
+                            f"[Bilibili] {qname} 单文件超过大小限制，降级尝试: {e}"
+                        )
                         break
 
                     except Exception as e:
@@ -783,7 +798,9 @@ class BilibiliParser(BaseParser):
             text=text,
             author=author,
             contents=[video_content],
-            extra={"comment_task_factory": comment_task_factory} if comment_task_factory else {},
+            extra={"comment_task_factory": comment_task_factory}
+            if comment_task_factory
+            else {},
         )
 
     async def parse_dynamic(self, dynamic_id: int):

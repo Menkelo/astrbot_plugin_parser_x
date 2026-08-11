@@ -61,9 +61,7 @@ class BiliCommentRenderer:
             """
 
         cover_block = (
-            f'<img class="v-cover" src="{video_cover}" alt="">'
-            if video_cover
-            else ""
+            f'<img class="v-cover" src="{video_cover}" alt="">' if video_cover else ""
         )
 
         meta_items = []

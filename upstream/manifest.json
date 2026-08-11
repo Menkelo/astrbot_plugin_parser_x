@@ -1,0 +1,8 @@
+{
+  "repository": "https://github.com/zhiyu1998/rconsole-plugin.git",
+  "ref": "refs/heads/master",
+  "commit": "2f74647778d166b746ac3a72294888f2b7e38917",
+  "synced_at": "2026-08-11",
+  "strategy": "semantic-port",
+  "notes": "平台覆盖与行为兼容基线；不直接嵌入 Yunzai 运行时代码。"
+}

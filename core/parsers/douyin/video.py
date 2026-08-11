@@ -112,9 +112,11 @@ def recursive_collect_videos(
 
     if prefer_vid:
         found.sort(
-            key=lambda x: 0
-            if str(x.get("aweme_id") or x.get("awemeId") or "") == prefer_vid
-            else 1
+            key=lambda x: (
+                0
+                if str(x.get("aweme_id") or x.get("awemeId") or "") == prefer_vid
+                else 1
+            )
         )
 
     return found

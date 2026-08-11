@@ -4,10 +4,9 @@ import time
 from typing import Any, ClassVar
 from urllib.parse import unquote
 
-from msgspec import Struct, convert, field
-
 from astrbot.api import logger
 from astrbot.core.config.astrbot_config import AstrBotConfig
+from msgspec import Struct, convert, field
 
 from ..download import Downloader
 from .base import BaseParser, ParseException, Platform, SkipParseException, handle
@@ -137,7 +136,7 @@ class XiaoHongShuParser(BaseParser):
         if idx == -1:
             return url
 
-        raw = url[idx + len(marker):]
+        raw = url[idx + len(marker) :]
         # originalUrl 内部的 & 都是 %26，遇到字面 & 即为外层下一个参数，截断即可
         amp = raw.find("&")
         if amp != -1:
@@ -150,7 +149,9 @@ class XiaoHongShuParser(BaseParser):
     def _debug_note_locations(json_obj: dict) -> str:
         """调试用：定向汇总 note 可能所在的几个位置（仅键名/类型，不打印大段内容）。"""
         try:
-            note_obj = json_obj.get("note") if isinstance(json_obj.get("note"), dict) else {}
+            note_obj = (
+                json_obj.get("note") if isinstance(json_obj.get("note"), dict) else {}
+            )
             detail_map = (
                 note_obj.get("noteDetailMap")
                 if isinstance(note_obj.get("noteDetailMap"), dict)
@@ -166,7 +167,9 @@ class XiaoHongShuParser(BaseParser):
                         sample["note_keys"] = list(inner.keys())
                         sample["type"] = inner.get("type")
             note_data_obj = (
-                json_obj.get("noteData") if isinstance(json_obj.get("noteData"), dict) else {}
+                json_obj.get("noteData")
+                if isinstance(json_obj.get("noteData"), dict)
+                else {}
             )
             return (
                 f"top={list(json_obj.keys())}, "
@@ -324,14 +327,18 @@ class XiaoHongShuParser(BaseParser):
             if note_data:
                 return self._process_explore_data(note_data, final_url)
 
-        note_data = note_container.get("firstNote", {}) or note_container.get("note", {})
+        note_data = note_container.get("firstNote", {}) or note_container.get(
+            "note", {}
+        )
         if note_data:
             return self._process_explore_data(note_data, final_url)
 
         logger.warning(
             f"[XHS] discovery 未找到 note (xhs_id={xhs_id}): {self._debug_note_locations(json_obj)}"
         )
-        raise ParseException("解析异常: can't find noteData in noteData.data or noteDetailMap")
+        raise ParseException(
+            "解析异常: can't find noteData in noteData.data or noteDetailMap"
+        )
 
     def _process_explore_data(self, note_data: dict, final_url: str | None = None):
         class Image(Struct):
@@ -478,7 +485,9 @@ class XiaoHongShuParser(BaseParser):
 
         return self.result(
             title=note_data_obj.title,
-            author=self.create_author(note_data_obj.user.nickName, note_data_obj.user.avatar),
+            author=self.create_author(
+                note_data_obj.user.nickName, note_data_obj.user.avatar
+            ),
             contents=contents,
             text=note_data_obj.desc,
             timestamp=note_data_obj.time // 1000 if note_data_obj.time else None,

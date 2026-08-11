@@ -6,10 +6,9 @@ from html import unescape
 from pathlib import Path
 from typing import Any
 
+from astrbot.api import logger
 from bilibili_api.dynamic import Dynamic
 from bilibili_api.exceptions import ResponseCodeException
-
-from astrbot.api import logger
 
 from ...data import ImageContent, MediaContent
 from ...utils import cached_image_to_data_uri, normalize_image_url
@@ -153,7 +152,10 @@ class BiliDynamicService:
 
         # @ 尺寸参数必须接在路径末尾、查询串之前
         path_part, sep, query = url.partition("?")
-        if not any(path_part.lower().endswith(ext) for ext in (".jpg", ".jpeg", ".png", ".webp", ".gif")):
+        if not any(
+            path_part.lower().endswith(ext)
+            for ext in (".jpg", ".jpeg", ".png", ".webp", ".gif")
+        ):
             return url
 
         return f"{path_part}@{width}w_{quality}q.jpg{sep}{query}"
@@ -305,7 +307,9 @@ class BiliDynamicService:
                 for item in items:
                     if not isinstance(item, dict):
                         continue
-                    nodes = item.get("nodes") or (item.get("text") or {}).get("nodes") or []
+                    nodes = (
+                        item.get("nodes") or (item.get("text") or {}).get("nodes") or []
+                    )
                     item_text = cls.extract_rich_text_nodes_text(nodes)
                     if item_text:
                         lines.append(f"- {item_text}")
@@ -365,7 +369,9 @@ class BiliDynamicService:
                     )
                     if topic_text:
                         topic_text = (
-                            topic_text if topic_text.startswith("#") else f"#{topic_text}#"
+                            topic_text
+                            if topic_text.startswith("#")
+                            else f"#{topic_text}#"
                         )
                         parts.append(topic_text)
 
@@ -404,7 +410,9 @@ class BiliDynamicService:
         if title_module:
             module_title = title_module.get("module_title") or {}
             if isinstance(module_title, dict):
-                title = cls._first_str(module_title.get("text"), module_title.get("title"))
+                title = cls._first_str(
+                    module_title.get("text"), module_title.get("title")
+                )
                 if title:
                     return title
 
@@ -469,7 +477,9 @@ class BiliDynamicService:
             if isinstance(text, str) and text.strip():
                 return text.strip()
 
-            nodes_text = cls.extract_rich_text_nodes_text(desc.get("rich_text_nodes") or [])
+            nodes_text = cls.extract_rich_text_nodes_text(
+                desc.get("rich_text_nodes") or []
+            )
             if nodes_text:
                 return nodes_text
 
@@ -517,7 +527,7 @@ class BiliDynamicService:
             module_type = module.get("module_type")
 
             if module_type == "MODULE_TYPE_TOP":
-                display = ((module.get("module_top") or {}).get("display") or {})
+                display = (module.get("module_top") or {}).get("display") or {}
                 album = display.get("album") or {}
                 pics = album.get("pics") or []
                 if isinstance(pics, list):
@@ -739,7 +749,9 @@ class BiliDynamicService:
         # 限制单图尺寸/体积，避免 10+ 张高清原图合并转发时撑爆 NapCat 上传超时
         capped_image_urls = [self.cap_bili_image_url(u) for u in image_urls]
         full_images: list[MediaContent] = (
-            self.parser.create_image_contents(capped_image_urls, ext_headers=media_headers)
+            self.parser.create_image_contents(
+                capped_image_urls, ext_headers=media_headers
+            )
             if capped_image_urls
             else []
         )
@@ -757,7 +769,9 @@ class BiliDynamicService:
             ).encode()
         ).hexdigest()[:10]
 
-        out_path = Path(self.parser.cache_dir) / f"bili_dynamic_{dynamic_id}_{digest}.png"
+        out_path = (
+            Path(self.parser.cache_dir) / f"bili_dynamic_{dynamic_id}_{digest}.png"
+        )
 
         if not out_path.exists():
             await self.parser.dynamic_renderer.render_dynamic_card(

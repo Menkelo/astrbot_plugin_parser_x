@@ -10,11 +10,11 @@ from typing import ClassVar
 from astrbot.api import logger
 from astrbot.core.config.astrbot_config import AstrBotConfig
 
-from ..data import Platform, VideoContent, ImageContent
+from ..data import ImageContent, Platform, VideoContent
 from ..download import Downloader
 from ..text_renderer import TextCardRenderer
 from ..utils import image_to_data_uri, normalize_image_url
-from .base import BaseParser, handle, ParseException
+from .base import BaseParser, ParseException, handle
 
 
 class WeiboParser(BaseParser):
@@ -22,13 +22,15 @@ class WeiboParser(BaseParser):
 
     def __init__(self, config: AstrBotConfig, downloader: Downloader):
         super().__init__(config, downloader)
-        self.headers.update({
-            "Referer": "https://m.weibo.cn/",
-            "User-Agent": "Mozilla/5.0 (Linux; Android 10; SM-G981B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/80.0.3987.162 Mobile Safari/537.36",
-            "Accept": "application/json, text/plain, */*",
-            "MWeibo-Pwa": "1",
-            "X-Requested-With": "XMLHttpRequest"
-        })
+        self.headers.update(
+            {
+                "Referer": "https://m.weibo.cn/",
+                "User-Agent": "Mozilla/5.0 (Linux; Android 10; SM-G981B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/80.0.3987.162 Mobile Safari/537.36",
+                "Accept": "application/json, text/plain, */*",
+                "MWeibo-Pwa": "1",
+                "X-Requested-With": "XMLHttpRequest",
+            }
+        )
         self.cache_dir = Path(config["cache_dir"])
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.text_renderer = TextCardRenderer()
@@ -38,14 +40,14 @@ class WeiboParser(BaseParser):
     async def _parse_weibo(self, searched: Match[str]):
         bid = searched.group(1)
         url = f"https://m.weibo.cn/statuses/show?id={bid}"
-        
+
         logger.debug(f"[Weibo] 尝试 API 解析: {url}")
-        
+
         try:
             resp = await self.client.get(url, headers=self.headers, timeout=8)
             if resp.status_code != 200:
                 raise ParseException(f"微博 API 请求失败: HTTP {resp.status_code}")
-            
+
             data = resp.json()
         except ParseException:
             raise
@@ -53,26 +55,31 @@ class WeiboParser(BaseParser):
             raise ParseException(f"连接微博 API 失败: {e}") from e
 
         if not isinstance(data, dict) or data.get("ok") != 1:
-            raise ParseException(f"微博 API 返回错误: {data.get('msg') if isinstance(data, dict) else data}")
+            raise ParseException(
+                f"微博 API 返回错误: {data.get('msg') if isinstance(data, dict) else data}"
+            )
 
         data = data.get("data", {})
         if not data:
-             raise ParseException("未获取到微博数据")
-        
+            raise ParseException("未获取到微博数据")
+
         user = data.get("user", {})
         author_name = user.get("screen_name", "微博用户")
-        author_avatar = normalize_image_url(
-            user.get("avatar_hd")
-            or user.get("avatar_large")
-            or user.get("profile_image_url", "")
-        ) or ""
-        
+        author_avatar = (
+            normalize_image_url(
+                user.get("avatar_hd")
+                or user.get("avatar_large")
+                or user.get("profile_image_url", "")
+            )
+            or ""
+        )
+
         text = data.get("text", "")
         if data.get("isLongText") and "longText" in data:
-             text = data["longText"].get("longTextContent", text)
-        
+            text = data["longText"].get("longTextContent", text)
+
         text = self._html_to_plain_text(text)
-        
+
         timestamp = None
         if created_at := data.get("created_at"):
             try:
@@ -80,10 +87,12 @@ class WeiboParser(BaseParser):
                 timestamp = int(dt.timestamp())
             except Exception:
                 pass
-        
+
         contents = []
 
-        for index, (video_url, duration) in enumerate(self._collect_video_items(data), start=1):
+        for index, (video_url, duration) in enumerate(
+            self._collect_video_items(data), start=1
+        ):
             video_task = self.downloader.download_video(
                 video_url,
                 video_name=f"weibo_{bid}_{index}.mp4",
@@ -103,7 +112,9 @@ class WeiboParser(BaseParser):
 
         extra = {}
         if text and not contents:
-            text_card_avatar = await self._img_to_data_uri(author_avatar) or author_avatar
+            text_card_avatar = (
+                await self._img_to_data_uri(author_avatar) or author_avatar
+            )
             if text_card_avatar:
                 extra["text_card_avatar"] = text_card_avatar
 
@@ -119,7 +130,9 @@ class WeiboParser(BaseParser):
             except Exception as e:
                 logger.warning(f"[Weibo] 正文卡渲染失败: {e}")
 
-        author = self.create_author(author_name, author_avatar, ext_headers=self.headers)
+        author = self.create_author(
+            author_name, author_avatar, ext_headers=self.headers
+        )
         original_url = f"https://weibo.com/{user.get('id')}/{bid}"
 
         return self.result(
@@ -195,7 +208,9 @@ class WeiboParser(BaseParser):
                 if not isinstance(media_info, dict):
                     media_info = {}
                 duration = media_info.get("duration", video_obj.get("duration", 0))
-                items.append((video_url, duration, cls._video_key(video_obj, video_url)))
+                items.append(
+                    (video_url, duration, cls._video_key(video_obj, video_url))
+                )
 
         out: list[tuple[str, float | int]] = []
         seen: set[str] = set()
@@ -267,7 +282,9 @@ class WeiboParser(BaseParser):
 
     @staticmethod
     def _normalize_video_url_key(url: str) -> str:
-        return re.sub(r"^https?://", "", (url or "").split("?", 1)[0], flags=re.IGNORECASE)
+        return re.sub(
+            r"^https?://", "", (url or "").split("?", 1)[0], flags=re.IGNORECASE
+        )
 
     @classmethod
     def _collect_static_pic_urls(cls, data: dict) -> list[str]:

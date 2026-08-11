@@ -11,17 +11,22 @@ from urllib.parse import urlparse
 import aiofiles
 import aiohttp
 import yt_dlp
+from astrbot.api import logger
+from astrbot.core.config.astrbot_config import AstrBotConfig
 from curl_cffi import CurlHttpVersion
 from curl_cffi.requests import AsyncSession, RequestsError
 from msgspec import Struct, convert
 from tqdm.asyncio import tqdm
 
-from astrbot.api import logger
-from astrbot.core.config.astrbot_config import AstrBotConfig
-
 from .constants import COMMON_HEADER, IOS_HEADER
 from .exception import DownloadException, ParseException, SizeLimitException
-from .utils import LimitedSizeDict, generate_file_name, maybe_close_session, merge_av, safe_unlink
+from .utils import (
+    LimitedSizeDict,
+    generate_file_name,
+    maybe_close_session,
+    merge_av,
+    safe_unlink,
+)
 
 P = ParamSpec("P")
 T = TypeVar("T")
@@ -89,7 +94,9 @@ class Downloader:
             http_version=CurlHttpVersion.V1_1,
         )
 
-    def _get_douyin_session(self, impersonate: str, headers: dict[str, str]) -> AsyncSession:
+    def _get_douyin_session(
+        self, impersonate: str, headers: dict[str, str]
+    ) -> AsyncSession:
         """
         按 impersonate 复用 curl_cffi session。
         headers 仍在每次 .get() 时单独传入，这里只缓存连接/指纹层。
@@ -134,12 +141,16 @@ class Downloader:
         _start = time.monotonic()
         async with self.sem:
             if "douyinpic.com" in url:
-                result = await self._download_douyin_image(url, file_path, file_name, limit)
+                result = await self._download_douyin_image(
+                    url, file_path, file_name, limit
+                )
             else:
                 headers = self.headers.copy()
                 if ext_headers:
                     headers.update(ext_headers)
-                result = await self._download_generic(url, file_path, file_name, headers, limit)
+                result = await self._download_generic(
+                    url, file_path, file_name, headers, limit
+                )
 
         try:
             size_mb = result.stat().st_size / 1024 / 1024
@@ -210,7 +221,9 @@ class Downloader:
                 if response.status_code >= 400:
                     if response.status_code in [502, 503, 504]:
                         await asyncio.sleep(1)
-                    raise RequestsError(f"HTTP {response.status_code}", response=response)
+                    raise RequestsError(
+                        f"HTTP {response.status_code}", response=response
+                    )
 
                 await self._save_response_to_file(response, file_path, file_name, limit)
 
@@ -218,14 +231,18 @@ class Downloader:
                     self.douyin_strategy_idx = current_idx
 
                 if i > 0:
-                    logger.debug(f"[抖音图片] 策略 {strategy['name']} 第{i + 1}次尝试成功 {file_name}")
+                    logger.debug(
+                        f"[抖音图片] 策略 {strategy['name']} 第{i + 1}次尝试成功 {file_name}"
+                    )
                 return file_path
 
             except Exception as e:
                 last_error = e
                 await safe_unlink(file_path)
                 if i == strategy_count - 1:
-                    logger.warning(f"[抖音图片] curl 策略全部失败: {e}，尝试 aiohttp 兜底")
+                    logger.warning(
+                        f"[抖音图片] curl 策略全部失败: {e}，尝试 aiohttp 兜底"
+                    )
                 continue
 
         try:
@@ -275,7 +292,9 @@ class Downloader:
                         )
 
                     if response.status_code >= 400:
-                        raise RequestsError(f"HTTP {response.status_code}", response=response)
+                        raise RequestsError(
+                            f"HTTP {response.status_code}", response=response
+                        )
 
                 content_type = response.headers.get("Content-Type", "")
                 if "text/html" in content_type or "application/json" in content_type:
@@ -293,8 +312,13 @@ class Downloader:
                             )
                             content_type = response.headers.get("Content-Type", "")
 
-                        if "text/html" in content_type or "application/json" in content_type:
-                            raise DownloadException(f"服务端返回了非媒体类型: {content_type}")
+                        if (
+                            "text/html" in content_type
+                            or "application/json" in content_type
+                        ):
+                            raise DownloadException(
+                                f"服务端返回了非媒体类型: {content_type}"
+                            )
 
                 await self._save_response_to_file(response, file_path, file_name, limit)
 
@@ -377,7 +401,9 @@ class Downloader:
 
                 content_length = int(resp.headers.get("Content-Length", 0))
                 if content_length and (content_length / 1024 / 1024) > limit:
-                    raise SizeLimitException(f"媒体大小({content_length / 1024 / 1024:.1f}MB)超过限制")
+                    raise SizeLimitException(
+                        f"媒体大小({content_length / 1024 / 1024:.1f}MB)超过限制"
+                    )
 
                 chunk_size = 1024 * 1024
 
@@ -496,7 +522,12 @@ class Downloader:
         max_size_mb: int | None = None,
     ) -> Path:
         if use_ytdlp:
-            return await self._ytdlp_download_video(url, cookiefile, video_name)
+            return await self._ytdlp_download_video(
+                url,
+                cookiefile,
+                video_name,
+                max_size_mb=max_size_mb,
+            )
 
         if video_name is None:
             video_name = generate_file_name(url, ".mp4")
@@ -520,7 +551,12 @@ class Downloader:
         max_size_mb: int | None = None,
     ) -> Path:
         if use_ytdlp:
-            return await self._ytdlp_download_audio(url, cookiefile, audio_name)
+            return await self._ytdlp_download_audio(
+                url,
+                cookiefile,
+                audio_name,
+                max_size_mb=max_size_mb,
+            )
 
         if audio_name is None:
             audio_name = generate_file_name(url, ".mp3")
@@ -570,8 +606,12 @@ class Downloader:
     ) -> Path:
         try:
             v_path, a_path = await asyncio.gather(
-                self.download_video(v_url, ext_headers=ext_headers, max_size_mb=max_size_mb),
-                self.download_audio(a_url, ext_headers=ext_headers, max_size_mb=max_size_mb),
+                self.download_video(
+                    v_url, ext_headers=ext_headers, max_size_mb=max_size_mb
+                ),
+                self.download_audio(
+                    a_url, ext_headers=ext_headers, max_size_mb=max_size_mb
+                ),
             )
             await merge_av(v_path=v_path, a_path=a_path, output_path=output_path)
             return output_path
@@ -586,15 +626,21 @@ class Downloader:
         self,
         url: str,
         cookiefile: Path | None = None,
+        *,
+        force_generic_extractor: bool = True,
     ) -> VideoInfo:
-        if (info := self.info_cache.get(url)) is not None:
+        cache_key = f"{int(force_generic_extractor)}:{url}"
+        if (info := self.info_cache.get(cache_key)) is not None:
             return info
 
         opts = {
             "quiet": True,
             "skip_download": True,
-            "force_generic_extractor": True,
+            "force_generic_extractor": force_generic_extractor,
             "cookiefile": None,
+            "noplaylist": True,
+            "playlistend": 1,
+            "nocheckcertificate": True,
         }
 
         if cookiefile and cookiefile.is_file():
@@ -606,7 +652,7 @@ class Downloader:
                 raise ParseException("获取视频信息失败")
 
         info = convert(raw, VideoInfo)
-        self.info_cache[url] = info
+        self.info_cache[cache_key] = info
         return info
 
     async def _ytdlp_download_video(
@@ -614,8 +660,14 @@ class Downloader:
         url: str,
         cookiefile: Path | None = None,
         video_name: str | None = None,
+        *,
+        max_size_mb: int | None = None,
     ) -> Path:
-        _ = await self.ytdlp_extract_info(url, cookiefile)
+        _ = await self.ytdlp_extract_info(
+            url,
+            cookiefile,
+            force_generic_extractor=False,
+        )
 
         if video_name:
             file_stem = Path(video_name).stem
@@ -632,10 +684,18 @@ class Downloader:
             "outtmpl": str(self.cache_dir / file_stem) + ".%(ext)s",
             "merge_output_format": "mp4",
             "format": "best[height<=720]/bestvideo[height<=720]+bestaudio/best",
-            "postprocessors": [{"key": "FFmpegVideoConvertor", "preferedformat": "mp4"}],
+            "postprocessors": [
+                {"key": "FFmpegVideoConvertor", "preferedformat": "mp4"}
+            ],
             "cookiefile": None,
             "nocheckcertificate": True,
+            "noplaylist": True,
+            "playlistend": 1,
         }
+
+        limit_mb = max_size_mb or self.default_max_size
+        if limit_mb:
+            opts["max_filesize"] = int(limit_mb * 1024 * 1024)
 
         if cookiefile and cookiefile.is_file():
             opts["cookiefile"] = str(cookiefile)
@@ -644,6 +704,16 @@ class Downloader:
             with yt_dlp.YoutubeDL(opts) as ydl:
                 await asyncio.to_thread(ydl.download, [url])
 
+        if not video_path.exists():
+            candidates = sorted(self.cache_dir.glob(f"{file_stem}.*"))
+            if candidates:
+                candidates[0].replace(video_path)
+
+        if not video_path.exists() or video_path.stat().st_size < 100:
+            raise DownloadException("yt-dlp 未生成有效视频")
+        if limit_mb and video_path.stat().st_size > limit_mb * 1024 * 1024:
+            await safe_unlink(video_path)
+            raise SizeLimitException(f"媒体大小超过限制({limit_mb}MB)")
         return video_path
 
     async def _ytdlp_download_audio(
@@ -651,6 +721,8 @@ class Downloader:
         url: str,
         cookiefile: Path | None,
         audio_name: str | None = None,
+        *,
+        max_size_mb: int | None = None,
     ) -> Path:
         if audio_name:
             file_stem = Path(audio_name).stem
@@ -669,7 +741,13 @@ class Downloader:
             "postprocessors": [{"key": "FFmpegExtractAudio", "preferredcodec": "m4a"}],
             "cookiefile": None,
             "nocheckcertificate": True,
+            "noplaylist": True,
+            "playlistend": 1,
         }
+
+        limit_mb = max_size_mb or self.default_max_size
+        if limit_mb:
+            opts["max_filesize"] = int(limit_mb * 1024 * 1024)
 
         if cookiefile and cookiefile.is_file():
             opts["cookiefile"] = str(cookiefile)
@@ -678,6 +756,16 @@ class Downloader:
             with yt_dlp.YoutubeDL(opts) as ydl:
                 await asyncio.to_thread(ydl.download, [url])
 
+        if not audio_path.exists():
+            candidates = sorted(self.cache_dir.glob(f"{file_stem}.*"))
+            if candidates:
+                candidates[0].replace(audio_path)
+
+        if not audio_path.exists() or audio_path.stat().st_size < 100:
+            raise DownloadException("yt-dlp 未生成有效音频")
+        if limit_mb and audio_path.stat().st_size > limit_mb * 1024 * 1024:
+            await safe_unlink(audio_path)
+            raise SizeLimitException(f"媒体大小超过限制({limit_mb}MB)")
         return audio_path
 
     async def close(self):

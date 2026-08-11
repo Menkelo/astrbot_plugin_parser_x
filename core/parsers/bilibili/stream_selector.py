@@ -9,7 +9,9 @@ class BiliStreamSelector:
             return backups[0]
         return None
 
-    def select_best_stream_offline(self, data: dict, duration: int, limit_mb: int) -> tuple[str | None, str | None]:
+    def select_best_stream_offline(
+        self, data: dict, duration: int, limit_mb: int
+    ) -> tuple[str | None, str | None]:
         """
         返回 (video_url, audio_url)
         """

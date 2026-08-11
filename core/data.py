@@ -30,21 +30,24 @@ class MediaContent:
 @dataclass(repr=False, slots=True)
 class AudioContent(MediaContent):
     """音频内容"""
+
     duration: float = 0.0
 
 
 @dataclass(repr=False, slots=True)
 class FileContent(MediaContent):
     """文件内容"""
+
     name: str | None = None
 
 
 @dataclass(repr=False, slots=True)
 class VideoContent(MediaContent):
     """视频内容"""
+
     cover: Path | Task[Path] | None = None
     duration: float = 0.0
-    
+
     # === 新增：是否强制作为文件上传 ===
     is_file_upload: bool = False
 
@@ -72,18 +75,21 @@ class VideoContent(MediaContent):
 @dataclass(repr=False, slots=True)
 class ImageContent(MediaContent):
     """图片内容"""
+
     pass
 
 
 @dataclass(repr=False, slots=True)
 class DynamicContent(MediaContent):
     """动态内容"""
+
     gif_path: Path | None = None
 
 
 @dataclass(repr=False, slots=True)
 class GraphicsContent(MediaContent):
     """图文内容"""
+
     text: str | None = None
     alt: str | None = None
 
@@ -133,7 +139,7 @@ class ParseResult:
     text: str | None = None
     timestamp: int | None = None
     url: str | None = None
-    
+
     contents: list[MediaContent] = field(default_factory=list)
     comment_contents: list[MediaContent] = field(default_factory=list)
 

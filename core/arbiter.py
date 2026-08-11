@@ -8,6 +8,7 @@ EmojiLikeArbiter 简化版 -> 响应提示器
 
 from typing import Any
 
+
 class EmojiLikeArbiter:
     """
     基于 CQHTTP 表情点赞的响应提示器
@@ -20,7 +21,7 @@ class EmojiLikeArbiter:
     async def notify(self, bot: Any, message_id: int) -> None:
         """
         执行贴表情操作
-        
+
         :param bot: Bot 实例
         :param message_id: 消息 ID
         """

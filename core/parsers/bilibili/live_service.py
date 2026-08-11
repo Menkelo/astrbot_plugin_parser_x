@@ -8,7 +8,6 @@ from astrbot.api import logger
 
 from ...data import ImageContent
 from ...utils import cached_image_to_data_uri, normalize_image_url
-from ..base import ParseException
 
 
 class BiliLiveService:
@@ -106,16 +105,18 @@ class BiliLiveService:
 
                 code = last.get("code")
                 logger.info(
-                    f"[Bilibili-live] api={url} try={i+1}/{retry} code={code} msg={last.get('msg') or last.get('message')}"
+                    f"[Bilibili-live] api={url} try={i + 1}/{retry} code={code} msg={last.get('msg') or last.get('message')}"
                 )
                 if code == 0:
                     return last
                 if code in (-352, -412, -799):
-                    await __import__("asyncio").sleep((i + 1) * 1.0 + random.uniform(0.1, 0.4))
+                    await __import__("asyncio").sleep(
+                        (i + 1) * 1.0 + random.uniform(0.1, 0.4)
+                    )
                     continue
                 return last
             except Exception as e:
-                logger.info(f"[Bilibili-live] api={url} try={i+1}/{retry} ex={e}")
+                logger.info(f"[Bilibili-live] api={url} try={i + 1}/{retry} ex={e}")
                 await __import__("asyncio").sleep((i + 1) * 0.6)
         return last
 
@@ -127,7 +128,9 @@ class BiliLiveService:
             headers["Cookie"] = self.parser.bili_ck
 
         try:
-            resp = await self.parser.http_get(url, headers=headers, allow_redirects=True, timeout=10)
+            resp = await self.parser.http_get(
+                url, headers=headers, allow_redirects=True, timeout=10
+            )
             html = getattr(resp, "text", "") or ""
         except Exception as e:
             logger.info(f"[Bilibili-live] html fetch ex={e}")
@@ -266,14 +269,18 @@ class BiliLiveService:
         room_info = {}
         anchor_base = {}
 
-        info_raw = await self._get_json(info_api, {"room_id": real_room_id}, real_room_id)
+        info_raw = await self._get_json(
+            info_api, {"room_id": real_room_id}, real_room_id
+        )
         if info_raw.get("code") == 0:
             data = info_raw.get("data") or {}
             room_info = data.get("room_info") or {}
-            anchor_base = ((data.get("anchor_info") or {}).get("base_info") or {})
+            anchor_base = (data.get("anchor_info") or {}).get("base_info") or {}
 
         if not room_info:
-            fb_raw = await self._get_json(fallback_info_api, {"room_id": real_room_id}, real_room_id)
+            fb_raw = await self._get_json(
+                fallback_info_api, {"room_id": real_room_id}, real_room_id
+            )
             if fb_raw.get("code") == 0:
                 room_info = fb_raw.get("data") or {}
 
@@ -297,7 +304,10 @@ class BiliLiveService:
             init_data.get("uid"),
         )
         anchor_fallback = {}
-        if uid and (not self._first_key(anchor_base, "face", "avatar") or not self._first_key(anchor_base, "uname", "name")):
+        if uid and (
+            not self._first_key(anchor_base, "face", "avatar")
+            or not self._first_key(anchor_base, "uname", "name")
+        ):
             anchor_fallback = await self._fetch_anchor_info(uid, real_room_id)
 
         member_card = {}
@@ -315,7 +325,11 @@ class BiliLiveService:
             self._first_key(member_card, "name", "uname"),
             "B站主播",
         )
-        cover = room_info.get("cover") or room_info.get("user_cover") or room_info.get("keyframe")
+        cover = (
+            room_info.get("cover")
+            or room_info.get("user_cover")
+            or room_info.get("keyframe")
+        )
         avatar = normalize_image_url(
             self._first_str(
                 self._first_key(anchor_base, "face", "avatar"),
@@ -347,7 +361,9 @@ class BiliLiveService:
         digest = hashlib.md5(
             f"{real_room_id}|{title}|{uname}|{avatar}|{cover}|{live_status}|{user_time_text or ''}|live_service_v6".encode()
         ).hexdigest()[:10]
-        out_path = Path(self.parser.cache_dir) / f"bili_live_{real_room_id}_{digest}.png"
+        out_path = (
+            Path(self.parser.cache_dir) / f"bili_live_{real_room_id}_{digest}.png"
+        )
 
         if not out_path.exists():
             await self.parser.live_renderer.render_live_card(

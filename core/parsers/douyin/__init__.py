@@ -86,7 +86,9 @@ class DouyinParser(BaseParser):
         ]
         return any(k in u for k in live_keys)
 
-    def _create_image_contents_with_headers(self, urls: list[str], headers: dict[str, str]):
+    def _create_image_contents_with_headers(
+        self, urls: list[str], headers: dict[str, str]
+    ):
         """
         兼容不同版本 BaseParser.create_image_contents：
         - 支持 ext_headers 就带 headers；
@@ -159,7 +161,9 @@ class DouyinParser(BaseParser):
 
         for key in ("video_id", "vid"):
             for value in query.get(key) or []:
-                if isinstance(value, str) and value.lower().startswith(("http://", "https://")):
+                if isinstance(value, str) and value.lower().startswith(
+                    ("http://", "https://")
+                ):
                     return True
 
         return False
@@ -209,8 +213,7 @@ class DouyinParser(BaseParser):
                 or "'schema_type':'1'" in compact_extra
             )
             has_empty_title_type = any(
-                value == ""
-                for value in query.get("titleType") or []
+                value == "" for value in query.get("titleType") or []
             )
 
             if has_social_activity and has_daily_schema and has_empty_title_type:
@@ -299,11 +302,15 @@ class DouyinParser(BaseParser):
             try:
                 return await self._parse_by_id_fallback(vid)
             except Exception as e:
-                if self._looks_like_daily_share_url(final_url) and self._is_fresh_cookies_error(e):
+                if self._looks_like_daily_share_url(
+                    final_url
+                ) and self._is_fresh_cookies_error(e):
                     return self._unsupported_daily_result()
                 if self._is_cookie_error(e):
                     raise ParseException("未配置抖音 cookie (douyin_ck)，无法解析")
-                raise ParseException(f"短链解析失败，ID兜底失败: {e} | 最终链接: {final_url}")
+                raise ParseException(
+                    f"短链解析失败，ID兜底失败: {e} | 最终链接: {final_url}"
+                )
 
         raise ParseException(f"短链解析失败，无法识别最终链接: {final_url}")
 
@@ -352,12 +359,8 @@ class DouyinParser(BaseParser):
     async def _parse_by_id_fallback(self, vid: str):
         # video / note 两种类型 × m / iesdouyin 两个域名，共 4 个候选。
         # 旧实现 4 个串行 await，最坏累计 ~32s；改为全部并发竞速。
-        candidates = [
-            self._build_m_douyin_url(ty, vid)
-            for ty in ("video", "note")
-        ] + [
-            self._build_iesdouyin_url(ty, vid)
-            for ty in ("video", "note")
+        candidates = [self._build_m_douyin_url(ty, vid) for ty in ("video", "note")] + [
+            self._build_iesdouyin_url(ty, vid) for ty in ("video", "note")
         ]
 
         try:
@@ -365,7 +368,9 @@ class DouyinParser(BaseParser):
         except SkipParseException:
             raise
         except Exception as last_err:
-            logger.warning(f"[Douyin] _parse_by_id_fallback 失败，切换 ytdlp: {last_err}")
+            logger.warning(
+                f"[Douyin] _parse_by_id_fallback 失败，切换 ytdlp: {last_err}"
+            )
             return await self._parse_with_ytdlp(vid)
 
     async def _fetch_router_resp(self, url: str, timeout: int = 8):
@@ -520,7 +525,7 @@ class DouyinParser(BaseParser):
         raise ParseException("detail API 未返回 aweme_detail (图文过滤已绕过仍为空)")
 
     def _process_router_resp(self, resp, vid: str):
-        from .video import VideoData, recursive_collect_videos
+        from .video import recursive_collect_videos
 
         raw_data = msgspec.json.decode(extract_router_data_json_str(resp.text))
         targets = recursive_collect_videos(raw_data, prefer_vid=vid, limit=50)
@@ -609,9 +614,9 @@ class DouyinParser(BaseParser):
 
         def pick_best_image_url(urls: list[str]) -> str | None:
             valid = [
-                u for u in urls
-                if isinstance(u, str)
-                and u.startswith(("http://", "https://"))
+                u
+                for u in urls
+                if isinstance(u, str) and u.startswith(("http://", "https://"))
             ]
 
             if not valid:
@@ -673,7 +678,9 @@ class DouyinParser(BaseParser):
         try:
             info = await self.downloader.ytdlp_extract_info(url, cookiefile)
         except Exception as e:
-            if self._looks_like_daily_share_url(self.source_text) and self._is_fresh_cookies_error(e):
+            if self._looks_like_daily_share_url(
+                self.source_text
+            ) and self._is_fresh_cookies_error(e):
                 return self._unsupported_daily_result()
             raise
 

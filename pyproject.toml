@@ -1,0 +1,7 @@
+[tool.ruff]
+line-length = 88
+target-version = "py310"
+exclude = [".venv-parserx", ".venv-parserx314"]
+
+[tool.ruff.lint]
+select = ["F", "I"]
