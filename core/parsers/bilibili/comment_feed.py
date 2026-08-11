@@ -14,6 +14,7 @@ from pathlib import Path
 from astrbot.api import logger
 from msgspec import json as msgjson
 
+from ...comment_canvas import split_comment_entries
 from ...data import ImageContent
 from .comment_canvas import (
     BiliAuthorBadge,
@@ -109,10 +110,12 @@ class BiliCommentFeed:
         canvas: BiliCommentCanvas,
         *,
         limit: int = 9,
+        chunk_size: int = 5,
     ):
         self.parser = parser
         self.canvas = canvas
         self.limit = max(1, int(limit))
+        self.chunk_size = max(1, int(chunk_size))
         self._mixin_key = ""
         self._mixin_key_deadline = 0.0
         self._mixin_key_lock = asyncio.Lock()
@@ -232,51 +235,90 @@ class BiliCommentFeed:
 
     async def fetch(self, oid: int, type_: int) -> _RawCommentFeed:
         referer = f"https://www.bilibili.com/video/av{oid}"
-        page_size = max(20, self.limit)
+        page_size = 20
+        candidate_target = max(20, min(60, self.limit * 2))
         base_params: dict[str, object] = {
             "type": type_,
             "oid": oid,
             "mode": 3,
-            "next": 0,
             "ps": page_size,
         }
 
         mixin_key = await self._load_mixin_key()
         if mixin_key:
             try:
-                payload = await self._request_json(
-                    "https://api.bilibili.com/x/v2/reply/wbi/main",
-                    self._sign(base_params, mixin_key),
-                    referer=referer,
-                )
-                if payload.get("code") == 0:
-                    return self._to_raw_feed(payload)
-                logger.debug(
-                    "[Bilibili] 评论 WBI 接口拒绝请求: "
-                    f"code={payload.get('code')} message={payload.get('message')}"
-                )
+                items: list[dict] = []
+                owner_mid = ""
+                total = 0
+                next_cursor = 0
+                for _ in range(3):
+                    payload = await self._request_json(
+                        "https://api.bilibili.com/x/v2/reply/wbi/main",
+                        self._sign(
+                            {**base_params, "next": next_cursor},
+                            mixin_key,
+                        ),
+                        referer=referer,
+                    )
+                    if payload.get("code") != 0:
+                        logger.debug(
+                            "[Bilibili] 评论 WBI 接口拒绝请求: "
+                            f"code={payload.get('code')} "
+                            f"message={payload.get('message')}"
+                        )
+                        break
+                    feed = self._to_raw_feed(payload)
+                    items = self._dedupe([*items, *feed.items])
+                    owner_mid = owner_mid or feed.owner_mid
+                    total = max(total, feed.total)
+                    cursor = (payload.get("data") or {}).get("cursor") or {}
+                    new_cursor = cursor.get("next")
+                    if len(items) >= candidate_target or cursor.get("is_end"):
+                        break
+                    try:
+                        new_cursor = int(new_cursor)
+                    except (TypeError, ValueError):
+                        break
+                    if new_cursor == next_cursor:
+                        break
+                    next_cursor = new_cursor
+                if items:
+                    return _RawCommentFeed(items, owner_mid, total or len(items))
             except Exception as exc:
                 logger.debug(f"[Bilibili] 评论 WBI 接口异常: {exc}")
 
         try:
-            payload = await self._request_json(
-                "https://api.bilibili.com/x/v2/reply",
-                {
-                    "type": type_,
-                    "oid": oid,
-                    "sort": 1,
-                    "ps": page_size,
-                    "pn": 1,
-                    "nohot": 0,
-                },
-                referer=referer,
-            )
-            if payload.get("code") == 0:
-                return self._to_raw_feed(payload)
-            logger.debug(
-                "[Bilibili] 评论经典接口拒绝请求: "
-                f"code={payload.get('code')} message={payload.get('message')}"
-            )
+            items = []
+            owner_mid = ""
+            total = 0
+            for page_number in range(1, 4):
+                payload = await self._request_json(
+                    "https://api.bilibili.com/x/v2/reply",
+                    {
+                        "type": type_,
+                        "oid": oid,
+                        "sort": 1,
+                        "ps": page_size,
+                        "pn": page_number,
+                        "nohot": 0 if page_number == 1 else 1,
+                    },
+                    referer=referer,
+                )
+                if payload.get("code") != 0:
+                    logger.debug(
+                        "[Bilibili] 评论经典接口拒绝请求: "
+                        f"code={payload.get('code')} "
+                        f"message={payload.get('message')}"
+                    )
+                    break
+                feed = self._to_raw_feed(payload)
+                items = self._dedupe([*items, *feed.items])
+                owner_mid = owner_mid or feed.owner_mid
+                total = max(total, feed.total)
+                if len(items) >= candidate_target or not feed.items:
+                    break
+            if items:
+                return _RawCommentFeed(items, owner_mid, total or len(items))
         except Exception as exc:
             logger.debug(f"[Bilibili] 评论经典接口异常: {exc}")
 
@@ -640,32 +682,59 @@ class BiliCommentFeed:
             return []
 
         partial = raw_feed.total > len(entries) or len(raw_feed.items) > len(entries)
-        document = BiliCommentDocument(
-            work_title=video_title or "B站视频",
-            cover=self._image_url(video_cover),
-            total_text=f"{self._count_text(raw_feed.total)} 条评论",
-            entries=entries,
-            footer_text=(
-                "仅展示部分热门评论 · Parser X" if partial else "Parser X · B站评论区"
-            ),
-        )
-        serialised = json.dumps(
-            asdict(document),
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        )
-        digest = hashlib.sha256(serialised.encode()).hexdigest()[:12]
-        out_path = self.cache_dir / f"bili_comment_feed_{oid}_{digest}.jpg"
-        if out_path.is_file() and out_path.stat().st_size > 0:
-            return [ImageContent(out_path)]
+        chunks = split_comment_entries(entries, self.chunk_size)
+        page_count = len(chunks)
+        contents = []
+        offset = 0
+        for page_index, chunk in enumerate(chunks, start=1):
+            document = BiliCommentDocument(
+                work_title=video_title or "B站视频",
+                cover=self._image_url(video_cover),
+                total_text=f"{self._count_text(raw_feed.total)} 条评论",
+                entries=chunk,
+                footer_text=(
+                    "仅展示部分热门评论 · Parser X"
+                    if partial
+                    else "Parser X · B站评论区"
+                ),
+                page_index=page_index,
+                page_count=page_count,
+                display_start=offset + 1,
+                display_total=len(entries),
+            )
+            offset += len(chunk)
+            serialised = json.dumps(
+                asdict(document),
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            digest = hashlib.sha256(
+                f"bili_comment_v2|{serialised}".encode()
+            ).hexdigest()[:12]
+            out_path = (
+                self.cache_dir / f"bili_comment_feed_{oid}_{page_index}_{digest}.jpg"
+            )
+            if out_path.is_file() and out_path.stat().st_size > 0:
+                contents.append(ImageContent(out_path))
+                continue
 
-        async def render() -> Path:
-            await self.canvas.render(out_path, document)
-            return out_path
+            async def render(
+                target: Path = out_path,
+                doc: BiliCommentDocument = document,
+            ) -> Path:
+                await self.canvas.render(target, doc)
+                return target
 
-        task = asyncio.create_task(render(), name=f"bili_comment_canvas_{oid}")
-        return [ImageContent(task)]
+            contents.append(
+                ImageContent(
+                    asyncio.create_task(
+                        render(),
+                        name=f"bili_comment_canvas_{oid}_{page_index}",
+                    )
+                )
+            )
+        return contents
 
 
 __all__ = ["BiliCommentFeed"]

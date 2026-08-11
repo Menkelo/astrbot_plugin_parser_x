@@ -10,11 +10,14 @@ from typing import ClassVar
 from astrbot.api import logger
 from astrbot.core.config.astrbot_config import AstrBotConfig
 
+from ..comment_canvas import SocialCommentCanvas
+from ..comment_settings import CommentSettings
 from ..data import ImageContent, Platform, VideoContent
 from ..download import Downloader
 from ..text_renderer import TextCardRenderer
 from ..utils import image_to_data_uri, normalize_image_url
 from .base import BaseParser, ParseException, handle
+from .weibo_comment import WeiboCommentFeed
 
 
 class WeiboParser(BaseParser):
@@ -34,6 +37,49 @@ class WeiboParser(BaseParser):
         self.cache_dir = Path(config["cache_dir"])
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.text_renderer = TextCardRenderer()
+        cookies = config.get("cookies", {})
+        self.cookie = (
+            str(cookies.get("weibo_cookie", "")) if isinstance(cookies, dict) else ""
+        )
+        comment_settings = CommentSettings.from_config(config, "weibo")
+        self.enable_comment_card = comment_settings.enabled
+        self.comment_limit = comment_settings.display_count
+        self.comment_chunk_size = comment_settings.chunk_size
+        self.comment_timeout = comment_settings.timeout
+        self.comment_canvas = SocialCommentCanvas()
+        self.comment_feed = WeiboCommentFeed(
+            self,
+            self.comment_canvas,
+            limit=self.comment_limit,
+            chunk_size=self.comment_chunk_size,
+        )
+
+    def set_canvas_render(self, canvas_render):
+        self.comment_canvas.bind(canvas_render)
+
+    def _comment_extra(
+        self,
+        mid: str,
+        *,
+        title: str,
+        cover: str | None,
+        owner_id: str | int | None,
+    ) -> dict:
+        if not self.enable_comment_card or not mid:
+            return {}
+
+        async def build_comments():
+            return await self.comment_feed.build_images(
+                mid,
+                work_title=title,
+                cover=cover,
+                owner_id=owner_id,
+            )
+
+        return {
+            "comment_task_factory": build_comments,
+            "comment_timeout": self.comment_timeout,
+        }
 
     @handle("weibo.com", r"weibo\.com/[0-9]+/([a-zA-Z0-9]+)")
     @handle("weibo.cn", r"weibo\.cn/(?:status|detail)/([a-zA-Z0-9]+)")
@@ -89,6 +135,7 @@ class WeiboParser(BaseParser):
                 pass
 
         contents = []
+        static_pic_urls = self._collect_static_pic_urls(data)
 
         for index, (video_url, duration) in enumerate(
             self._collect_video_items(data), start=1
@@ -101,14 +148,12 @@ class WeiboParser(BaseParser):
             # 提纯：不下载封面
             contents.append(VideoContent(video_task, None, duration=duration))
 
-        for url in self._collect_static_pic_urls(data):
+        for url in static_pic_urls:
             img_task = self.downloader.download_img(
                 url,
                 ext_headers=self.headers,
             )
             contents.append(ImageContent(img_task))
-
-        # 移除了评论区抓取逻辑
 
         extra = {}
         if text and not contents:
@@ -129,6 +174,18 @@ class WeiboParser(BaseParser):
                 contents.append(text_card)
             except Exception as e:
                 logger.warning(f"[Weibo] 正文卡渲染失败: {e}")
+
+        comment_title = re.sub(r"\s+", " ", text).strip()
+        if len(comment_title) > 64:
+            comment_title = f"{comment_title[:61]}..."
+        extra.update(
+            self._comment_extra(
+                str(data.get("id") or data.get("mid") or bid),
+                title=comment_title or f"{author_name}的微博",
+                cover=(static_pic_urls[0] if static_pic_urls else author_avatar),
+                owner_id=user.get("id"),
+            )
+        )
 
         author = self.create_author(
             author_name, author_avatar, ext_headers=self.headers

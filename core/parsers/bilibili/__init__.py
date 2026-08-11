@@ -11,6 +11,7 @@ from bilibili_api import Credential, request_settings, select_client
 from bilibili_api.video import Video
 from msgspec import convert
 
+from ...comment_settings import CommentSettings
 from ...constants import BILIBILI_HEADER
 from ...data import Platform
 from ...exception import SizeLimitException
@@ -42,7 +43,14 @@ class BilibiliParser(BaseParser):
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
         self.bili_ck = config.get("cookies", {}).get("bili_ck", "")
-        self.comment_limit = 9
+        comment_settings = CommentSettings.from_config(
+            config,
+            "bilibili",
+            legacy_enabled=config.get("bili_comment", True),
+        )
+        self.comment_limit = comment_settings.display_count
+        self.comment_chunk_size = comment_settings.chunk_size
+        self.comment_timeout = comment_settings.timeout
 
         perf = config.get("performance", {})
         if not isinstance(perf, dict):
@@ -73,7 +81,7 @@ class BilibiliParser(BaseParser):
         # === B站评论区总开关 ===
         # true：解析B站视频时抓取并渲染评论区
         # false：只解析视频，不抓取评论区
-        self.enable_comment_card = bool(config.get("bili_comment", True))
+        self.enable_comment_card = comment_settings.enabled
 
         self._cache_ttl = int(perf.get("bili_cache_ttl", 120))
         self._cache_max = int(perf.get("bili_cache_max", 256))
@@ -85,6 +93,7 @@ class BilibiliParser(BaseParser):
             parser=self,
             canvas=self.comment_canvas,
             limit=self.comment_limit,
+            chunk_size=self.comment_chunk_size,
         )
 
         self.stream_selector = BiliStreamSelector()
@@ -790,7 +799,10 @@ class BilibiliParser(BaseParser):
             text=text,
             author=author,
             contents=[video_content],
-            extra={"comment_task_factory": comment_task_factory}
+            extra={
+                "comment_task_factory": comment_task_factory,
+                "comment_timeout": self.comment_timeout,
+            }
             if comment_task_factory
             else {},
         )

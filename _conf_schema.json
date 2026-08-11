@@ -25,11 +25,60 @@
       "netease_music": {"description": "网易云音乐（yt-dlp）", "type": "bool", "default": true}
     }
   },
+  "comments": {
+    "description": "评论区卡片",
+    "hint": "主内容发送完成后，再通过 AstrBot Canvas 生成热门评论卡片",
+    "type": "object",
+    "items": {
+      "bilibili": {
+        "description": "B站评论区",
+        "type": "bool",
+        "default": true
+      },
+      "douyin": {
+        "description": "抖音评论区",
+        "hint": "需要配置 douyin_ck；未配置时自动跳过",
+        "type": "bool",
+        "default": true
+      },
+      "weibo": {
+        "description": "微博评论区",
+        "type": "bool",
+        "default": true
+      },
+      "display_count": {
+        "description": "评论展示总数",
+        "hint": "按热门顺序最多展示多少条评论",
+        "type": "int",
+        "slider": {"min": 1, "max": 20, "step": 1},
+        "default": 10
+      },
+      "chunk_size": {
+        "description": "单张卡片评论数",
+        "hint": "超过该数量会自动拆成多张图片，避免单图过长",
+        "type": "int",
+        "slider": {"min": 1, "max": 10, "step": 1},
+        "default": 5
+      },
+      "timeout": {
+        "description": "评论区生成超时（秒）",
+        "type": "int",
+        "slider": {"min": 15, "max": 120, "step": 5},
+        "default": 90
+      }
+    }
+  },
   "bili_comment": {
-    "description": "B站评论区",
-    "hint": "解析 B站视频时额外生成评论区截图卡片",
+    "description": "旧版 B站评论开关",
     "type": "bool",
-    "default": true
+    "default": true,
+    "invisible": true
+  },
+  "comment_settings_migrated": {
+    "description": "评论配置迁移标记",
+    "type": "bool",
+    "default": false,
+    "invisible": true
   },
   "show_download_fail_tip": {
     "description": "显示下载失败提示",
@@ -73,6 +122,12 @@
       "bili_ck": {
         "description": "Bilibili Cookie",
         "hint": "用于提升 B站接口稳定性与清晰度",
+        "type": "text",
+        "default": ""
+      },
+      "weibo_cookie": {
+        "description": "微博 Cookie",
+        "hint": "可选；公开热门评论无需登录，受限微博可使用该登录态",
         "type": "text",
         "default": ""
       },

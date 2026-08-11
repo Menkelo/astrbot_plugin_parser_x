@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from astrbot.api import AstrBotConfig
@@ -13,11 +14,23 @@ from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import (
     AiocqhttpMessageEvent,
 )
 
+from core.comment_canvas import (
+    DOUYIN_THEME,
+    CommentAuthor,
+    CommentDocument,
+    CommentEntry,
+    CommentRichPart,
+    SocialCommentCanvas,
+    split_comment_entries,
+)
+from core.comment_settings import CommentSettings
 from core.download import VideoInfo
 from core.parsers import (
     BaseParser,
+    DouyinParser,
     MiyousheParser,
     TiebaParser,
+    WeiboParser,
     XiaoheiheParser,
 )
 from core.parsers.bilibili.comment_canvas import (
@@ -28,8 +41,36 @@ from core.parsers.bilibili.comment_canvas import (
     BiliRichPart,
 )
 from core.parsers.bilibili.comment_feed import BiliCommentFeed
+from core.parsers.douyin.a_bogus import _sm3_fallback, generate_a_bogus
+from core.parsers.douyin.comment_feed import DouyinCommentFeed
+from core.parsers.weibo_comment import WeiboCommentFeed
 from core.parsers.ytdlp import AcFunParser
 from core.utils import extract_json_url
+
+
+def test_comment_settings_normalize_bool_and_clamp_values():
+    settings = CommentSettings.from_config(
+        {
+            "comments": {
+                "bilibili": "false",
+                "display_count": "999",
+                "chunk_size": 0,
+                "timeout": "invalid",
+            }
+        },
+        "bilibili",
+    )
+    assert settings.enabled is False
+    assert settings.display_count == 20
+    assert settings.chunk_size == 1
+    assert settings.timeout == 90
+
+    legacy = CommentSettings.from_config(
+        {"comments": "invalid", "bili_comment": "false"},
+        "bilibili",
+        legacy_enabled="false",
+    )
+    assert legacy.enabled is False
 
 
 def test_json_share_url_is_extracted_from_onebot_payload():
@@ -297,6 +338,315 @@ def test_bilibili_comment_feed_prioritizes_hot_and_pinned_replies():
     assert raw.total == 99
 
 
+def test_a_bogus_matches_the_tracked_rconsole_algorithm_vector():
+    query = (
+        "device_platform=webapp&aid=6383&aweme_id=7414051930047106342&cursor=0&count=20"
+    )
+    user_agent = (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    )
+    value = generate_a_bogus(
+        query,
+        user_agent,
+        now_ms=1700000000123,
+        random_values=[0.1234, 0.5678, 0.9012],
+    )
+    assert value == (
+        "E7mhBdugDifihdWk56KLfY3q65e3Y0CI0trEMD2fnxVHqL39HMTa9exoIBGvXFEj"
+        "wG/-IeYjy4hbT3ohrQ2y8qwf9W0L/25gsDSkKl12so0j53inCLf/E0iE5hsAtFH8s"
+        "vr4iKi8owICSYyhldAJ5kIlO62-zo0/9IR="
+    )
+
+
+def test_a_bogus_sm3_fallback_is_portable():
+    assert _sm3_fallback(b"abc").hex() == (
+        "66c7f0f462eeedd9d1f2d46bdc10e4e24167c4875cf2f7a2297da02b8f4ba8e0"
+    )
+
+
+def test_social_comment_canvas_escapes_jinja_from_user_content(tmp_path):
+    calls = {}
+
+    async def fake_canvas(template, data, *, return_url, options):
+        calls["template"] = template
+        calls["data"] = data
+        output = tmp_path / "social.jpg"
+        output.write_bytes(b"social-canvas")
+        return str(output)
+
+    renderer = SocialCommentCanvas(fake_canvas)
+    document = CommentDocument(
+        theme=DOUYIN_THEME,
+        work_title="{{ 7 * 7 }}",
+        cover="",
+        total_text="1 条评论",
+        entries=[
+            CommentEntry(
+                author=CommentAuthor("用户"),
+                content=[CommentRichPart("text", "{% unsafe %}")],
+            )
+        ],
+    )
+    output = tmp_path / "result.jpg"
+    asyncio.run(renderer.render(output, document))
+
+    assert output.read_bytes() == b"social-canvas"
+    assert "{{ 7 * 7 }}" not in calls["template"]
+    assert "{% unsafe %}" not in calls["template"]
+    assert "&#123;" in calls["template"]
+
+
+def test_comment_chunking_accounts_for_long_content():
+    short = CommentEntry(
+        author=CommentAuthor("短评"),
+        content=[CommentRichPart("text", "短评论")],
+    )
+    long = CommentEntry(
+        author=CommentAuthor("长评"),
+        content=[CommentRichPart("text", "很长" * 300)],
+    )
+    chunks = split_comment_entries([short, short, long, short], max_items=5)
+    assert [len(chunk) for chunk in chunks] == [2, 1, 1]
+
+
+def test_douyin_comment_normalization_covers_rconsole_visible_fields(tmp_path):
+    class FakeParser:
+        headers = {"User-Agent": "Mozilla/5.0"}
+        cookies = "sessionid=test"
+        cache_dir = tmp_path
+
+    feed = DouyinCommentFeed(FakeParser(), SocialCommentCanvas())
+    normalized = feed.adapt_comment(
+        {
+            "user": {
+                "uid": "42",
+                "nickname": "作者",
+                "avatar_thumb": {"url_list": ["http://p3.douyinpic.com/avatar"]},
+            },
+            "text": "你好[比心] @朋友 #话题#",
+            "emoji": [
+                {
+                    "display_name": "比心",
+                    "emoji_url": {"url_list": ["https://p3.douyinpic.com/emote"]},
+                }
+            ],
+            "image_list": [
+                {"origin_url": {"url_list": ["https://p3.douyinpic.com/pic"]}}
+            ],
+            "sticker": {
+                "static_url": {"url_list": ["https://p3.douyinpic.com/sticker"]}
+            },
+            "digg_count": 10000,
+            "reply_comment_total": 2,
+            "ip_label": "上海",
+            "is_stick": True,
+            "is_author_digged": True,
+            "reply_comment": [
+                {
+                    "user": {"uid": "7", "nickname": "回复者"},
+                    "text": "楼中楼",
+                }
+            ],
+        },
+        {"uid": "42", "nickname": "作者"},
+        {},
+    )
+
+    assert normalized is not None
+    assert normalized.author.badges[0].text == "作者"
+    assert normalized.author.avatar.startswith("https://")
+    assert {part.kind for part in normalized.content} >= {"emote", "highlight"}
+    assert normalized.images == ["https://p3.douyinpic.com/pic"]
+    assert normalized.sticker_image == "https://p3.douyinpic.com/sticker"
+    assert normalized.like_text == "1万"
+    assert normalized.reply_text == "回复 2"
+    assert normalized.location == "上海"
+    assert normalized.pinned is True
+    assert normalized.creator_liked is True
+    assert normalized.first_reply is not None
+
+
+def test_native_parsers_attach_comment_factories(tmp_path):
+    class FakeDownloader:
+        def download_img(self, *_args, **_kwargs):
+            async def finish():
+                output = tmp_path / "image.jpg"
+                output.write_bytes(b"image")
+                return output
+
+            return asyncio.create_task(finish())
+
+    config = {
+        "cache_dir": str(tmp_path),
+        "cookies": {"douyin_ck": "sessionid=test", "weibo_cookie": ""},
+        "comments": {
+            "douyin": True,
+            "weibo": True,
+            "display_count": 6,
+            "chunk_size": 3,
+            "timeout": 45,
+        },
+    }
+
+    async def run():
+        downloader = FakeDownloader()
+        douyin = DouyinParser(config, downloader)
+        result = douyin._build_result_from_aweme(
+            {
+                "aweme_id": "7414051930047106342",
+                "desc": "作品",
+                "create_time": 1700000000,
+                "author": {"uid": "42", "nickname": "作者"},
+                "images": [{"url_list": ["https://p3.douyinpic.com/image"]}],
+            },
+            "7414051930047106342",
+        )
+        weibo = WeiboParser(config, downloader)
+        weibo_extra = weibo._comment_extra(
+            "4461526582968019",
+            title="微博",
+            cover="",
+            owner_id="42",
+        )
+        await asyncio.gather(
+            *(content.get_path() for content in result.contents),
+            return_exceptions=True,
+        )
+        await douyin.close_session()
+        await weibo.close_session()
+        return result.extra, weibo_extra
+
+    douyin_extra, weibo_extra = asyncio.run(run())
+    assert callable(douyin_extra["comment_task_factory"])
+    assert douyin_extra["comment_timeout"] == 45
+    assert callable(weibo_extra["comment_task_factory"])
+    assert weibo_extra["comment_timeout"] == 45
+
+
+def test_weibo_comment_normalization_preserves_html_and_nested_reply(tmp_path):
+    class FakeParser:
+        headers = {}
+        cookie = ""
+        cache_dir = tmp_path
+
+    feed = WeiboCommentFeed(FakeParser(), SocialCommentCanvas())
+    normalized = feed.adapt_comment(
+        {
+            "user": {
+                "id": 42,
+                "screen_name": "原博",
+                "verified": True,
+                "mbrank": 3,
+                "avatar_hd": "https://wx1.sinaimg.cn/avatar.jpg",
+            },
+            "text": (
+                '回复<a href="/n/demo">@朋友</a>：正文'
+                '<img alt="[笑cry]" src="https://h5.sinaimg.cn/emote.png">'
+            ),
+            "like_count": 100000000,
+            "total_number": 1,
+            "isLikedByMblogAuthor": True,
+            "comments": [
+                {
+                    "user": {"id": 7, "screen_name": "回复者"},
+                    "text": "楼中楼",
+                }
+            ],
+        },
+        "42",
+    )
+
+    assert normalized is not None
+    assert {badge.text for badge in normalized.author.badges} >= {"原博", "V", "VIP3"}
+    assert {part.kind for part in normalized.content} >= {"highlight", "emote"}
+    assert normalized.like_text == "1亿"
+    assert normalized.creator_liked is True
+    assert normalized.first_reply is not None
+
+
+def test_weibo_comment_string_zero_cursor_marks_feed_complete(tmp_path):
+    class FakeResponse:
+        status_code = 200
+        content = json.dumps(
+            {
+                "ok": 1,
+                "data": {
+                    "data": [{"id": "1", "text": "评论"}],
+                    "total_number": 1,
+                    "max_id": "0",
+                    "max_id_type": 0,
+                },
+            }
+        ).encode()
+
+    class FakeParser:
+        headers = {}
+        cookie = ""
+        cache_dir = tmp_path
+        calls = 0
+
+        async def http_get(self, *_args, **_kwargs):
+            self.calls += 1
+            return FakeResponse()
+
+    parser = FakeParser()
+    feed = WeiboCommentFeed(parser, SocialCommentCanvas())
+    result = asyncio.run(feed.fetch("4461526582968019"))
+
+    assert parser.calls == 1
+    assert result.has_more is False
+
+
+def test_bilibili_comment_feed_splits_long_cards(tmp_path):
+    class FakeParser:
+        headers = {}
+        bili_ck = ""
+        cache_dir = tmp_path
+
+        @staticmethod
+        def norm_bili_img(url):
+            return url
+
+    class FakeCanvas:
+        documents = []
+
+        async def render(self, target, document):
+            self.documents.append(document)
+            target.write_bytes(f"page-{document.page_index}".encode())
+
+    async def run():
+        canvas = FakeCanvas()
+        feed = BiliCommentFeed(FakeParser(), canvas, limit=5, chunk_size=2)
+
+        async def fake_fetch(_oid, _type):
+            items = [
+                {
+                    "rpid": index,
+                    "member": {"uname": f"用户{index}"},
+                    "content": {"message": f"评论{index}"},
+                }
+                for index in range(5)
+            ]
+            return SimpleNamespace(items=items, owner_mid="", total=99)
+
+        feed.fetch = fake_fetch
+        contents = await feed.build_images(
+            2,
+            1,
+            video_title="标题",
+            video_cover="",
+        )
+        paths = await asyncio.gather(*(content.get_path() for content in contents))
+        return canvas, paths
+
+    canvas, paths = asyncio.run(run())
+    assert len(paths) == 3
+    assert [document.page_index for document in canvas.documents] == [1, 2, 3]
+    assert [len(document.entries) for document in canvas.documents] == [2, 2, 1]
+
+
 def test_manifest_has_a_reviewable_upstream_baseline():
     manifest_path = Path(__file__).parents[1] / "upstream" / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -334,6 +684,7 @@ def test_plugin_initializes_and_registers_aiocqhttp_parsers(tmp_path):
         config_path=str(tmp_path / "parser_x_config.json"),
         schema=schema,
     )
+    config["bili_comment"] = "false"
 
     async def run_lifecycle():
         with (
@@ -353,6 +704,12 @@ def test_plugin_initializes_and_registers_aiocqhttp_parsers(tmp_path):
                 assert "tiktok.com" not in plugin.parser_map
                 assert "youtube.com" not in plugin.parser_map
                 assert plugin.key_pattern_list
+                assert plugin.config["comment_settings_migrated"] is True
+                assert plugin.config["comments"]["bilibili"] is False
+                assert plugin.parser_map["b23.tv"].enable_comment_card is False
+                assert plugin.parser_map["b23.tv"].comment_canvas._canvas_render
+                assert plugin.parser_map["douyin"].comment_canvas._canvas_render
+                assert plugin.parser_map["weibo.com"].comment_canvas._canvas_render
             finally:
                 await plugin.terminate()
 

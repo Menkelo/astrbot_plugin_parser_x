@@ -24,6 +24,7 @@ from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import (
 
 from .core.arbiter import EmojiLikeArbiter
 from .core.clean import CacheCleaner
+from .core.comment_settings import parse_bool
 from .core.data import (
     AudioContent,
     DynamicContent,
@@ -61,6 +62,19 @@ class ParserXPlugin(Star):
         self.cache_dir: Path = self.data_dir / "cache_dir"
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         config["cache_dir"] = str(self.cache_dir)
+
+        # v1 used a top-level bili_comment switch. Keep the user's previous
+        # choice when upgrading to the shared multi-platform comment settings.
+        if not parse_bool(config.get("comment_settings_migrated", False), False):
+            comment_config = config.get("comments", {})
+            if not isinstance(comment_config, dict):
+                comment_config = {}
+            comment_config["bilibili"] = parse_bool(
+                config.get("bili_comment", True),
+                True,
+            )
+            config["comments"] = comment_config
+            config["comment_settings_migrated"] = True
         self.config.save_config()
 
         self.parser_map: dict[str, BaseParser] = {}
@@ -69,6 +83,7 @@ class ParserXPlugin(Star):
         self.arbiter = EmojiLikeArbiter()
         self.cleaner = CacheCleaner(self.context, self.config)
         self.text_renderer = TextCardRenderer()
+        self._background_tasks: set[asyncio.Task] = set()
 
     # region 生命周期
 
@@ -77,6 +92,12 @@ class ParserXPlugin(Star):
         await self.text_renderer.check_available()
 
     async def terminate(self):
+        background_tasks = list(self._background_tasks)
+        for task in background_tasks:
+            task.cancel()
+        if background_tasks:
+            await asyncio.gather(*background_tasks, return_exceptions=True)
+        self._background_tasks.clear()
         await self.downloader.close()
         unique_parsers = set(self.parser_map.values())
         for parser in unique_parsers:
@@ -422,6 +443,8 @@ class ParserXPlugin(Star):
 
         async def process_comment_content():
             # 评论抓取和 Canvas 渲染延迟到发送阶段，避免阻塞主视频取流。
+            timeout = max(1.0, float(result.extra.get("comment_timeout", 90)))
+            started_at = asyncio.get_running_loop().time()
             comment_task = result.extra.get("comment_task")
             comment_task_factory = result.extra.get("comment_task_factory")
             if comment_task is None and callable(comment_task_factory):
@@ -431,7 +454,6 @@ class ParserXPlugin(Star):
                 )
             if comment_task is not None:
                 try:
-                    timeout = float(result.extra.get("comment_timeout", 90))
                     result.comment_contents = await asyncio.wait_for(
                         comment_task, timeout=timeout
                     )
@@ -445,8 +467,19 @@ class ParserXPlugin(Star):
             if not result.comment_contents:
                 return
 
+            remaining = max(
+                0.001,
+                timeout - (asyncio.get_running_loop().time() - started_at),
+            )
             tasks = [self._download_content(c) for c in result.comment_contents]
-            download_results = await asyncio.gather(*tasks)
+            try:
+                download_results = await asyncio.wait_for(
+                    asyncio.gather(*tasks),
+                    timeout=remaining,
+                )
+            except asyncio.TimeoutError:
+                logger.warning("评论区渲染超时，已取消并跳过发送")
+                return
             path_map = {id(c): (p, err) for c, p, err in download_results}
 
             segs = []
@@ -459,13 +492,32 @@ class ParserXPlugin(Star):
             if not segs:
                 return
 
+            comment_label = f"{result.platform.display_name} 评论区↓"
             nodes = Nodes([])
             nodes.nodes.append(
-                Node(uin=node_uin, name=node_name, content=[Plain("评论区↓")])
+                Node(uin=node_uin, name=node_name, content=[Plain(comment_label)])
             )
             for seg in segs:
                 nodes.nodes.append(Node(uin=node_uin, name=node_name, content=[seg]))
-            await event.send(event.chain_result([nodes]))
+            try:
+                await event.send(event.chain_result([nodes]))
+                return
+            except Exception as e:
+                logger.warning(f"评论区合并转发失败，降级逐张发送: {e}")
+
+            try:
+                await event.send(event.chain_result([Plain(comment_label)]))
+            except Exception as e:
+                logger.debug(f"评论区标题发送失败: {e}")
+            for seg in segs:
+                try:
+                    await event.send(event.chain_result([seg]))
+                except Exception as e:
+                    logger.warning(f"评论区图片逐张发送失败: {e}")
+
+        # 主内容优先。评论抓取和 Canvas 渲染在主内容完成后才启动，
+        # 避免与视频下载/上传争抢连接和 CPU，也确保消息顺序稳定。
+        await process_main_content()
 
         if (
             result.extra.get("comment_task") is not None
@@ -478,9 +530,12 @@ class ParserXPlugin(Star):
                 except Exception as e:
                     logger.warning(f"评论区后台发送失败: {e}")
 
-            asyncio.create_task(run_comment_content(), name="parser_x_comment_send")
-
-        await process_main_content()
+            task = asyncio.create_task(
+                run_comment_content(),
+                name="parser_x_comment_send",
+            )
+            self._background_tasks.add(task)
+            task.add_done_callback(self._background_tasks.discard)
 
     # endregion
 

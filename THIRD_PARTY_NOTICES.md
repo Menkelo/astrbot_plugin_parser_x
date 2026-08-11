@@ -5,7 +5,9 @@
 - Repository: https://github.com/zhiyu1998/rconsole-plugin
 - License: Mulan Permissive Software License, Version 2
 - Use in this project: feature inventory, platform coverage and compatibility baseline. Parser X does not bundle the
-  Yunzai runtime or copy its JavaScript modules verbatim.
+  Yunzai runtime or copy its JavaScript modules verbatim. `core/parsers/douyin/a_bogus.py` is a modified,
+  clean Python adaptation of the behavior in `utils/a-bogus.cjs`; the applicable Mulan PSL v2 text is bundled at
+  `licenses/MulanPSL-2.0.txt`.
 
 ## astrbot_plugin_r_parser
 

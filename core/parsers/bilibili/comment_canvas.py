@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from html import escape
 from pathlib import Path
@@ -71,6 +72,10 @@ class BiliCommentDocument:
     total_text: str
     entries: list[BiliCommentEntry]
     footer_text: str = ""
+    page_index: int = 1
+    page_count: int = 1
+    display_start: int = 1
+    display_total: int = 0
 
 
 class BiliCommentCanvas:
@@ -81,23 +86,36 @@ class BiliCommentCanvas:
         canvas_render: Callable[..., Awaitable[str]] | None = None,
     ):
         self._canvas_render = canvas_render
+        self._render_lock = asyncio.Lock()
 
     def bind(self, canvas_render: Callable[..., Awaitable[str]] | None) -> None:
         self._canvas_render = canvas_render
 
     @staticmethod
-    def _text(value: object) -> str:
-        return escape(str(value or ""))
+    def _escape_jinja(value: str) -> str:
+        return value.replace("{", "&#123;").replace("}", "&#125;")
 
-    @staticmethod
-    def _url(value: object) -> str:
-        return escape(str(value or ""), quote=True)
+    @classmethod
+    def _text(cls, value: object) -> str:
+        return cls._escape_jinja(escape(str(value or "")))
+
+    @classmethod
+    def _url(cls, value: object) -> str:
+        return cls._escape_jinja(escape(str(value or ""), quote=True))
 
     def _render_avatar(self, author: BiliAuthorBadge, *, small: bool) -> str:
         class_name = "reply-avatar" if small else "avatar"
+        fallback = self._text((author.nickname or "B")[:1])
+        image = ""
         if author.avatar:
-            return f'<img class="{class_name}" src="{self._url(author.avatar)}" alt="">'
-        return f'<div class="{class_name} avatar-fallback">B</div>'
+            image = (
+                f'<img src="{self._url(author.avatar)}" alt="" '
+                "onerror=\"this.style.display='none'\">"
+            )
+        return (
+            f'<div class="{class_name} avatar-shell">'
+            f"<span>{fallback}</span>{image}</div>"
+        )
 
     def _render_fan_medal(self, medal: BiliFanMedal | None) -> str:
         if medal is None:
@@ -155,7 +173,8 @@ class BiliCommentCanvas:
             elif part.kind == "emote" and part.url:
                 output.append(
                     f'<img class="emote" src="{self._url(part.url)}" '
-                    f'alt="{self._url(part.text)}">'
+                    f'alt="{self._url(part.text)}" '
+                    'onerror="this.replaceWith(document.createTextNode(this.alt))">'
                 )
             else:
                 output.append(f"<span>{self._text(part.text)}</span>")
@@ -164,7 +183,8 @@ class BiliCommentCanvas:
     def _render_images(self, images: list[str]) -> str:
         return "".join(
             '<div class="comment-image-wrap">'
-            f'<img class="comment-image" src="{self._url(url)}" alt="">'
+            f'<img class="comment-image" src="{self._url(url)}" alt="" '
+            "onerror=\"this.parentElement.style.display='none'\">"
             "</div>"
             for url in images
             if url
@@ -175,7 +195,8 @@ class BiliCommentCanvas:
             return ""
         image = (
             '<span class="decor-image">'
-            f'<img src="{self._url(decor.image)}" alt=""></span>'
+            f'<img src="{self._url(decor.image)}" alt="" '
+            "onerror=\"this.parentElement.style.display='none'\"></span>"
             if decor.image
             else ""
         )
@@ -237,7 +258,8 @@ class BiliCommentCanvas:
 
     def build_html(self, document: BiliCommentDocument) -> str:
         cover = (
-            f'<img class="cover" src="{self._url(document.cover)}" alt="">'
+            f'<img class="cover" src="{self._url(document.cover)}" alt="" '
+            "onerror=\"this.style.display='none'\">"
             if document.cover
             else ""
         )
@@ -245,6 +267,18 @@ class BiliCommentCanvas:
             self._render_entry(entry, nested=False) for entry in document.entries
         )
         footer = self._text(document.footer_text or "Parser X · B站评论区")
+        display_total = document.display_total or len(document.entries)
+        display_end = document.display_start + len(document.entries) - 1
+        range_text = (
+            f"第 {document.display_start}-{display_end} 条 / 共展示 {display_total} 条"
+            if display_total > len(document.entries)
+            else f"展示 {len(document.entries)} 条"
+        )
+        page_text = (
+            f" · 第 {document.page_index}/{document.page_count} 张"
+            if document.page_count > 1
+            else ""
+        )
         return f"""<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -259,7 +293,7 @@ body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Mic
 .header-copy{{min-width:0;flex:1}}.header-copy h1{{margin:0;overflow:hidden;font-size:21px;font-weight:600;text-overflow:ellipsis;white-space:nowrap}}
 .header-copy p{{margin:5px 0 0;color:#9499a0;font-size:14px}}.cover{{width:92px;height:54px;border-radius:7px;object-fit:cover;background:#f1f2f3}}
 .comment-card{{position:relative;display:grid;grid-template-columns:50px 1fr;gap:14px;padding:22px 0 18px;border-bottom:1px solid #e3e5e7}}
-.avatar,.reply-avatar{{display:grid;place-items:center;object-fit:cover;border-radius:50%;background:#f1f2f3;color:#fb7299;font-weight:800}}
+.avatar,.reply-avatar{{position:relative;display:grid;place-items:center;overflow:hidden;border-radius:50%;background:#fff0f5;color:#fb7299;font-weight:800}}.avatar-shell img{{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}}
 .avatar{{width:50px;height:50px;font-size:21px}}.reply-avatar{{width:26px;height:26px;font-size:12px}}.comment-body,.reply-body{{min-width:0}}
 .comment-head{{display:flex;min-height:23px;justify-content:space-between;gap:12px}}.author-row{{display:flex;min-width:0;align-items:center;gap:5px;flex-wrap:wrap}}
 .nickname,.reply-name{{max-width:280px;overflow:hidden;color:#61666d;font-size:17px;text-overflow:ellipsis;white-space:nowrap}}.reply-name{{max-width:220px;font-size:15px}}
@@ -281,7 +315,7 @@ body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Mic
 <body><div class="page">
 <header class="header"><div class="brand">B</div><div class="header-copy">
 <h1>{self._text(document.work_title or "B站视频")}</h1>
-<p>视频评论 · 展示 {len(document.entries)} 条 · {self._text(document.total_text)}</p>
+<p>视频评论 · {self._text(range_text)} · {self._text(document.total_text)}{self._text(page_text)}</p>
 </div>{cover}</header><main>{entries}</main><footer class="footer">{footer}</footer>
 </div></body></html>"""
 
@@ -289,42 +323,51 @@ body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Mic
         out_path.parent.mkdir(parents=True, exist_ok=True)
         html = self.build_html(document)
 
-        if self._canvas_render is not None:
-            try:
-                rendered = await self._canvas_render(
-                    html,
-                    {},
-                    return_url=False,
-                    options={
-                        "type": "jpeg",
-                        "quality": 80,
-                        "full_page": True,
-                    },
-                )
-                rendered_path = Path(str(rendered))
-                if rendered_path.is_file() and rendered_path.stat().st_size > 0:
-                    if rendered_path.resolve() != out_path.resolve():
-                        copyfile(rendered_path, out_path)
-                    return
-            except Exception as exc:
-                logger.warning(f"B站评论 Canvas 渲染失败，回退本地 Chromium: {exc}")
+        async with self._render_lock:
+            if self._canvas_render is not None:
+                try:
+                    rendered = await self._canvas_render(
+                        html,
+                        {},
+                        return_url=False,
+                        options={
+                            "type": "jpeg",
+                            "quality": 84,
+                            "full_page": True,
+                            "animations": "disabled",
+                            "caret": "hide",
+                        },
+                    )
+                    rendered_path = Path(str(rendered))
+                    if rendered_path.is_file() and rendered_path.stat().st_size > 0:
+                        if rendered_path.resolve() != out_path.resolve():
+                            copyfile(rendered_path, out_path)
+                        return
+                except Exception as exc:
+                    logger.warning(f"B站评论 Canvas 渲染失败，回退本地 Chromium: {exc}")
 
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
-            try:
-                page = await browser.new_page(
-                    viewport={"width": 760, "height": 100},
-                    device_scale_factor=2,
-                )
-                await page.set_content(html, wait_until="networkidle", timeout=20_000)
-                await page.screenshot(
-                    path=str(out_path),
-                    type="jpeg",
-                    quality=80,
-                    full_page=True,
-                )
-            finally:
-                await browser.close()
+            async with async_playwright() as playwright:
+                browser = await playwright.chromium.launch()
+                try:
+                    page = await browser.new_page(
+                        viewport={"width": 760, "height": 100},
+                        device_scale_factor=2,
+                    )
+                    await page.set_content(
+                        html,
+                        wait_until="networkidle",
+                        timeout=20_000,
+                    )
+                    await page.screenshot(
+                        path=str(out_path),
+                        type="jpeg",
+                        quality=84,
+                        full_page=True,
+                        animations="disabled",
+                        caret="hide",
+                    )
+                finally:
+                    await browser.close()
 
 
 __all__ = [

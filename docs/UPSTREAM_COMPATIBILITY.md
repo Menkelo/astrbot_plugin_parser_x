@@ -11,10 +11,10 @@
 
 | 上游模块 | Parser X 状态 | 实现位置 | 说明 |
 | --- | --- | --- | --- |
-| Bilibili | 原生 | `core/parsers/bilibili/` | 视频、分P、动态、直播；`comment_feed.py`/`comment_canvas.py` 对照上游 `utils/bili-comment.js` 与评论模板做语义适配，并优先使用 AstrBot Canvas |
-| 抖音 | 原生 | `core/parsers/douyin/` | 视频、图文、图集、Cookie 与 yt-dlp 兜底 |
+| Bilibili | 原生 | `core/parsers/bilibili/` | 视频、分P、动态、直播；`comment_feed.py`/`comment_canvas.py` 对照上游 `utils/bili-comment.js` 与评论模板做独立语义适配，支持分页候选补足、内容高度分片并优先使用 AstrBot Canvas |
+| 抖音 | 原生 | `core/parsers/douyin/` | 视频、图文、图集、Cookie 与 yt-dlp 兜底；`comment_feed.py` 对照上游 `utils/douyin-comment.js` 适配 Cookie 评论接口、A-Bogus、表情、图片、贴纸、作者标识与楼中楼 |
 | 快手 | 原生 | `core/parsers/kuaishou.py` | 视频、图片、图文 |
-| 微博 | 原生 | `core/parsers/weibo.py` | 视频、图片、纯文本卡片 |
+| 微博 | 原生 | `core/parsers/weibo.py`、`core/parsers/weibo_comment.py` | 视频、图片、纯文本卡片；使用公开 `m.weibo.cn/comments/hotflow` 生成热门评论 Canvas 卡片，支持认证/VIP、微博表情、原博与楼中楼 |
 | 小红书 | 原生 | `core/parsers/xiaohongshu.py` | 视频、图片、图文 |
 | AcFun | 兼容层 | `core/parsers/ytdlp.py` | 单视频 |
 | 西瓜视频 | 兼容层 | `core/parsers/ytdlp.py` | 单视频 |
@@ -28,6 +28,14 @@
 | 点歌、云盘上传、扫码登录 | 不适用 | - | 强依赖 Yunzai 群文件、Redis 与管理员模型 |
 | 插件自更新 | 不适用 | - | 由 AstrBot 插件管理器负责 |
 | Redis 信任用户/海外开关 | 不适用 | - | 改用 AstrBot 配置与会话开关 |
+
+## 评论区范围
+
+- 已适配：B站视频、抖音作品（需要 `douyin_ck`）、微博。
+- 暂不加入：快手、小红书等平台的评论接口依赖频繁变化的私有签名和完整登录态；当前没有
+  足够稳定、可真实验证的公开接口，因此不使用易碎网页抓取充数。
+- 三个平台共享评论数量、单图数量与超时配置；渲染层会同时考虑评论条数和预估内容高度，
+  超过阈值时拆成多张 Canvas 卡片。
 
 ## 地区范围
 

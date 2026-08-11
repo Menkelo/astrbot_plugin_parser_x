@@ -9,9 +9,12 @@ import msgspec
 from astrbot.api import logger
 from astrbot.core.config.astrbot_config import AstrBotConfig
 
+from ...comment_canvas import SocialCommentCanvas
+from ...comment_settings import CommentSettings
 from ...download import Downloader
 from ...utils import cookies_str_to_netscape
 from ..base import BaseParser, ParseException, Platform, SkipParseException, handle
+from .comment_feed import DouyinCommentFeed
 from .extractor import (
     extract_id_from_query,
     extract_router_data_json_str,
@@ -39,6 +42,46 @@ class DouyinParser(BaseParser):
         if self.cookies:
             self._set_cookies(self.cookies)
             self._cookiefile = self._write_cookiefile(self.cookies)
+
+        comment_settings = CommentSettings.from_config(config, "douyin")
+        self.enable_comment_card = comment_settings.enabled
+        self.comment_limit = comment_settings.display_count
+        self.comment_chunk_size = comment_settings.chunk_size
+        self.comment_timeout = comment_settings.timeout
+        self.comment_canvas = SocialCommentCanvas()
+        self.comment_feed = DouyinCommentFeed(
+            self,
+            self.comment_canvas,
+            limit=self.comment_limit,
+            chunk_size=self.comment_chunk_size,
+        )
+
+    def set_canvas_render(self, canvas_render):
+        self.comment_canvas.bind(canvas_render)
+
+    def _comment_extra(
+        self,
+        aweme_id: str,
+        *,
+        title: str,
+        cover: str | None,
+        owner: dict | None,
+    ) -> dict:
+        if not self.enable_comment_card or not self.cookies or not aweme_id:
+            return {}
+
+        async def build_comments():
+            return await self.comment_feed.build_images(
+                str(aweme_id),
+                work_title=title,
+                cover=cover,
+                owner=owner or {},
+            )
+
+        return {
+            "comment_task_factory": build_comments,
+            "comment_timeout": self.comment_timeout,
+        }
 
     def _set_cookies(self, cookies: str):
         cleaned = cookies.replace("\n", "").replace("\r", "").strip()
@@ -580,11 +623,18 @@ class DouyinParser(BaseParser):
             meta.avatar_url,
             ext_headers=self.ios_headers,
         )
+        comment_cover = meta.cover_url or (image_urls[0] if image_urls else None)
         return self.result(
             title=meta.desc,
             author=author,
             contents=contents,
             timestamp=meta.create_time,
+            extra=self._comment_extra(
+                meta.id or vid,
+                title=meta.desc,
+                cover=comment_cover,
+                owner=aweme.get("author") if isinstance(aweme, dict) else None,
+            ),
         )
 
     async def parse_slides(self, video_id: str):
@@ -640,6 +690,7 @@ class DouyinParser(BaseParser):
             return valid[0]
 
         sent_images: set[str] = set()
+        comment_cover: str | None = None
 
         for image in slides.images or []:
             image_url = pick_best_image_url(image.url_list or [])
@@ -648,6 +699,8 @@ class DouyinParser(BaseParser):
 
             if image_url and image_url not in sent_images:
                 sent_images.add(image_url)
+                if comment_cover is None:
+                    comment_cover = image_url
                 contents.extend(
                     self._create_image_contents_with_headers(
                         [image_url],
@@ -666,6 +719,12 @@ class DouyinParser(BaseParser):
             author=author,
             contents=contents,
             timestamp=slides.create_time,
+            extra=self._comment_extra(
+                video_id,
+                title=slides.desc,
+                cover=comment_cover,
+                owner={"nickname": slides.name},
+            ),
         )
 
     async def _parse_with_ytdlp(self, vid: str):
@@ -711,4 +770,10 @@ class DouyinParser(BaseParser):
             contents=contents,
             timestamp=info.timestamp,
             url=url,
+            extra=self._comment_extra(
+                vid,
+                title=title,
+                cover=info.thumbnail,
+                owner={"nickname": author_name},
+            ),
         )

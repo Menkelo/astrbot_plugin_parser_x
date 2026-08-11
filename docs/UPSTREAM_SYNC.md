@@ -18,6 +18,9 @@ Parser X 不直接复制 rconsole-plugin 的 Yunzai 代码。同步的单位是�
    - yt-dlp 已稳定支持的纯音视频平台：更新 `core/parsers/ytdlp.py` 路由或下载策略。
    - Yunzai 专属运维能力：标记“不适用”，不要引入 Redis、全局 Bot 或自更新逻辑。
    - 国外平台：当前项目范围明确排除，不增加解析器、配置项或路由。
+   - 评论区：先对照 `utils/bili-comment.js`、`utils/douyin-comment.js`、
+     `utils/weibo.js` 的接口与可见字段，再分别更新平台 feed；共享布局只更新
+     `core/comment_canvas.py`，B站专属等级/粉丝牌仍留在 `core/parsers/bilibili/`。
 5. 为每个行为变化增加测试夹具；禁止只修改 manifest 来“消除更新提示”。
 6. 运行 compileall、pytest、ruff，以及 AstrBot 当前版本下的插件导入测试。
 7. 人工在 aiocqhttp/NapCat 或 Lagrange 上至少验证：文本、单图、多图、视频、合并转发、失败降级。
