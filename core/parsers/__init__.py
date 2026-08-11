@@ -4,19 +4,20 @@ from .base import BaseParser, handle
 from .bilibili import BilibiliParser
 from .douyin import DouyinParser
 from .kuaishou import KuaiShouParser
+from .miyoushe import MiyousheParser
+from .music import KugouMusicParser, QQMusicParser
+from .tieba import TiebaParser
 from .weibo import WeiboParser
+from .weixin_channel import WeixinChannelParser
+from .xiaoheihe import XiaoheiheParser
 from .xiaohongshu import XiaoHongShuParser
 from .ytdlp import (
     AcFunParser,
-    InstagramParser,
     NeteaseMusicParser,
     PipixiaParser,
     QishuiMusicParser,
-    TikTokParser,
-    TwitterParser,
     WeishiParser,
     XiguaParser,
-    YouTubeParser,
 )
 
 __all__ = [
@@ -30,10 +31,12 @@ __all__ = [
     "KuaiShouParser",
     "WeiboParser",
     "XiaoHongShuParser",
-    "TikTokParser",
-    "TwitterParser",
-    "InstagramParser",
-    "YouTubeParser",
+    "MiyousheParser",
+    "QQMusicParser",
+    "KugouMusicParser",
+    "TiebaParser",
+    "XiaoheiheParser",
+    "WeixinChannelParser",
     "AcFunParser",
     "XiguaParser",
     "PipixiaParser",
