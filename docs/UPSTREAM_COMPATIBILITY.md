@@ -11,7 +11,7 @@
 
 | 上游模块 | Parser X 状态 | 实现位置 | 说明 |
 | --- | --- | --- | --- |
-| Bilibili | 原生 | `core/parsers/bilibili/` | 视频、分P、动态、直播、评论卡片 |
+| Bilibili | 原生 | `core/parsers/bilibili/` | 视频、分P、动态、直播；`comment_feed.py`/`comment_canvas.py` 对照上游 `utils/bili-comment.js` 与评论模板做语义适配，并优先使用 AstrBot Canvas |
 | 抖音 | 原生 | `core/parsers/douyin/` | 视频、图文、图集、Cookie 与 yt-dlp 兜底 |
 | 快手 | 原生 | `core/parsers/kuaishou.py` | 视频、图片、图文 |
 | 微博 | 原生 | `core/parsers/weibo.py` | 视频、图片、纯文本卡片 |
@@ -21,14 +21,10 @@
 | 皮皮虾 | 兼容层 | `core/parsers/ytdlp.py` | 取决于 yt-dlp extractor 可用性 |
 | 微视 | 兼容层 | `core/parsers/ytdlp.py` | 取决于 yt-dlp extractor 可用性 |
 | 网易云音乐 | 兼容层 | `core/parsers/ytdlp.py` | 发送音频文件 |
-| 汽水音乐 | 兼容层 | `core/parsers/ytdlp.py` | 发送音频文件 |
-| QQ音乐 | 原生 | `core/parsers/music.py` | 官方接口解析歌曲、歌手、专辑和封面；不绕过版权取流 |
-| 酷狗音乐 | 原生 | `core/parsers/music.py` | 官方元数据；可选对接自建 KuGouMusicApi 音源 |
 | 米游社 | 原生 | `core/parsers/miyoushe.py` | 正文、图片、视频和作者信息 |
 | 贴吧 | 原生 | `core/parsers/tieba.py` | 默认官方页面元数据；可选详情 API 获取楼主正文与媒体 |
 | 小黑盒 | 原生 | `core/parsers/xiaoheihe.py` | 帖子/游戏卡片；Cookie 可用时调用签名接口 |
-| 微信视频号 | 原生 | `core/parsers/weixin_channel.py` | 复用上游两阶段流程；需元宝 Cookie，默认关闭 |
-| 通用网页 AI 总结 | 原生命令 | `core/web_summary.py`、`main.py` | `/链接总结` 调用当前 AstrBot Provider；含 SSRF、大小和重定向防护 |
+| 微信视频号、QQ音乐、酷狗音乐、汽水音乐、通用网页 AI 总结 | 已移除 | - | 不注册路由、配置项或命令 |
 | 点歌、云盘上传、扫码登录 | 不适用 | - | 强依赖 Yunzai 群文件、Redis 与管理员模型 |
 | 插件自更新 | 不适用 | - | 由 AstrBot 插件管理器负责 |
 | Redis 信任用户/海外开关 | 不适用 | - | 改用 AstrBot 配置与会话开关 |

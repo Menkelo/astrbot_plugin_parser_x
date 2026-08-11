@@ -7,5 +7,3 @@ bilibili-api-python>=16.2.0
 tqdm>=4.66.0
 apscheduler>=3.10.0
 playwright>=1.40
-opencv-python
-numpy

@@ -11,7 +11,9 @@
 
 - Repository: https://github.com/Menkelo/astrbot_plugin_r_parser
 - License: MIT License (copyright notice retained in `LICENSE`)
-- Use in this project: initial native parser and OneBot delivery implementation, subsequently renamed and extended.
+- Use in this project: historical OneBot delivery and lifecycle reference only. The B站评论区
+  implementation is independently adapted from the upstream `rconsole-plugin` behavior and does
+  not reuse that repository's B站评论模块。
 
 ## AstrBot documentation and source
 

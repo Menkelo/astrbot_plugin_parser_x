@@ -103,7 +103,7 @@ class LiveCardRenderer:
               <div class="title">{esc(title)}</div>
               <div class="user">{avatar_html}<div><div class="uname">{esc(streamer_name)}</div>{user_time_html}</div></div>
               {meta_html}
-              <div class="footer">Menkelo/astrbot_plugin_r_parser</div>
+              <div class="footer">Parser X</div>
             </div>
           </div>
         </body>

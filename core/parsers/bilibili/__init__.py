@@ -17,8 +17,8 @@ from ...exception import SizeLimitException
 from ...live_renderer import LiveCardRenderer
 from ...utils import ck2dict
 from ..base import BaseParser, Downloader, ParseException, handle
-from .comment_renderer import BiliCommentRenderer
-from .comment_service import BiliCommentService
+from .comment_canvas import BiliCommentCanvas
+from .comment_feed import BiliCommentFeed
 from .dynamic_renderer import BiliDynamicRenderer
 from .dynamic_service import BiliDynamicService
 from .live_service import BiliLiveService
@@ -80,19 +80,11 @@ class BilibiliParser(BaseParser):
         self._video_info_cache: dict[str, tuple[float, dict]] = {}
         self._playurl_cache: dict[str, tuple[float, dict]] = {}
 
-        comment_conf = config.get("comment_filter", {})
-        if not isinstance(comment_conf, dict):
-            comment_conf = {}
-
-        self.comment_renderer = BiliCommentRenderer()
-        self.comment_service = BiliCommentService(
+        self.comment_canvas = BiliCommentCanvas()
+        self.comment_feed = BiliCommentFeed(
             parser=self,
-            renderer=self.comment_renderer,
-            comment_limit=self.comment_limit,
-            enable_text_ad_filter=bool(comment_conf.get("enable_text_ad_filter", True)),
-            enable_qr_filter=bool(comment_conf.get("enable_qr_filter", True)),
-            qr_check_max=int(comment_conf.get("qr_check_max", 4)),
-            qr_check_timeout=float(comment_conf.get("qr_check_timeout", 6)),
+            canvas=self.comment_canvas,
+            limit=self.comment_limit,
         )
 
         self.stream_selector = BiliStreamSelector()
@@ -102,6 +94,10 @@ class BilibiliParser(BaseParser):
 
         self.live_service = BiliLiveService(self)
         self.dynamic_service = BiliDynamicService(self)
+
+    def set_canvas_render(self, canvas_render):
+        """注入 AstrBot 官方 html_render，用于评论区 Canvas 卡片。"""
+        self.comment_canvas.bind(canvas_render)
 
     # region 路由
 
@@ -673,15 +669,12 @@ class BilibiliParser(BaseParser):
         # 关闭：直接跳过，减少请求和渲染耗时
         comment_task_factory = None
         if self.enable_comment_card:
-            comment_task_factory = lambda: (
-                self.comment_service.build_comment_image_content(
-                    video_info.aid,
-                    1,
-                    video_title=page_info.title,
-                    video_cover=self.norm_bili_img(page_info.cover),
-                    video_author=video_info.owner.name,
-                    video_timestamp=self.norm_bili_ts(page_info.timestamp),
-                )
+            comment_task_factory = lambda: self.comment_feed.build_images(
+                video_info.aid,
+                1,
+                video_title=page_info.title,
+                video_cover=self.norm_bili_img(page_info.cover),
+                owner_mid=video_info.owner.mid,
             )
 
         stream_task = self._get_stream_ladders_with_qn_fallback(
@@ -690,8 +683,7 @@ class BilibiliParser(BaseParser):
             f"{video_info.bvid}:{page_info.index}",
         )
 
-        # 评论区抓取(最多翻 10 页 + 二维码识别)此前会卡住整个解析返回，
-        # 现在只等取流即可返回，评论区改到发送阶段与视频并行处理。
+        # 评论区在发送阶段异步抓取并经 Canvas 渲染，此处只等待视频取流。
         video_ladders, a_candidates, play_url_data = await stream_task
 
         if not video_ladders:

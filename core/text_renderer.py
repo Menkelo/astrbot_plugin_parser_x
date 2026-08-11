@@ -226,7 +226,7 @@ class TextCardRenderer:
             </div>
             {title_html}
             <div class="text">{text_html}</div>
-            <div class="footer">Menkelo/astrbot_plugin_r_parser</div>
+            <div class="footer">Parser X</div>
           </div>
 
           <script>

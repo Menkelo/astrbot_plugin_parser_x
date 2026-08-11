@@ -5,7 +5,6 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
-import pytest
 from astrbot.api import AstrBotConfig
 from astrbot.api.event import MessageChain
 from astrbot.api.message_components import Node, Plain
@@ -15,23 +14,22 @@ from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import (
 )
 
 from core.download import VideoInfo
-from core.exception import ParseException
 from core.parsers import (
     BaseParser,
-    KugouMusicParser,
     MiyousheParser,
-    QQMusicParser,
     TiebaParser,
-    WeixinChannelParser,
     XiaoheiheParser,
 )
+from core.parsers.bilibili.comment_canvas import (
+    BiliAuthorBadge,
+    BiliCommentCanvas,
+    BiliCommentDocument,
+    BiliCommentEntry,
+    BiliRichPart,
+)
+from core.parsers.bilibili.comment_feed import BiliCommentFeed
 from core.parsers.ytdlp import AcFunParser
 from core.utils import extract_json_url
-from core.web_summary import (
-    extract_readable_text,
-    is_blocked_platform_host,
-    validate_public_url,
-)
 
 
 def test_json_share_url_is_extracted_from_onebot_payload():
@@ -48,7 +46,7 @@ def test_ytdlp_parsers_are_registered_once():
     assert len(names) == len(set(names))
     assert AcFunParser in classes
     assert MiyousheParser in classes
-    assert QQMusicParser in classes
+    assert TiebaParser in classes
 
 
 def test_foreign_platform_routes_are_not_registered():
@@ -85,6 +83,16 @@ def test_foreign_platform_routes_are_not_registered():
         }
         & platform_keys
     )
+    assert (
+        not {
+            "weixin_channel",
+            "qq_music",
+            "kugou_music",
+            "qishui_music",
+        }
+        & platform_keys
+    )
+    assert "web_summary" not in schema
 
 
 def test_ytdlp_parser_builds_a_downloadable_media_result(tmp_path):
@@ -134,15 +142,6 @@ def test_domestic_parser_helpers_cover_new_routes():
         MiyousheParser.extract_post_id("https://www.miyoushe.com/ys/article/69857339")
         == "69857339"
     )
-    assert QQMusicParser.extract_song_identity(
-        "https://y.qq.com/n/ryqq/songDetail/0039MnYb0qxYhV"
-    ) == ("0039MnYb0qxYhV", None)
-    assert (
-        QQMusicParser.search_url(
-            "https://i.y.qq.com/n2/m/share/details/taoge.html?songmid=ABC123"
-        )[0]
-        == "i.y.qq.com"
-    )
     assert XiaoheiheParser.extract_identity(
         "https://www.xiaoheihe.cn/app/game/pc/730"
     ) == ("pc", "730")
@@ -154,29 +153,6 @@ def test_domestic_parser_helpers_cover_new_routes():
         )
         == "V2V1Z67"
     )
-    assert WeixinChannelParser.extract_feed_credentials(
-        "https://channels.weixin.qq.com/feed?token=token123&eid=export456"
-    ) == ("token123", "export456")
-    assert (
-        WeixinChannelParser.generate_rid(1700000000, "abcdef01") == "6553f100-abcdef01"
-    )
-
-    share = KugouMusicParser.parse_share_data(
-        'var dataFromSmarty = [{"author_name":"歌手","song_name":"歌名",'
-        '"hash":"ABC","album_id":1,"mixsongid":2}], //当前页面歌曲信息'
-    )
-    assert share == {
-        "author": "歌手",
-        "title": "歌名",
-        "hash": "ABC",
-        "album_id": "1",
-        "album_audio_id": "2",
-    }
-    assert (
-        KugouMusicParser._merge_cookies("token=old; userid=1", "token=new; dfid=device")
-        == "token=new; userid=1; dfid=device"
-    )
-
     tieba = TiebaParser._parse_api_post(
         {
             "post_list": [
@@ -195,26 +171,138 @@ def test_domestic_parser_helpers_cover_new_routes():
     assert len(tieba["images"]) == 1
 
 
+def test_bilibili_comment_renderer_prefers_astrbot_canvas(tmp_path):
+    calls = {}
+
+    async def fake_canvas(template, data, *, return_url, options):
+        calls.update(
+            {
+                "template": template,
+                "data": data,
+                "return_url": return_url,
+                "options": options,
+            }
+        )
+        rendered = tmp_path / "canvas.jpg"
+        rendered.write_bytes(b"canvas-image")
+        return str(rendered)
+
+    output = tmp_path / "comments.png"
+    renderer = BiliCommentCanvas(canvas_render=fake_canvas)
+    document = BiliCommentDocument(
+        work_title="视频标题",
+        cover="",
+        total_text="1 条评论",
+        entries=[
+            BiliCommentEntry(
+                author=BiliAuthorBadge(nickname="用户"),
+                content=[BiliRichPart("text", text="评论内容")],
+            )
+        ],
+    )
+    asyncio.run(renderer.render(output, document))
+
+    assert output.read_bytes() == b"canvas-image"
+    assert calls["return_url"] is False
+    assert calls["options"]["full_page"] is True
+    assert "Parser X" in calls["template"]
+
+
+def test_bilibili_comment_normalization_covers_rconsole_visible_fields(tmp_path):
+    class FakeParser:
+        headers = {}
+        cache_dir = tmp_path
+        client = None
+
+        @staticmethod
+        def norm_bili_img(url):
+            return url
+
+    feed = BiliCommentFeed(FakeParser(), BiliCommentCanvas())
+    normalized = feed.adapt_comment(
+        {
+            "member": {
+                "mid": "42",
+                "uname": "UP主",
+                "avatar": "https://i0.hdslb.com/avatar.jpg",
+                "level_info": {"current_level": 6},
+                "vip": {"nickname_color": "#fb7299"},
+            },
+            "content": {
+                "message": "主评论[doge] @朋友 https://b23.tv/demo",
+                "emote": {"[doge]": {"url": "https://i0.hdslb.com/doge.png"}},
+                "at_name_to_mid": {"朋友": "7"},
+                "jump_url": {"https://b23.tv/demo": {"title": "相关视频"}},
+                "pictures": [{"img_src": "https://i0.hdslb.com/comment.jpg"}],
+            },
+            "like": 100000000,
+            "rcount": 8,
+            "ctime": 1700000000,
+            "reply_control": {
+                "location": "IP属地：上海",
+                "is_up_top": True,
+                "up_like": True,
+            },
+            "replies": [
+                {
+                    "member": {
+                        "mid": "7",
+                        "uname": "回复者",
+                        "avatar": "",
+                        "fans_detail": {
+                            "medal_name": "应援团",
+                            "level": 12,
+                            "medal_color": 16737945,
+                        },
+                    },
+                    "content": {"message": "楼中楼"},
+                    "like": 2,
+                }
+            ],
+        },
+        owner_mid="42",
+    )
+
+    assert normalized is not None
+    assert normalized.author.is_up is True
+    assert normalized.author.level == 6
+    assert normalized.author.nickname_color == "#fb7299"
+    assert normalized.location == "上海"
+    assert normalized.like_text == "1亿"
+    assert normalized.reply_text == "回复 8"
+    assert normalized.pinned is True
+    assert normalized.up_liked is True
+    assert {part.kind for part in normalized.content} >= {"emote", "highlight"}
+    assert normalized.images == ["https://i0.hdslb.com/comment.jpg"]
+    assert normalized.first_reply is not None
+    assert normalized.first_reply.author.fan_medal is not None
+    assert normalized.first_reply.author.fan_medal.name == "应援团"
+
+
+def test_bilibili_comment_feed_prioritizes_hot_and_pinned_replies():
+    raw = BiliCommentFeed._to_raw_feed(
+        {
+            "data": {
+                "hots": [{"rpid": 1}],
+                "top_replies": [{"rpid": 2}],
+                "replies": [{"rpid": 1}, {"rpid": 3}],
+                "upper": {"mid": 42},
+                "cursor": {"all_count": 99},
+            }
+        }
+    )
+
+    assert [item["rpid"] for item in raw.items] == [1, 2, 3]
+    assert raw.owner_mid == "42"
+    assert raw.total == 99
+
+
 def test_manifest_has_a_reviewable_upstream_baseline():
     manifest_path = Path(__file__).parents[1] / "upstream" / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert manifest["repository"].endswith("rconsole-plugin.git")
     assert len(manifest["commit"]) == 40
     assert manifest["strategy"] == "semantic-port"
-
-
-def test_web_summary_extracts_text_and_blocks_unsafe_or_removed_hosts():
-    title, text = extract_readable_text(
-        "<html><head><title>标题</title><script>ignore()</script></head>"
-        "<body><article><h1>正文</h1><p>第一段</p></article></body></html>"
-    )
-    assert title == "标题"
-    assert "正文" in text and "第一段" in text
-    assert "ignore" not in text
-    assert is_blocked_platform_host("www.youtube.com")
-    assert is_blocked_platform_host("open.spotify.com")
-    with pytest.raises(ParseException, match="内网|本机|保留"):
-        asyncio.run(validate_public_url("http://127.0.0.1/secret"))
 
 
 def test_onebot_message_chain_uses_public_aiocqhttp_conversion():
@@ -258,7 +346,10 @@ def test_plugin_initializes_and_registers_aiocqhttp_parsers(tmp_path):
                 assert "b23.tv" in plugin.parser_map
                 assert "miyoushe.com" in plugin.parser_map
                 assert "tieba.baidu.com" in plugin.parser_map
-                assert "y.qq.com" in plugin.parser_map
+                assert "y.qq.com" not in plugin.parser_map
+                assert "kugou.com" not in plugin.parser_map
+                assert "qishui.douyin.com" not in plugin.parser_map
+                assert "channels.weixin.qq.com" not in plugin.parser_map
                 assert "tiktok.com" not in plugin.parser_map
                 assert "youtube.com" not in plugin.parser_map
                 assert plugin.key_pattern_list

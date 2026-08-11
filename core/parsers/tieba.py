@@ -9,7 +9,7 @@ from ..data import ImageContent, Platform, VideoContent
 from ..exception import ParseException
 from ..utils import normalize_image_url
 from .base import BaseParser, handle
-from .music import parse_open_graph
+from .metadata import parse_open_graph
 
 
 class TiebaParser(BaseParser):

@@ -8,7 +8,10 @@ Parser X 是面向 AstrBot `aiocqhttp`（OneBot v11）的国内平台分享链�
 
 ### 原生解析器
 
-- Bilibili：视频、分 P、动态/opus、直播卡片、可选评论区卡片。
+- Bilibili：视频、分 P、动态/opus、直播卡片、可选评论区卡片；评论卡片优先使用
+  AstrBot 官方 `html_render`（Canvas/T2I）渲染，失败时回退本地 Chromium。评论区按
+  rconsole-plugin 的用户可见行为独立适配热门/置顶评论、富文本表情、粉丝牌、UP 标识、
+  等级、IP 属地、互动数、评论配图和首条楼中楼，不复用旧 AstrBot 参考插件的 B站评论模块。
 - 抖音：视频、图文和图集；短链跳转；Cookie 与 yt-dlp 兜底。
 - 快手：视频、图片和图文作品。
 - 微博：视频、图片与纯文本卡片。
@@ -16,9 +19,6 @@ Parser X 是面向 AstrBot `aiocqhttp`（OneBot v11）的国内平台分享链�
 - 米游社：文章正文、图片与视频。
 - 贴吧：官方页面元数据；可选详情 API 提取楼主正文和媒体。
 - 小黑盒：帖子与游戏卡片；配置 Cookie 后使用原生签名接口。
-- 微信视频号：通过腾讯元宝 Cookie 换取视频号预览信息，默认关闭。
-- QQ音乐：官方歌曲元数据与封面。
-- 酷狗音乐：官方元数据；可选自建 API 按账号权限取流。
 
 ### yt-dlp 兼容层
 
@@ -27,9 +27,9 @@ Parser X 是面向 AstrBot `aiocqhttp`（OneBot v11）的国内平台分享链�
 - 皮皮虾
 - 微视
 - 网易云音乐
-- 汽水音乐
 
-插件不注册 TikTok、Twitter/X、Instagram、YouTube、Apple Music、Spotify 等国外平台路由。
+插件不注册 TikTok、Twitter/X、Instagram、YouTube、Apple Music、Spotify 等国外平台路由，
+也不注册微信视频号、QQ 音乐、酷狗音乐、汽水音乐和通用网页 AI 总结功能。
 
 各平台均可在 AstrBot 插件配置页单独启停。完整的上游功能映射和未移植项见
 [docs/UPSTREAM_COMPATIBILITY.md](docs/UPSTREAM_COMPATIBILITY.md)。
@@ -63,7 +63,6 @@ playwright install chromium
 - `/开启解析`
 - `/关闭解析`
 - `/解析状态`
-- `/链接总结 <URL>`（别名 `/总结链接`）：安全抓取公网网页并调用当前会话的 AstrBot Provider。
 
 ## 配置重点
 
@@ -73,13 +72,9 @@ playwright install chromium
 - `performance.video_codec`：B站编码偏好。
 - `cookies.douyin_ck`、`cookies.bili_ck`：原生解析器 Cookie。
 - `cookies.ytdlp_cookie_file`：Netscape 格式 Cookie 文件，用于需要登录的平台。
-- `cookies.qq_music_cookie`、`cookies.kugou_cookie`：可选音乐平台登录态，不绕过版权权限。
 - `cookies.xiaoheihe_cookie`：小黑盒原生接口登录态；留空时仅解析公开页面信息。
-- `cookies.yuanbao_cookie`：微信视频号所需腾讯元宝 Web Cookie，建议使用专用账号。
-- `integrations.kugou_api_server`：可选的自建 KuGouMusicApi 兼容服务。
 - `integrations.tieba_api_base`：可选贴吧详情服务；留空时不依赖第三方接口。
 - `bili_comment`：是否发送 B站评论区卡片。
-- `web_summary.*`：网页读取上限和提交给模型的正文长度；已阻止内网地址及已移除的国外平台域名。
 
 缓存只写入 AstrBot 官方约定的 `data/plugin_data/astrbot_plugin_parser_x/`，默认每天清理一次。
 

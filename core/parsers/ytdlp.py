@@ -132,12 +132,3 @@ class NeteaseMusicParser(YtDlpParser):
     @handle("163cn.tv", r"https?://163cn\.tv/[^\s<>]+")
     async def parse_netease(self, searched: Match[str]):
         return await self._parse_ytdlp(searched)
-
-
-class QishuiMusicParser(YtDlpParser):
-    platform = Platform(name="qishui_music", display_name="汽水音乐")
-    media_kind = "audio"
-
-    @handle("qishui.douyin.com", r"https?://qishui\.douyin\.com/[^\s<>]+")
-    async def parse_qishui(self, searched: Match[str]):
-        return await self._parse_ytdlp(searched)
