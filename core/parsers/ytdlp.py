@@ -90,49 +90,6 @@ class YtDlpParser(BaseParser, ABC):
         )
 
 
-class TikTokParser(YtDlpParser):
-    platform = Platform(name="tiktok", display_name="TikTok")
-
-    @handle("tiktok.com", r"https?://(?:www\.|m\.|vm\.|vt\.)?tiktok\.com/[^\s<>]+")
-    async def parse_tiktok(self, searched: Match[str]):
-        return await self._parse_ytdlp(searched)
-
-
-class TwitterParser(YtDlpParser):
-    platform = Platform(name="twitter", display_name="Twitter / X")
-
-    @handle("x.com", r"https?://(?:www\.)?x\.com/[A-Za-z0-9_]+/status/\d+[^\s<>]*")
-    @handle(
-        "twitter.com",
-        r"https?://(?:www\.)?twitter\.com/[A-Za-z0-9_]+/status/\d+[^\s<>]*",
-    )
-    async def parse_twitter(self, searched: Match[str]):
-        return await self._parse_ytdlp(searched)
-
-
-class InstagramParser(YtDlpParser):
-    platform = Platform(name="instagram", display_name="Instagram")
-
-    @handle(
-        "instagram.com",
-        r"https?://(?:www\.)?instagram\.com/(?:p|reel|reels|tv)/[^\s<>]+",
-    )
-    async def parse_instagram(self, searched: Match[str]):
-        return await self._parse_ytdlp(searched)
-
-
-class YouTubeParser(YtDlpParser):
-    platform = Platform(name="youtube", display_name="YouTube")
-
-    @handle("youtu.be", r"https?://youtu\.be/[A-Za-z0-9_-]+[^\s<>]*")
-    @handle(
-        "youtube.com",
-        r"https?://(?:www\.|m\.|music\.)?youtube\.com/(?:watch|shorts)/[^\s<>]+",
-    )
-    async def parse_youtube(self, searched: Match[str]):
-        return await self._parse_ytdlp(searched)
-
-
 class AcFunParser(YtDlpParser):
     platform = Platform(name="acfun", display_name="AcFun")
 
