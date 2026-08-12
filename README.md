@@ -11,7 +11,8 @@ Parser X 是面向 AstrBot `aiocqhttp`（OneBot v11）的国内平台分享链�
 - Bilibili：视频、分 P、动态/opus、直播卡片、可选评论区卡片；评论卡片优先使用
   AstrBot 官方 `html_render`（Canvas/T2I）渲染，失败时回退本地 Chromium。评论区按
   rconsole-plugin 的用户可见行为独立适配热门/置顶评论、富文本表情、粉丝牌、UP 标识、
-  等级、IP 属地、互动数、评论配图和首条楼中楼，并按内容高度自动分片；不复用旧 AstrBot
+  等级、IP 属地、互动数、评论配图和首条楼中楼；选中的评论始终合并为一张自适应高度长图，
+  不复用旧 AstrBot
   参考插件的 B站评论模块。
 - 抖音：视频、图文和图集；短链跳转；Cookie 与 yt-dlp 兜底；配置 `douyin_ck` 后可发送
   热门评论卡片，支持作者标识、表情、评论图片、贴纸和首条楼中楼。
@@ -80,11 +81,11 @@ playwright install chromium
 - `integrations.tieba_api_base`：可选贴吧详情服务；留空时不依赖第三方接口。
 - `comments.bilibili`、`comments.douyin`、`comments.weibo`：各平台评论区开关。
 - `comments.display_count`：最多展示的热门评论总数。
-- `comments.chunk_size`：单张卡片的评论数上限；超长评论还会按估算高度提前分片。
 - `comments.timeout`：评论抓取、Canvas 渲染和缓存生成的总超时。
 
 评论任务在主内容发送完成后才启动，优先使用 AstrBot 官方 Canvas；Canvas 失败时回退
-Playwright Chromium。合并转发失败时会自动降级为逐张发送。快手和小红书等平台目前需要
+Playwright Chromium。B站、抖音、微博的已选评论都会渲染为一张自适应高度长图。合并转发
+失败时会自动降级发送。快手和小红书等平台目前需要
 不稳定的私有签名/登录接口，因此没有用网页抓取方式勉强加入评论区。
 
 缓存只写入 AstrBot 官方约定的 `data/plugin_data/astrbot_plugin_parser_x/`，默认每天清理一次。

@@ -21,7 +21,6 @@ from core.comment_canvas import (
     CommentEntry,
     CommentRichPart,
     SocialCommentCanvas,
-    split_comment_entries,
 )
 from core.comment_settings import CommentSettings
 from core.download import VideoInfo
@@ -54,7 +53,6 @@ def test_comment_settings_normalize_bool_and_clamp_values():
             "comments": {
                 "bilibili": "false",
                 "display_count": "999",
-                "chunk_size": 0,
                 "timeout": "invalid",
             }
         },
@@ -62,7 +60,6 @@ def test_comment_settings_normalize_bool_and_clamp_values():
     )
     assert settings.enabled is False
     assert settings.display_count == 20
-    assert settings.chunk_size == 1
     assert settings.timeout == 90
 
     legacy = CommentSettings.from_config(
@@ -398,19 +395,6 @@ def test_social_comment_canvas_escapes_jinja_from_user_content(tmp_path):
     assert "&#123;" in calls["template"]
 
 
-def test_comment_chunking_accounts_for_long_content():
-    short = CommentEntry(
-        author=CommentAuthor("短评"),
-        content=[CommentRichPart("text", "短评论")],
-    )
-    long = CommentEntry(
-        author=CommentAuthor("长评"),
-        content=[CommentRichPart("text", "很长" * 300)],
-    )
-    chunks = split_comment_entries([short, short, long, short], max_items=5)
-    assert [len(chunk) for chunk in chunks] == [2, 1, 1]
-
-
 def test_douyin_comment_normalization_covers_rconsole_visible_fields(tmp_path):
     class FakeParser:
         headers = {"User-Agent": "Mozilla/5.0"}
@@ -485,7 +469,6 @@ def test_native_parsers_attach_comment_factories(tmp_path):
             "douyin": True,
             "weibo": True,
             "display_count": 6,
-            "chunk_size": 3,
             "timeout": 45,
         },
     }
@@ -599,7 +582,7 @@ def test_weibo_comment_string_zero_cursor_marks_feed_complete(tmp_path):
     assert result.has_more is False
 
 
-def test_bilibili_comment_feed_splits_long_cards(tmp_path):
+def test_bilibili_comment_feed_renders_all_selected_comments_in_one_image(tmp_path):
     class FakeParser:
         headers = {}
         bili_ck = ""
@@ -614,11 +597,11 @@ def test_bilibili_comment_feed_splits_long_cards(tmp_path):
 
         async def render(self, target, document):
             self.documents.append(document)
-            target.write_bytes(f"page-{document.page_index}".encode())
+            target.write_bytes(b"single-image")
 
     async def run():
         canvas = FakeCanvas()
-        feed = BiliCommentFeed(FakeParser(), canvas, limit=5, chunk_size=2)
+        feed = BiliCommentFeed(FakeParser(), canvas, limit=5)
 
         async def fake_fetch(_oid, _type):
             items = [
@@ -642,9 +625,101 @@ def test_bilibili_comment_feed_splits_long_cards(tmp_path):
         return canvas, paths
 
     canvas, paths = asyncio.run(run())
-    assert len(paths) == 3
-    assert [document.page_index for document in canvas.documents] == [1, 2, 3]
-    assert [len(document.entries) for document in canvas.documents] == [2, 2, 1]
+    assert len(paths) == 1
+    assert len(canvas.documents) == 1
+    assert len(canvas.documents[0].entries) == 5
+
+
+def test_douyin_comment_feed_renders_all_selected_comments_in_one_image(tmp_path):
+    class FakeParser:
+        headers = {}
+        cookies = "sessionid=test"
+        cache_dir = tmp_path
+
+    class FakeCanvas:
+        documents = []
+
+        async def render(self, target, document):
+            self.documents.append(document)
+            target.write_bytes(b"single-image")
+
+    async def run():
+        canvas = FakeCanvas()
+        feed = DouyinCommentFeed(FakeParser(), canvas, limit=5)
+
+        async def fake_fetch(_aweme_id):
+            items = [
+                {
+                    "cid": str(index),
+                    "user": {"uid": str(index), "nickname": f"用户{index}"},
+                    "text": f"评论{index}",
+                    "digg_count": 5 - index,
+                }
+                for index in range(5)
+            ]
+            return SimpleNamespace(items=items, total=99, has_more=False)
+
+        async def fake_emoji_map():
+            return {}
+
+        feed.fetch = fake_fetch
+        feed._load_emoji_map = fake_emoji_map
+        contents = await feed.build_images(
+            "7414051930047106342",
+            work_title="标题",
+            cover="",
+        )
+        paths = await asyncio.gather(*(content.get_path() for content in contents))
+        return canvas, paths
+
+    canvas, paths = asyncio.run(run())
+    assert len(paths) == 1
+    assert len(canvas.documents) == 1
+    assert len(canvas.documents[0].entries) == 5
+
+
+def test_weibo_comment_feed_renders_all_selected_comments_in_one_image(tmp_path):
+    class FakeParser:
+        headers = {}
+        cookie = ""
+        cache_dir = tmp_path
+
+    class FakeCanvas:
+        documents = []
+
+        async def render(self, target, document):
+            self.documents.append(document)
+            target.write_bytes(b"single-image")
+
+    async def run():
+        canvas = FakeCanvas()
+        feed = WeiboCommentFeed(FakeParser(), canvas, limit=5)
+
+        async def fake_fetch(_mid):
+            items = [
+                {
+                    "id": str(index),
+                    "user": {"id": index, "screen_name": f"用户{index}"},
+                    "text": f"评论{index}",
+                }
+                for index in range(5)
+            ]
+            return SimpleNamespace(items=items, total=99, has_more=False)
+
+        feed.fetch = fake_fetch
+        contents = await feed.build_images(
+            "4461526582968019",
+            work_title="标题",
+            cover="",
+            owner_id="42",
+        )
+        paths = await asyncio.gather(*(content.get_path() for content in contents))
+        return canvas, paths
+
+    canvas, paths = asyncio.run(run())
+    assert len(paths) == 1
+    assert len(canvas.documents) == 1
+    assert len(canvas.documents[0].entries) == 5
 
 
 def test_manifest_has_a_reviewable_upstream_baseline():

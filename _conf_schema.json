@@ -53,13 +53,6 @@
         "slider": {"min": 1, "max": 20, "step": 1},
         "default": 10
       },
-      "chunk_size": {
-        "description": "单张卡片评论数",
-        "hint": "超过该数量会自动拆成多张图片，避免单图过长",
-        "type": "int",
-        "slider": {"min": 1, "max": 10, "step": 1},
-        "default": 5
-      },
       "timeout": {
         "description": "评论区生成超时（秒）",
         "type": "int",

@@ -56,46 +56,6 @@ WEIBO_THEME = CommentTheme(
 )
 
 
-def _entry_weight(entry: object) -> float:
-    content = getattr(entry, "content", []) or []
-    text_length = sum(len(str(getattr(part, "text", "") or "")) for part in content)
-    images = getattr(entry, "images", []) or []
-    weight = 1.0 + min(4.0, text_length / 120) + len(images) * 1.25
-    if getattr(entry, "sticker_image", ""):
-        weight += 1.0
-    nested = getattr(entry, "first_reply", None)
-    if nested is not None:
-        weight += min(2.5, _entry_weight(nested) * 0.65)
-    return weight
-
-
-def split_comment_entries(
-    entries: list,
-    max_items: int,
-    *,
-    max_weight: float = 6.0,
-) -> list[list]:
-    """Split cards by both item count and estimated rendered height."""
-
-    max_items = max(1, int(max_items))
-    chunks: list[list] = []
-    current: list = []
-    current_weight = 0.0
-    for entry in entries:
-        weight = _entry_weight(entry)
-        if current and (
-            len(current) >= max_items or current_weight + weight > max_weight
-        ):
-            chunks.append(current)
-            current = []
-            current_weight = 0.0
-        current.append(entry)
-        current_weight += weight
-    if current:
-        chunks.append(current)
-    return chunks
-
-
 @dataclass(slots=True)
 class CommentRichPart:
     kind: Literal["text", "line-break", "highlight", "emote", "emoji-text"]
@@ -143,10 +103,6 @@ class CommentDocument:
     total_text: str
     entries: list[CommentEntry]
     footer_text: str = ""
-    page_index: int = 1
-    page_count: int = 1
-    display_start: int = 1
-    display_total: int = 0
 
 
 class SocialCommentCanvas:
@@ -326,16 +282,7 @@ class SocialCommentCanvas:
             self._render_entry(entry, nested=False, fallback=fallback)
             for entry in document.entries
         )
-        page_text = ""
-        if document.page_count > 1:
-            page_text = f" · 第 {document.page_index}/{document.page_count} 张"
-        display_end = document.display_start + len(document.entries) - 1
-        display_total = document.display_total or len(document.entries)
-        range_text = (
-            f"第 {document.display_start}-{display_end} 条 / 共展示 {display_total} 条"
-            if display_total > len(document.entries)
-            else f"展示 {len(document.entries)} 条"
-        )
+        display_text = f"展示 {len(document.entries)} 条"
         cover_class = " cover-portrait" if theme.portrait_cover else ""
         cover = (
             f'<img class="cover{cover_class}" src="{self._url(document.cover)}" '
@@ -372,7 +319,7 @@ body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Mic
 </style></head><body><div class="page"><div class="shell">
 <header class="header"><div class="brand">{self._text(theme.brand_text)}</div><div class="header-copy">
 <h1>{self._text(document.work_title or theme.platform_name + "作品")}</h1>
-<p>{self._text(theme.platform_name)}评论 · {self._text(range_text)} · {self._text(document.total_text)}{self._text(page_text)}</p>
+<p>{self._text(theme.platform_name)}评论 · {self._text(display_text)} · {self._text(document.total_text)}</p>
 </div>{cover}</header><main class="comment-list">{entries}</main><footer class="footer">{footer}</footer>
 </div></div></body></html>"""
 
@@ -440,5 +387,4 @@ __all__ = [
     "DOUYIN_THEME",
     "SocialCommentCanvas",
     "WEIBO_THEME",
-    "split_comment_entries",
 ]

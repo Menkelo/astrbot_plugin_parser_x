@@ -46,14 +46,12 @@ class DouyinParser(BaseParser):
         comment_settings = CommentSettings.from_config(config, "douyin")
         self.enable_comment_card = comment_settings.enabled
         self.comment_limit = comment_settings.display_count
-        self.comment_chunk_size = comment_settings.chunk_size
         self.comment_timeout = comment_settings.timeout
         self.comment_canvas = SocialCommentCanvas()
         self.comment_feed = DouyinCommentFeed(
             self,
             self.comment_canvas,
             limit=self.comment_limit,
-            chunk_size=self.comment_chunk_size,
         )
 
     def set_canvas_render(self, canvas_render):

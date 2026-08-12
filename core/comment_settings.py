@@ -30,7 +30,6 @@ def _clamp_int(value: Any, default: int, minimum: int, maximum: int) -> int:
 class CommentSettings:
     enabled: bool
     display_count: int
-    chunk_size: int
     timeout: int
 
     @classmethod
@@ -55,12 +54,6 @@ class CommentSettings:
                 10,
                 1,
                 20,
-            ),
-            chunk_size=_clamp_int(
-                comments.get("chunk_size", 5),
-                5,
-                1,
-                10,
             ),
             timeout=_clamp_int(
                 comments.get("timeout", 90),

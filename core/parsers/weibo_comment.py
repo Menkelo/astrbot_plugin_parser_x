@@ -22,7 +22,6 @@ from ..comment_canvas import (
     CommentEntry,
     CommentRichPart,
     SocialCommentCanvas,
-    split_comment_entries,
 )
 from ..data import ImageContent
 from ..utils import normalize_image_url
@@ -74,12 +73,10 @@ class WeiboCommentFeed:
         canvas: SocialCommentCanvas,
         *,
         limit: int = 10,
-        chunk_size: int = 5,
     ):
         self.parser = parser
         self.canvas = canvas
         self.limit = max(1, int(limit))
-        self.chunk_size = max(1, int(chunk_size))
 
     @property
     def cache_dir(self) -> Path:
@@ -354,59 +351,42 @@ class WeiboCommentFeed:
         if not entries:
             return []
 
-        chunks = split_comment_entries(entries, self.chunk_size)
-        page_count = len(chunks)
         partial = raw_feed.total > len(entries) or raw_feed.has_more
-        contents = []
-        offset = 0
-        for page_index, chunk in enumerate(chunks, start=1):
-            document = CommentDocument(
-                theme=WEIBO_THEME,
-                work_title=work_title or "微博",
-                cover=normalize_image_url(cover) or "",
-                total_text=f"{self._count_text(raw_feed.total)} 条评论",
-                entries=chunk,
-                footer_text=(
-                    "仅展示部分热门评论 · Parser X"
-                    if partial
-                    else "Parser X · 微博评论区"
-                ),
-                page_index=page_index,
-                page_count=page_count,
-                display_start=offset + 1,
-                display_total=len(entries),
-            )
-            offset += len(chunk)
-            serialised = json.dumps(
-                asdict(document),
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
-            )
-            digest = hashlib.sha256(
-                f"weibo_comment_v1|{serialised}".encode()
-            ).hexdigest()[:12]
-            out_path = self.cache_dir / f"weibo_comment_{mid}_{page_index}_{digest}.jpg"
-            if out_path.is_file() and out_path.stat().st_size > 0:
-                contents.append(ImageContent(out_path))
-                continue
+        document = CommentDocument(
+            theme=WEIBO_THEME,
+            work_title=work_title or "微博",
+            cover=normalize_image_url(cover) or "",
+            total_text=f"{self._count_text(raw_feed.total)} 条评论",
+            entries=entries,
+            footer_text=(
+                "仅展示部分热门评论 · Parser X" if partial else "Parser X · 微博评论区"
+            ),
+        )
+        serialised = json.dumps(
+            asdict(document),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        digest = hashlib.sha256(
+            f"weibo_comment_v2_single|{serialised}".encode()
+        ).hexdigest()[:12]
+        out_path = self.cache_dir / f"weibo_comment_{mid}_{digest}.jpg"
+        if out_path.is_file() and out_path.stat().st_size > 0:
+            return [ImageContent(out_path)]
 
-            async def render(
-                target: Path = out_path,
-                doc: CommentDocument = document,
-            ) -> Path:
-                await self.canvas.render(target, doc)
-                return target
+        async def render() -> Path:
+            await self.canvas.render(out_path, document)
+            return out_path
 
-            contents.append(
-                ImageContent(
-                    asyncio.create_task(
-                        render(),
-                        name=f"weibo_comment_canvas_{mid}_{page_index}",
-                    )
+        return [
+            ImageContent(
+                asyncio.create_task(
+                    render(),
+                    name=f"weibo_comment_canvas_{mid}",
                 )
             )
-        return contents
+        ]
 
 
 __all__ = ["WeiboCommentFeed"]

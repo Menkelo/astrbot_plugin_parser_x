@@ -49,7 +49,6 @@ class BilibiliParser(BaseParser):
             legacy_enabled=config.get("bili_comment", True),
         )
         self.comment_limit = comment_settings.display_count
-        self.comment_chunk_size = comment_settings.chunk_size
         self.comment_timeout = comment_settings.timeout
 
         perf = config.get("performance", {})
@@ -93,7 +92,6 @@ class BilibiliParser(BaseParser):
             parser=self,
             canvas=self.comment_canvas,
             limit=self.comment_limit,
-            chunk_size=self.comment_chunk_size,
         )
 
         self.stream_selector = BiliStreamSelector()

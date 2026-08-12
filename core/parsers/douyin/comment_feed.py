@@ -22,7 +22,6 @@ from ...comment_canvas import (
     CommentEntry,
     CommentRichPart,
     SocialCommentCanvas,
-    split_comment_entries,
 )
 from ...data import ImageContent
 from ...utils import ck2dict
@@ -48,12 +47,10 @@ class DouyinCommentFeed:
         canvas: SocialCommentCanvas,
         *,
         limit: int = 10,
-        chunk_size: int = 5,
     ):
         self.parser = parser
         self.canvas = canvas
         self.limit = max(1, int(limit))
-        self.chunk_size = max(1, int(chunk_size))
         self._emoji_map: dict[str, str] = {}
         self._emoji_deadline = 0.0
         self._emoji_lock = asyncio.Lock()
@@ -546,61 +543,42 @@ class DouyinCommentFeed:
         if not entries:
             return []
 
-        chunks = split_comment_entries(entries, self.chunk_size)
-        page_count = len(chunks)
         partial = raw_feed.total > len(entries) or raw_feed.has_more
-        contents = []
-        offset = 0
-        for page_index, chunk in enumerate(chunks, start=1):
-            document = CommentDocument(
-                theme=DOUYIN_THEME,
-                work_title=work_title or "抖音作品",
-                cover=self._normalize_url(cover),
-                total_text=f"{self._count_text(raw_feed.total)} 条评论",
-                entries=chunk,
-                footer_text=(
-                    "仅展示部分热门评论 · Parser X"
-                    if partial
-                    else "Parser X · 抖音评论区"
-                ),
-                page_index=page_index,
-                page_count=page_count,
-                display_start=offset + 1,
-                display_total=len(entries),
-            )
-            offset += len(chunk)
-            serialised = json.dumps(
-                asdict(document),
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
-            )
-            digest = hashlib.sha256(
-                f"douyin_comment_v1|{serialised}".encode()
-            ).hexdigest()[:12]
-            out_path = (
-                self.cache_dir / f"douyin_comment_{aweme_id}_{page_index}_{digest}.jpg"
-            )
-            if out_path.is_file() and out_path.stat().st_size > 0:
-                contents.append(ImageContent(out_path))
-                continue
+        document = CommentDocument(
+            theme=DOUYIN_THEME,
+            work_title=work_title or "抖音作品",
+            cover=self._normalize_url(cover),
+            total_text=f"{self._count_text(raw_feed.total)} 条评论",
+            entries=entries,
+            footer_text=(
+                "仅展示部分热门评论 · Parser X" if partial else "Parser X · 抖音评论区"
+            ),
+        )
+        serialised = json.dumps(
+            asdict(document),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        digest = hashlib.sha256(
+            f"douyin_comment_v2_single|{serialised}".encode()
+        ).hexdigest()[:12]
+        out_path = self.cache_dir / f"douyin_comment_{aweme_id}_{digest}.jpg"
+        if out_path.is_file() and out_path.stat().st_size > 0:
+            return [ImageContent(out_path)]
 
-            async def render(
-                target: Path = out_path,
-                doc: CommentDocument = document,
-            ) -> Path:
-                await self.canvas.render(target, doc)
-                return target
+        async def render() -> Path:
+            await self.canvas.render(out_path, document)
+            return out_path
 
-            contents.append(
-                ImageContent(
-                    asyncio.create_task(
-                        render(),
-                        name=f"douyin_comment_canvas_{aweme_id}_{page_index}",
-                    )
+        return [
+            ImageContent(
+                asyncio.create_task(
+                    render(),
+                    name=f"douyin_comment_canvas_{aweme_id}",
                 )
             )
-        return contents
+        ]
 
 
 __all__ = ["DouyinCommentFeed"]

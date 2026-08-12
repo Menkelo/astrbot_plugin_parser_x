@@ -72,10 +72,6 @@ class BiliCommentDocument:
     total_text: str
     entries: list[BiliCommentEntry]
     footer_text: str = ""
-    page_index: int = 1
-    page_count: int = 1
-    display_start: int = 1
-    display_total: int = 0
 
 
 class BiliCommentCanvas:
@@ -267,18 +263,7 @@ class BiliCommentCanvas:
             self._render_entry(entry, nested=False) for entry in document.entries
         )
         footer = self._text(document.footer_text or "Parser X · B站评论区")
-        display_total = document.display_total or len(document.entries)
-        display_end = document.display_start + len(document.entries) - 1
-        range_text = (
-            f"第 {document.display_start}-{display_end} 条 / 共展示 {display_total} 条"
-            if display_total > len(document.entries)
-            else f"展示 {len(document.entries)} 条"
-        )
-        page_text = (
-            f" · 第 {document.page_index}/{document.page_count} 张"
-            if document.page_count > 1
-            else ""
-        )
+        display_text = f"展示 {len(document.entries)} 条"
         return f"""<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -315,7 +300,7 @@ body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Mic
 <body><div class="page">
 <header class="header"><div class="brand">B</div><div class="header-copy">
 <h1>{self._text(document.work_title or "B站视频")}</h1>
-<p>视频评论 · {self._text(range_text)} · {self._text(document.total_text)}{self._text(page_text)}</p>
+<p>视频评论 · {self._text(display_text)} · {self._text(document.total_text)}</p>
 </div>{cover}</header><main>{entries}</main><footer class="footer">{footer}</footer>
 </div></body></html>"""
 
