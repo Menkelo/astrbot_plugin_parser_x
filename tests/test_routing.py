@@ -870,6 +870,12 @@ def test_weibo_comment_feed_renders_all_selected_comments_in_one_image(tmp_path)
     assert len(canvas.documents[0].entries) == 5
 
 
+def test_comment_layout_cache_versions_invalidate_pre_fix_images():
+    assert BiliCommentFeed.CACHE_VERSION == "bili_comment_v4_layout"
+    assert DouyinCommentFeed.CACHE_VERSION == "douyin_comment_v3_layout"
+    assert WeiboCommentFeed.CACHE_VERSION == "weibo_comment_v3_layout"
+
+
 def test_manifest_has_a_reviewable_upstream_baseline():
     manifest_path = Path(__file__).parents[1] / "upstream" / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))

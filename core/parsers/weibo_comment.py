@@ -66,6 +66,7 @@ class _WeiboRichTextParser(HTMLParser):
 
 class WeiboCommentFeed:
     COMMENT_URL = "https://m.weibo.cn/comments/hotflow"
+    CACHE_VERSION = "weibo_comment_v3_layout"
 
     def __init__(
         self,
@@ -369,7 +370,7 @@ class WeiboCommentFeed:
             separators=(",", ":"),
         )
         digest = hashlib.sha256(
-            f"weibo_comment_v2_single|{serialised}".encode()
+            f"{self.CACHE_VERSION}|{serialised}".encode()
         ).hexdigest()[:12]
         out_path = self.cache_dir / f"weibo_comment_{mid}_{digest}.jpg"
         if out_path.is_file() and out_path.stat().st_size > 0:

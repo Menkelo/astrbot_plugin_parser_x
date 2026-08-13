@@ -40,6 +40,7 @@ class DouyinCommentFeed:
 
     COMMENT_URL = "https://www.douyin.com/aweme/v1/web/comment/list/"
     EMOJI_URL = "https://www.douyin.com/aweme/v1/web/emoji/list"
+    CACHE_VERSION = "douyin_comment_v3_layout"
 
     def __init__(
         self,
@@ -561,7 +562,7 @@ class DouyinCommentFeed:
             separators=(",", ":"),
         )
         digest = hashlib.sha256(
-            f"douyin_comment_v2_single|{serialised}".encode()
+            f"{self.CACHE_VERSION}|{serialised}".encode()
         ).hexdigest()[:12]
         out_path = self.cache_dir / f"douyin_comment_{aweme_id}_{digest}.jpg"
         if out_path.is_file() and out_path.stat().st_size > 0:

@@ -103,6 +103,8 @@ class _RawCommentFeed:
 class BiliCommentFeed:
     """Adapt rconsole ``utils/bili-comment.js`` semantics for AstrBot."""
 
+    CACHE_VERSION = "bili_comment_v4_layout"
+
     def __init__(
         self,
         parser,
@@ -695,7 +697,7 @@ class BiliCommentFeed:
             separators=(",", ":"),
         )
         digest = hashlib.sha256(
-            f"bili_comment_v3_single|{serialised}".encode()
+            f"{self.CACHE_VERSION}|{serialised}".encode()
         ).hexdigest()[:12]
         out_path = self.cache_dir / f"bili_comment_feed_{oid}_{digest}.jpg"
         if out_path.is_file() and out_path.stat().st_size > 0:
