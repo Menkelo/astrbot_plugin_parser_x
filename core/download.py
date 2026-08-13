@@ -31,6 +31,95 @@ from .utils import (
 P = ParamSpec("P")
 T = TypeVar("T")
 
+_IMAGE_SUFFIXES = (
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".apng",
+    ".gif",
+    ".webp",
+    ".avif",
+    ".heic",
+    ".heif",
+    ".bmp",
+    ".tif",
+    ".tiff",
+    ".ico",
+    ".svg",
+)
+
+
+def _image_suffix_from_url(url: str) -> str:
+    suffix = Path(urlparse(url).path).suffix.lower()
+    return suffix if suffix in _IMAGE_SUFFIXES else ".jpg"
+
+
+def _detect_image_suffix(file_path: Path) -> str | None:
+    try:
+        with file_path.open("rb") as image_file:
+            head = image_file.read(64 * 1024)
+    except OSError:
+        return None
+
+    if head.startswith((b"GIF87a", b"GIF89a")):
+        return ".gif"
+    if head.startswith(b"\x89PNG\r\n\x1a\n"):
+        return ".apng" if b"acTL" in head else ".png"
+    if head.startswith(b"\xff\xd8\xff"):
+        return ".jpg"
+    if head.startswith(b"BM"):
+        return ".bmp"
+    if head.startswith((b"II*\x00", b"MM\x00*")):
+        return ".tif"
+    if head.startswith(b"\x00\x00\x01\x00"):
+        return ".ico"
+    if len(head) >= 12 and head.startswith(b"RIFF") and head[8:12] == b"WEBP":
+        return ".webp"
+    if len(head) >= 12 and head[4:8] == b"ftyp":
+        brand = head[8:12]
+        if brand in {b"avif", b"avis"}:
+            return ".avif"
+        if brand in {b"heic", b"heix", b"hevc", b"hevx", b"mif1", b"msf1"}:
+            return ".heic"
+
+    text_head = head.lstrip(b"\xef\xbb\xbf\x00\t\r\n ").lower()
+    if text_head.startswith(b"<svg") or (
+        text_head.startswith(b"<?xml") and b"<svg" in text_head
+    ):
+        return ".svg"
+    return None
+
+
+def _normalize_image_extension(file_path: Path) -> Path:
+    detected = _detect_image_suffix(file_path)
+    if not detected:
+        return file_path
+
+    current = file_path.suffix.lower()
+    equivalent_suffixes = {
+        ".jpg": {".jpg", ".jpeg"},
+        ".png": {".png"},
+        ".apng": {".apng"},
+        ".tif": {".tif", ".tiff"},
+        ".heic": {".heic", ".heif"},
+    }
+    if current in equivalent_suffixes.get(detected, {detected}):
+        return file_path
+
+    corrected_path = file_path.with_suffix(detected)
+    try:
+        file_path.replace(corrected_path)
+    except OSError as exc:
+        logger.warning(
+            f"图片格式识别为 {detected}，但修正缓存后缀失败: {file_path.name} | {exc}"
+        )
+        return file_path
+
+    logger.debug(
+        f"已按真实图片格式修正缓存后缀: {file_path.name} -> {corrected_path.name}"
+    )
+    return corrected_path
+
 
 def auto_task(func: Callable[P, Coroutine[Any, Any, T]]) -> Callable[P, Task[T]]:
     @wraps(func)
@@ -590,9 +679,22 @@ class Downloader:
         ext_headers: dict[str, str] | None = None,
     ) -> Path:
         if img_name is None:
-            img_name = generate_file_name(url, ".jpg")
+            img_name = generate_file_name(url, _image_suffix_from_url(url))
 
-        return await self.streamd(url, file_name=img_name, ext_headers=ext_headers)
+            # Older releases forced every image to ``.jpg``. Reuse and repair those
+            # cached files so animated GIF/WebP images recover without a cache clear.
+            stem = Path(img_name).stem
+            preferred = Path(img_name).suffix.lower()
+            suffixes = (preferred, *(_ for _ in _IMAGE_SUFFIXES if _ != preferred))
+            for suffix in suffixes:
+                cached_path = self.cache_dir / f"{stem}{suffix}"
+                if cached_path.is_file() and cached_path.stat().st_size >= 100:
+                    return _normalize_image_extension(cached_path)
+
+        downloaded_path = await self.streamd(
+            url, file_name=img_name, ext_headers=ext_headers
+        )
+        return _normalize_image_extension(downloaded_path)
 
     @auto_task
     async def download_av_and_merge(

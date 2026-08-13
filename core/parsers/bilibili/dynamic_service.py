@@ -138,6 +138,7 @@ class BiliDynamicService:
         限到 1280 宽后单图通常只剩几百 KB，既能成功合并转发又更快。
 
         - 仅处理 hdslb / bilivideo 图片域名；
+        - GIF/WebP 保持原地址，避免动画被 CDN 转码为静态 JPEG；
         - 已带 `@` 参数的 URL 不重复追加；
         - 非图片或异常一律原样返回，保证安全。
         """
@@ -152,9 +153,10 @@ class BiliDynamicService:
 
         # @ 尺寸参数必须接在路径末尾、查询串之前
         path_part, sep, query = url.partition("?")
+        if path_part.lower().endswith((".gif", ".webp")):
+            return url
         if not any(
-            path_part.lower().endswith(ext)
-            for ext in (".jpg", ".jpeg", ".png", ".webp", ".gif")
+            path_part.lower().endswith(ext) for ext in (".jpg", ".jpeg", ".png")
         ):
             return url
 

@@ -209,8 +209,9 @@ class SocialCommentCanvas:
 
     def _render_images(self, images: list[str], *, sticker: bool = False) -> str:
         class_name = "sticker-image" if sticker else "comment-image"
+        wrap_class = "sticker-image-wrap" if sticker else "comment-image-wrap"
         return "".join(
-            '<div class="comment-image-wrap">'
+            f'<div class="{wrap_class}">'
             f'<img class="{class_name}" src="{self._url(url)}" alt="" '
             "onerror=\"this.parentElement.style.display='none'\">"
             "</div>"
@@ -296,7 +297,7 @@ class SocialCommentCanvas:
         return f"""<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<style>
+<style id="parser-x-comment-styles">
 *{{box-sizing:border-box}}html,body{{margin:0;width:760px;background:{theme.background};color:{theme.text}}}
 body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}}
 .page{{width:760px;padding:18px 22px 20px;background:{theme.background}}}
@@ -312,11 +313,11 @@ body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Mic
 .author-badge{{display:inline-flex;align-items:center;padding:2px 7px;border:1px solid transparent;border-radius:999px;background:{theme.accent};color:#fff;font-size:11px;font-weight:700;line-height:16px}}
 .comment-content,.reply-content{{margin-top:8px;color:{theme.text};font-size:19px;line-height:1.62;word-break:break-word}}.reply-content{{font-size:16px}}.highlight{{color:{theme.accent}}}.emoji-text{{display:inline-block;margin:0 2px;padding:0 4px;border-radius:5px;background:{theme.accent_soft};color:{theme.muted}}}
 .emote{{display:inline-block;width:24px;height:24px;margin:0 2px;object-fit:contain;vertical-align:-6px}}.pinned{{display:inline-block;margin-right:7px;padding:1px 7px;border-radius:5px;background:{theme.accent_soft};color:{theme.accent};font-size:12px;line-height:21px;vertical-align:2px}}
-.comment-image-wrap{{display:inline-block;max-width:285px;max-height:220px;margin:10px 7px 0 0;overflow:hidden;border:1px solid {theme.border};border-radius:10px;background:{theme.nested_surface};vertical-align:top}}.comment-image,.sticker-image{{display:block;max-width:285px;max-height:220px;object-fit:contain}}.sticker-image{{max-width:180px;max-height:180px}}
+.comment-image-wrap,.sticker-image-wrap{{display:block;width:fit-content;max-width:100%;margin:10px 0 0;overflow:hidden;border:1px solid {theme.border};border-radius:10px;background:{theme.nested_surface}}}.comment-image{{display:block;width:auto;height:auto;max-width:540px;object-fit:contain}}.sticker-image{{display:block;width:auto;height:auto;max-width:180px;max-height:180px;object-fit:contain}}
 .actions{{display:flex;align-items:center;gap:17px;margin-top:9px;color:{theme.muted};font-size:13px;line-height:20px;flex-wrap:wrap}}.action-meta{{margin-right:auto}}.creator-liked{{padding:1px 6px;border-radius:5px;background:{theme.accent_soft};color:{theme.accent}}}
 .reply-card{{display:grid;grid-template-columns:31px 1fr;gap:9px;max-width:600px;margin-top:13px;padding:11px 12px;border-radius:12px;background:{theme.nested_surface}}}.reply-card .actions{{gap:12px}}
 .footer{{padding:14px 18px 16px;border-top:1px solid {theme.border};color:{theme.muted};font-size:12px;text-align:center}}
-</style></head><body><div class="page"><div class="shell">
+</style></head><body><div id="parser-x-comment-root" class="page"><div class="shell">
 <header class="header"><div class="brand">{self._text(theme.brand_text)}</div><div class="header-copy">
 <h1>{self._text(document.work_title or theme.platform_name + "作品")}</h1>
 <p>{self._text(theme.platform_name)}评论 · {self._text(display_text)} · {self._text(document.total_text)}</p>
@@ -330,14 +331,16 @@ body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Mic
         async with self._render_lock:
             if self._canvas_render is not None:
                 try:
+                    canvas_html = self._scale_for_astrbot_canvas(html)
                     rendered = await self._canvas_render(
-                        html,
+                        canvas_html,
                         {},
                         return_url=False,
                         options={
                             "type": "jpeg",
                             "quality": 84,
                             "full_page": True,
+                            "scale": "css",
                             "animations": "disabled",
                             "caret": "hide",
                         },
@@ -375,6 +378,17 @@ body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Mic
                     )
                 finally:
                     await browser.close()
+
+    @staticmethod
+    def _scale_for_astrbot_canvas(html: str) -> str:
+        """Fill AstrBot's 1280px Canvas viewport without changing local fallback."""
+        return html.replace(
+            '<style id="parser-x-comment-styles">',
+            '<style id="parser-x-comment-styles">\n'
+            "@media (min-width:1000px){html,body{width:1140px}"
+            "#parser-x-comment-root{transform:scale(1.5);transform-origin:0 0}}",
+            1,
+        )
 
 
 __all__ = [

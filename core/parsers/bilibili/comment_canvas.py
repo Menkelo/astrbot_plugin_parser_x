@@ -269,7 +269,7 @@ class BiliCommentCanvas:
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<style>
+<style id="parser-x-comment-styles">
 *{{box-sizing:border-box}}html,body{{margin:0;width:760px;background:#fff;color:#18191c}}
 body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}}
 .page{{width:760px;padding:0 22px 18px;background:#fff}}
@@ -290,14 +290,14 @@ body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Mic
 .decor{{display:flex;max-width:115px;align-items:center;gap:3px;color:#fb7299;font-size:10px;font-weight:700}}.decor-image{{width:34px;height:28px;overflow:hidden}}.decor-image img{{width:auto;height:38px;transform:translate(-55%,-5px)}}
 .comment-content,.reply-content{{margin-top:8px;color:#18191c;font-size:19px;line-height:1.62;word-break:break-word}}.reply-content{{margin-top:3px;font-size:17px}}.highlight{{color:#00aeec}}
 .emote{{display:inline-block;width:23px;height:23px;margin:0 2px;object-fit:contain;vertical-align:-5px}}.pinned{{display:inline-block;margin-right:7px;padding:0 6px;border-radius:3px;background:#fff0f5;color:#fb7299;font-size:13px;line-height:23px;vertical-align:2px}}
-.comment-image-wrap{{display:inline-block;max-width:270px;max-height:230px;margin:10px 7px 0 0;overflow:hidden;border-radius:7px;background:#f1f2f3}}.comment-image{{display:block;max-width:270px;max-height:230px;object-fit:contain}}
+.comment-image-wrap{{display:block;width:fit-content;max-width:100%;margin:10px 0 0;overflow:hidden;border-radius:7px;background:#f1f2f3}}.comment-image{{display:block;width:auto;height:auto;max-width:540px;object-fit:contain}}
 .actions{{display:flex;align-items:center;gap:20px;margin-top:8px;color:#9499a0;font-size:13px;line-height:21px}}.action-meta{{margin-right:auto}}.action{{display:inline-flex;align-items:center;gap:4px}}.thumb{{font-size:17px}}
 .up-liked{{display:inline-block;margin-top:7px;padding:2px 8px;border-radius:3px;background:#f1f2f3;color:#61666d;font-size:12px}}
 .reply-card{{display:grid;grid-template-columns:26px 1fr;gap:9px;max-width:590px;margin-top:14px;padding:11px 13px;border-radius:9px;background:#f6f7f8}}
 .reply-card .actions{{gap:14px}}.footer{{padding:16px 0 3px;color:#c9ccd0;font-size:12px;text-align:center}}
 </style>
 </head>
-<body><div class="page">
+<body><div id="parser-x-comment-root" class="page">
 <header class="header"><div class="brand">B</div><div class="header-copy">
 <h1>{self._text(document.work_title or "B站视频")}</h1>
 <p>视频评论 · {self._text(display_text)} · {self._text(document.total_text)}</p>
@@ -311,14 +311,16 @@ body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Mic
         async with self._render_lock:
             if self._canvas_render is not None:
                 try:
+                    canvas_html = self._scale_for_astrbot_canvas(html)
                     rendered = await self._canvas_render(
-                        html,
+                        canvas_html,
                         {},
                         return_url=False,
                         options={
                             "type": "jpeg",
                             "quality": 84,
                             "full_page": True,
+                            "scale": "css",
                             "animations": "disabled",
                             "caret": "hide",
                         },
@@ -353,6 +355,17 @@ body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Mic
                     )
                 finally:
                     await browser.close()
+
+    @staticmethod
+    def _scale_for_astrbot_canvas(html: str) -> str:
+        """Fill AstrBot's 1280px Canvas viewport without changing local fallback."""
+        return html.replace(
+            '<style id="parser-x-comment-styles">',
+            '<style id="parser-x-comment-styles">\n'
+            "@media (min-width:1000px){html,body{width:1140px}"
+            "#parser-x-comment-root{transform:scale(1.5);transform-origin:0 0}}",
+            1,
+        )
 
 
 __all__ = [

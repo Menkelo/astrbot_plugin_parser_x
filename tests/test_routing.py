@@ -23,7 +23,7 @@ from core.comment_canvas import (
     SocialCommentCanvas,
 )
 from core.comment_settings import CommentSettings
-from core.download import VideoInfo
+from core.download import Downloader, VideoInfo
 from core.parsers import (
     BaseParser,
     DouyinParser,
@@ -40,11 +40,12 @@ from core.parsers.bilibili.comment_canvas import (
     BiliRichPart,
 )
 from core.parsers.bilibili.comment_feed import BiliCommentFeed
+from core.parsers.bilibili.dynamic_service import BiliDynamicService
 from core.parsers.douyin.a_bogus import _sm3_fallback, generate_a_bogus
 from core.parsers.douyin.comment_feed import DouyinCommentFeed
 from core.parsers.weibo_comment import WeiboCommentFeed
 from core.parsers.ytdlp import AcFunParser
-from core.utils import extract_json_url
+from core.utils import extract_json_url, generate_file_name
 
 
 def test_comment_settings_normalize_bool_and_clamp_values():
@@ -243,7 +244,154 @@ def test_bilibili_comment_renderer_prefers_astrbot_canvas(tmp_path):
     assert output.read_bytes() == b"canvas-image"
     assert calls["return_url"] is False
     assert calls["options"]["full_page"] is True
+    assert calls["options"]["scale"] == "css"
+    assert "@media (min-width:1000px)" in calls["template"]
+    assert "#parser-x-comment-root{transform:scale(1.5)" in calls["template"]
     assert "Parser X" in calls["template"]
+
+
+def test_social_comment_renderer_scales_astrbot_canvas(tmp_path):
+    calls = {}
+
+    async def fake_canvas(template, data, *, return_url, options):
+        calls.update(
+            {
+                "template": template,
+                "data": data,
+                "return_url": return_url,
+                "options": options,
+            }
+        )
+        rendered = tmp_path / "social-canvas.jpg"
+        rendered.write_bytes(b"social-canvas")
+        return str(rendered)
+
+    output = tmp_path / "social-comments.jpg"
+    renderer = SocialCommentCanvas(canvas_render=fake_canvas)
+    document = CommentDocument(
+        theme=DOUYIN_THEME,
+        work_title="作品",
+        cover="",
+        total_text="1 条评论",
+        entries=[
+            CommentEntry(
+                author=CommentAuthor("用户"),
+                content=[CommentRichPart("text", "评论内容")],
+            )
+        ],
+    )
+    asyncio.run(renderer.render(output, document))
+
+    assert output.read_bytes() == b"social-canvas"
+    assert calls["options"]["scale"] == "css"
+    assert "@media (min-width:1000px)" in calls["template"]
+    assert "#parser-x-comment-root{transform:scale(1.5)" in calls["template"]
+
+
+def test_comment_images_keep_their_aspect_ratio_without_height_clipping():
+    bili_html = BiliCommentCanvas().build_html(
+        BiliCommentDocument(
+            work_title="作品",
+            cover="",
+            total_text="1 条评论",
+            entries=[
+                BiliCommentEntry(
+                    author=BiliAuthorBadge(nickname="用户"),
+                    content=[],
+                    images=["https://i0.hdslb.com/tall.png"],
+                )
+            ],
+        )
+    )
+    assert ".comment-image-wrap{display:block;width:fit-content" in bili_html
+    assert (
+        ".comment-image{display:block;width:auto;height:auto;max-width:540px"
+        in bili_html
+    )
+    assert "comment-image{display:block;max-width:270px;max-height" not in bili_html
+
+    social_html = SocialCommentCanvas().build_html(
+        CommentDocument(
+            theme=DOUYIN_THEME,
+            work_title="作品",
+            cover="",
+            total_text="1 条评论",
+            entries=[
+                CommentEntry(
+                    author=CommentAuthor("用户"),
+                    content=[],
+                    images=["https://p3.douyinpic.com/tall.png"],
+                    sticker_image="https://p3.douyinpic.com/sticker.gif",
+                )
+            ],
+        )
+    )
+    assert 'class="comment-image-wrap"' in social_html
+    assert 'class="sticker-image-wrap"' in social_html
+    assert (
+        ".comment-image{display:block;width:auto;height:auto;max-width:540px"
+        in social_html
+    )
+    assert (
+        ".sticker-image{display:block;width:auto;height:auto;max-width:180px;max-height:180px"
+        in social_html
+    )
+
+
+def test_image_download_preserves_detected_animated_format(tmp_path):
+    async def run_download():
+        downloader = object.__new__(Downloader)
+        downloader.cache_dir = tmp_path
+        requested_names = []
+
+        async def fake_streamd(url, *, file_name, ext_headers=None):
+            requested_names.append(file_name)
+            output = tmp_path / file_name
+            output.write_bytes(b"GIF89a" + b"\x00" * 128)
+            return output
+
+        downloader.streamd = fake_streamd
+        output = await downloader.download_img("https://example.com/animated-image")
+        return output, requested_names
+
+    output, requested_names = asyncio.run(run_download())
+    assert requested_names[0].endswith(".jpg")
+    assert output.suffix == ".gif"
+    assert output.read_bytes().startswith(b"GIF89a")
+    assert not output.with_suffix(".jpg").exists()
+
+
+def test_image_download_repairs_legacy_jpg_cache(tmp_path):
+    async def run_download():
+        downloader = object.__new__(Downloader)
+        downloader.cache_dir = tmp_path
+        legacy_name = generate_file_name("https://example.com/animated-image", ".jpg")
+        legacy_path = tmp_path / legacy_name
+        legacy_path.write_bytes(b"RIFF" + b"\x00" * 4 + b"WEBP" + b"\x00" * 128)
+
+        async def fail_streamd(*_args, **_kwargs):
+            raise AssertionError("legacy cache should be reused")
+
+        downloader.streamd = fail_streamd
+        return await downloader.download_img("https://example.com/animated-image")
+
+    output = asyncio.run(run_download())
+    assert output.suffix == ".webp"
+    assert output.exists()
+    assert not output.with_suffix(".jpg").exists()
+
+
+def test_bilibili_dynamic_image_cap_preserves_animated_formats():
+    gif_url = "https://i0.hdslb.com/bfs/new_dyn/animated.gif"
+    webp_url = "https://i0.hdslb.com/bfs/new_dyn/animated.webp?token=1"
+    jpg_url = "https://i0.hdslb.com/bfs/new_dyn/photo.jpg?token=1"
+
+    assert BiliDynamicService.cap_bili_image_url(gif_url) == gif_url
+    assert BiliDynamicService.cap_bili_image_url(webp_url) == webp_url
+    assert (
+        BiliDynamicService.cap_bili_image_url(jpg_url)
+        == "https://i0.hdslb.com/bfs/new_dyn/photo.jpg@1280w_85q.jpg?token=1"
+    )
 
 
 def test_bilibili_comment_normalization_covers_rconsole_visible_fields(tmp_path):
