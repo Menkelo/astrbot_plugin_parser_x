@@ -4,11 +4,12 @@ import asyncio
 from dataclasses import dataclass, field
 from html import escape
 from pathlib import Path
-from shutil import copyfile
 from typing import Awaitable, Callable, Literal
 
 from astrbot.api import logger
 from playwright.async_api import async_playwright
+
+from .canvas_image import save_comment_canvas_image
 
 
 @dataclass(slots=True)
@@ -347,8 +348,7 @@ body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Mic
                     )
                     rendered_path = Path(str(rendered))
                     if rendered_path.is_file() and rendered_path.stat().st_size > 0:
-                        if rendered_path.resolve() != out_path.resolve():
-                            copyfile(rendered_path, out_path)
+                        save_comment_canvas_image(rendered_path, out_path)
                         return
                 except Exception as exc:
                     logger.warning(

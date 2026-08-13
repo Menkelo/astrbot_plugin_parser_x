@@ -13,7 +13,9 @@ from astrbot.api.star import StarTools
 from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import (
     AiocqhttpMessageEvent,
 )
+from PIL import Image
 
+from core.canvas_image import save_comment_canvas_image
 from core.comment_canvas import (
     DOUYIN_THEME,
     CommentAuthor,
@@ -223,7 +225,7 @@ def test_bilibili_comment_renderer_prefers_astrbot_canvas(tmp_path):
             }
         )
         rendered = tmp_path / "canvas.jpg"
-        rendered.write_bytes(b"canvas-image")
+        Image.new("RGB", (1280, 200), "white").save(rendered)
         return str(rendered)
 
     output = tmp_path / "comments.png"
@@ -241,7 +243,8 @@ def test_bilibili_comment_renderer_prefers_astrbot_canvas(tmp_path):
     )
     asyncio.run(renderer.render(output, document))
 
-    assert output.read_bytes() == b"canvas-image"
+    with Image.open(output) as image:
+        assert image.size == (1140, 200)
     assert calls["return_url"] is False
     assert calls["options"]["full_page"] is True
     assert calls["options"]["scale"] == "css"
@@ -263,7 +266,7 @@ def test_social_comment_renderer_scales_astrbot_canvas(tmp_path):
             }
         )
         rendered = tmp_path / "social-canvas.jpg"
-        rendered.write_bytes(b"social-canvas")
+        Image.new("RGB", (800, 200), "black").save(rendered)
         return str(rendered)
 
     output = tmp_path / "social-comments.jpg"
@@ -282,10 +285,23 @@ def test_social_comment_renderer_scales_astrbot_canvas(tmp_path):
     )
     asyncio.run(renderer.render(output, document))
 
-    assert output.read_bytes() == b"social-canvas"
+    with Image.open(output) as image:
+        assert image.size == (760, 200)
     assert calls["options"]["scale"] == "css"
     assert "@media (min-width:1000px)" in calls["template"]
     assert "#parser-x-comment-root{transform:scale(1.5)" in calls["template"]
+
+
+def test_comment_canvas_crop_keeps_already_exact_width(tmp_path):
+    rendered = tmp_path / "canvas.jpg"
+    Image.new("RGB", (1140, 123), "white").save(rendered)
+    original = rendered.read_bytes()
+
+    save_comment_canvas_image(rendered, rendered)
+
+    assert rendered.read_bytes() == original
+    with Image.open(rendered) as image:
+        assert image.size == (1140, 123)
 
 
 def test_comment_images_keep_their_aspect_ratio_without_height_clipping():
@@ -518,7 +534,7 @@ def test_social_comment_canvas_escapes_jinja_from_user_content(tmp_path):
         calls["template"] = template
         calls["data"] = data
         output = tmp_path / "social.jpg"
-        output.write_bytes(b"social-canvas")
+        Image.new("RGB", (760, 100), "white").save(output)
         return str(output)
 
     renderer = SocialCommentCanvas(fake_canvas)
@@ -537,7 +553,8 @@ def test_social_comment_canvas_escapes_jinja_from_user_content(tmp_path):
     output = tmp_path / "result.jpg"
     asyncio.run(renderer.render(output, document))
 
-    assert output.read_bytes() == b"social-canvas"
+    with Image.open(output) as image:
+        assert image.size == (760, 100)
     assert "{{ 7 * 7 }}" not in calls["template"]
     assert "{% unsafe %}" not in calls["template"]
     assert "&#123;" in calls["template"]
@@ -871,9 +888,9 @@ def test_weibo_comment_feed_renders_all_selected_comments_in_one_image(tmp_path)
 
 
 def test_comment_layout_cache_versions_invalidate_pre_fix_images():
-    assert BiliCommentFeed.CACHE_VERSION == "bili_comment_v4_layout"
-    assert DouyinCommentFeed.CACHE_VERSION == "douyin_comment_v3_layout"
-    assert WeiboCommentFeed.CACHE_VERSION == "weibo_comment_v3_layout"
+    assert BiliCommentFeed.CACHE_VERSION == "bili_comment_v5_canvas_crop"
+    assert DouyinCommentFeed.CACHE_VERSION == "douyin_comment_v4_canvas_crop"
+    assert WeiboCommentFeed.CACHE_VERSION == "weibo_comment_v4_canvas_crop"
 
 
 def test_manifest_has_a_reviewable_upstream_baseline():

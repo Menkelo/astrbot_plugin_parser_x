@@ -66,7 +66,7 @@ class _WeiboRichTextParser(HTMLParser):
 
 class WeiboCommentFeed:
     COMMENT_URL = "https://m.weibo.cn/comments/hotflow"
-    CACHE_VERSION = "weibo_comment_v3_layout"
+    CACHE_VERSION = "weibo_comment_v4_canvas_crop"
 
     def __init__(
         self,
