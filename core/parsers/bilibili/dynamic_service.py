@@ -20,6 +20,57 @@ class BiliDynamicService:
         self.parser = parser
         self._img_data_uri_cache: dict[str, str | None] = {}
 
+    @staticmethod
+    def _select_delivery_contents(
+        card_path: Path,
+        full_images: list[MediaContent],
+    ) -> tuple[list[MediaContent], bool]:
+        """Skip the summary card when an image post contains exactly one image."""
+        single_image_work = len(full_images) == 1
+        if single_image_work:
+            return list(full_images), True
+        return [ImageContent(card_path), *full_images], False
+
+    async def _build_delivery_contents(
+        self,
+        *,
+        dynamic_id: int,
+        author_name: str,
+        author_avatar: str | None,
+        dynamic_title: str | None,
+        full_text: str,
+        time_text: str | None,
+        image_urls: list[str],
+        full_images: list[MediaContent],
+    ) -> tuple[list[MediaContent], bool]:
+        if len(full_images) == 1:
+            return list(full_images), True
+
+        author_avatar_data_uri = await self.img_to_data_uri(
+            author_avatar,
+            referer=f"https://t.bilibili.com/{dynamic_id}",
+        )
+        digest = hashlib.md5(
+            (
+                f"{dynamic_id}|{author_name}|{author_avatar}|"
+                f"{dynamic_title}|{full_text}|{image_urls}|"
+                f"dyn_service_v6_static"
+            ).encode()
+        ).hexdigest()[:10]
+        out_path = (
+            Path(self.parser.cache_dir) / f"bili_dynamic_{dynamic_id}_{digest}.png"
+        )
+        if not out_path.exists():
+            await self.parser.dynamic_renderer.render_dynamic_card(
+                out_path=out_path,
+                author_name=author_name,
+                author_avatar=author_avatar_data_uri or author_avatar,
+                title=dynamic_title,
+                text=full_text,
+                timestamp_text=time_text,
+            )
+        return self._select_delivery_contents(out_path, full_images)
+
     # region 通用工具
 
     @staticmethod
@@ -758,44 +809,21 @@ class BiliDynamicService:
             else []
         )
 
-        author_avatar_data_uri = await self.img_to_data_uri(
-            author_avatar,
-            referer=f"https://t.bilibili.com/{dynamic_id}",
+        contents, single_image_work = await self._build_delivery_contents(
+            dynamic_id=dynamic_id,
+            author_name=author_name,
+            author_avatar=author_avatar,
+            dynamic_title=dynamic_title,
+            full_text=full_text,
+            time_text=time_text,
+            image_urls=image_urls,
+            full_images=full_images,
         )
 
-        digest = hashlib.md5(
-            (
-                f"{dynamic_id}|{author_name}|{author_avatar}|"
-                f"{dynamic_title}|{full_text}|{image_urls}|"
-                f"dyn_service_v6_static"
-            ).encode()
-        ).hexdigest()[:10]
-
-        out_path = (
-            Path(self.parser.cache_dir) / f"bili_dynamic_{dynamic_id}_{digest}.png"
+        logger.info(
+            f"[Bilibili][诊断] 动态附加图片 {len(full_images)} 张; "
+            f"正文 {len(full_text or '')} 字; 单图直发={single_image_work}"
         )
-
-        if not out_path.exists():
-            await self.parser.dynamic_renderer.render_dynamic_card(
-                out_path=out_path,
-                author_name=author_name,
-                author_avatar=author_avatar_data_uri or author_avatar,
-                title=dynamic_title,
-                text=full_text,
-                timestamp_text=time_text,
-            )
-
-        try:
-            _card_kb = out_path.stat().st_size / 1024
-            logger.info(
-                f"[Bilibili][诊断] 动态卡片图 {out_path.name} 大小 {_card_kb:.0f}KB; "
-                f"附加图片 {len(full_images)} 张; 正文 {len(full_text or '')} 字"
-            )
-        except Exception:
-            pass
-
-        contents: list[MediaContent] = [ImageContent(out_path)]
-        contents.extend(full_images)
 
         return self.parser.result(
             title=dynamic_title,
@@ -804,6 +832,7 @@ class BiliDynamicService:
             author=self.parser.create_author(author_name, author_avatar),
             timestamp=pub_ts,
             url=f"https://t.bilibili.com/{dynamic_id}",
-            # 不要 force_direct_media，否则图文动态可能不会走合并转发
-            extra={},
+            # 单图作品直接引用触发解析的原消息，避免为了“卡片 + 单图”使用合并转发。
+            # 多图作品仍保留正文卡片并走合并转发。
+            extra={"reply_original_for_single_image": single_image_work},
         )

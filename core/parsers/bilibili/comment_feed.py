@@ -103,7 +103,7 @@ class _RawCommentFeed:
 class BiliCommentFeed:
     """Adapt rconsole ``utils/bili-comment.js`` semantics for AstrBot."""
 
-    CACHE_VERSION = "bili_comment_v5_canvas_crop"
+    CACHE_VERSION = "bili_comment_v6_reply_icon"
 
     def __init__(
         self,

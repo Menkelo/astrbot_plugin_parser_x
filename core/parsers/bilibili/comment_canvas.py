@@ -11,6 +11,12 @@ from playwright.async_api import async_playwright
 
 from ...canvas_image import save_comment_canvas_image
 
+_REPLY_ICON = (
+    '<svg class="reply-icon" viewBox="0 0 24 24" aria-hidden="true">'
+    '<path d="M9 7 4 12l5 5v-3h4.5c3.1 0 5.6 1.2 7.5 4-1-5.1-4-8-8.5-8H9V7Z"/>'
+    "</svg>"
+)
+
 
 @dataclass(slots=True)
 class BiliRichPart:
@@ -227,7 +233,7 @@ class BiliCommentCanvas:
             f"{action_meta}"
             f'<span class="action"><span class="thumb">♡</span>'
             f"{self._text(entry.like_text)}</span>"
-            f'<span class="action">◌ {self._text(entry.reply_text)}</span>'
+            f'<span class="action">{_REPLY_ICON}{self._text(entry.reply_text)}</span>'
             "</div>"
         )
         decor = "" if nested else self._render_decor(entry.decor)
@@ -292,7 +298,7 @@ body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Mic
 .comment-content,.reply-content{{margin-top:8px;color:#18191c;font-size:19px;line-height:1.62;word-break:break-word}}.reply-content{{margin-top:3px;font-size:17px}}.highlight{{color:#00aeec}}
 .emote{{display:inline-block;width:23px;height:23px;margin:0 2px;object-fit:contain;vertical-align:-5px}}.pinned{{display:inline-block;margin-right:7px;padding:0 6px;border-radius:3px;background:#fff0f5;color:#fb7299;font-size:13px;line-height:23px;vertical-align:2px}}
 .comment-image-wrap{{display:block;width:fit-content;max-width:100%;margin:10px 0 0;overflow:hidden;border-radius:7px;background:#f1f2f3}}.comment-image{{display:block;width:auto;height:auto;max-width:540px;object-fit:contain}}
-.actions{{display:flex;align-items:center;gap:20px;margin-top:8px;color:#9499a0;font-size:13px;line-height:21px}}.action-meta{{margin-right:auto}}.action{{display:inline-flex;align-items:center;gap:4px}}.thumb{{font-size:17px}}
+.actions{{display:flex;align-items:center;gap:20px;margin-top:8px;color:#9499a0;font-size:13px;line-height:21px}}.action-meta{{margin-right:auto}}.action{{display:inline-flex;align-items:center;gap:4px}}.thumb{{font-size:17px}}.reply-icon{{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}}
 .up-liked{{display:inline-block;margin-top:7px;padding:2px 8px;border-radius:3px;background:#f1f2f3;color:#61666d;font-size:12px}}
 .reply-card{{display:grid;grid-template-columns:26px 1fr;gap:9px;max-width:590px;margin-top:14px;padding:11px 13px;border-radius:9px;background:#f6f7f8}}
 .reply-card .actions{{gap:14px}}.footer{{padding:16px 0 3px;color:#c9ccd0;font-size:12px;text-align:center}}

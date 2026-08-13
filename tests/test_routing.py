@@ -8,7 +8,8 @@ from unittest.mock import patch
 
 from astrbot.api import AstrBotConfig
 from astrbot.api.event import MessageChain
-from astrbot.api.message_components import Node, Plain
+from astrbot.api.message_components import Image as MessageImage
+from astrbot.api.message_components import Node, Plain, Reply
 from astrbot.api.star import StarTools
 from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import (
     AiocqhttpMessageEvent,
@@ -25,6 +26,7 @@ from core.comment_canvas import (
     SocialCommentCanvas,
 )
 from core.comment_settings import CommentSettings
+from core.data import ImageContent
 from core.download import Downloader, VideoInfo
 from core.parsers import (
     BaseParser,
@@ -354,6 +356,35 @@ def test_comment_images_keep_their_aspect_ratio_without_height_clipping():
     )
 
 
+def test_comment_reply_action_uses_svg_icon_instead_of_dotted_circle():
+    bili_html = BiliCommentCanvas().build_html(
+        BiliCommentDocument(
+            work_title="作品",
+            cover="",
+            total_text="1 条评论",
+            entries=[
+                BiliCommentEntry(
+                    author=BiliAuthorBadge(nickname="用户"),
+                    content=[],
+                )
+            ],
+        )
+    )
+    social_html = SocialCommentCanvas().build_html(
+        CommentDocument(
+            theme=DOUYIN_THEME,
+            work_title="作品",
+            cover="",
+            total_text="1 条评论",
+            entries=[CommentEntry(author=CommentAuthor("用户"), content=[])],
+        )
+    )
+
+    for html in (bili_html, social_html):
+        assert '<svg class="reply-icon"' in html
+        assert "◌" not in html
+
+
 def test_image_download_preserves_detected_animated_format(tmp_path):
     async def run_download():
         downloader = object.__new__(Downloader)
@@ -408,6 +439,54 @@ def test_bilibili_dynamic_image_cap_preserves_animated_formats():
         BiliDynamicService.cap_bili_image_url(jpg_url)
         == "https://i0.hdslb.com/bfs/new_dyn/photo.jpg@1280w_85q.jpg?token=1"
     )
+
+
+def test_bilibili_single_image_dynamic_skips_summary_card(tmp_path):
+    card = tmp_path / "card.png"
+    first = ImageContent(tmp_path / "first.jpg")
+    second = ImageContent(tmp_path / "second.jpg")
+
+    single_contents, single = BiliDynamicService._select_delivery_contents(
+        card,
+        [first],
+    )
+    multi_contents, multi = BiliDynamicService._select_delivery_contents(
+        card,
+        [first, second],
+    )
+
+    assert single is True
+    assert single_contents == [first]
+    assert multi is False
+    assert isinstance(multi_contents[0], ImageContent)
+    assert multi_contents[0].path_task == card
+    assert multi_contents[1:] == [first, second]
+
+
+def test_bilibili_single_image_dynamic_does_not_render_summary_card(tmp_path):
+    class Renderer:
+        async def render_dynamic_card(self, **_kwargs):
+            raise AssertionError("single image should not render a summary card")
+
+    parser = SimpleNamespace(cache_dir=tmp_path, dynamic_renderer=Renderer())
+    service = BiliDynamicService(parser)
+    image = ImageContent(tmp_path / "first.jpg")
+
+    contents, single = asyncio.run(
+        service._build_delivery_contents(
+            dynamic_id=123,
+            author_name="作者",
+            author_avatar=None,
+            dynamic_title="标题",
+            full_text="正文",
+            time_text=None,
+            image_urls=["https://i0.hdslb.com/first.jpg"],
+            full_images=[image],
+        )
+    )
+
+    assert single is True
+    assert contents == [image]
 
 
 def test_bilibili_comment_normalization_covers_rconsole_visible_fields(tmp_path):
@@ -888,9 +967,9 @@ def test_weibo_comment_feed_renders_all_selected_comments_in_one_image(tmp_path)
 
 
 def test_comment_layout_cache_versions_invalidate_pre_fix_images():
-    assert BiliCommentFeed.CACHE_VERSION == "bili_comment_v5_canvas_crop"
-    assert DouyinCommentFeed.CACHE_VERSION == "douyin_comment_v4_canvas_crop"
-    assert WeiboCommentFeed.CACHE_VERSION == "weibo_comment_v4_canvas_crop"
+    assert BiliCommentFeed.CACHE_VERSION == "bili_comment_v6_reply_icon"
+    assert DouyinCommentFeed.CACHE_VERSION == "douyin_comment_v5_reply_icon"
+    assert WeiboCommentFeed.CACHE_VERSION == "weibo_comment_v5_reply_icon"
 
 
 def test_manifest_has_a_reviewable_upstream_baseline():
@@ -912,6 +991,72 @@ def test_onebot_message_chain_uses_public_aiocqhttp_conversion():
     converted = asyncio.run(convert_chain())
     assert converted[0] == {"type": "text", "data": {"text": "hello"}}
     assert converted[1]["type"] == "node"
+
+
+def test_single_image_result_replies_to_original_message(tmp_path):
+    from astrbot_plugin_parser_x.core.data import ImageContent as PluginImageContent
+    from astrbot_plugin_parser_x.main import ParserXPlugin
+
+    image_path = tmp_path / "single.jpg"
+    image_path.write_bytes(b"image")
+    plugin = object.__new__(ParserXPlugin)
+    plugin.config = {"show_download_fail_tip": True}
+    plugin._background_tasks = set()
+
+    async def fake_download_content(_self, _cont):
+        return _cont, image_path, None
+
+    class Event:
+        message_obj = SimpleNamespace(message_id=2468)
+
+        def __init__(self):
+            self.sent = []
+
+        @staticmethod
+        def get_sender_id():
+            return "42"
+
+        @staticmethod
+        def get_sender_name():
+            return "用户"
+
+        @staticmethod
+        def chain_result(chain):
+            return chain
+
+        @staticmethod
+        def plain_result(text):
+            return [Plain(text)]
+
+        async def send(self, result):
+            self.sent.append(result)
+
+    event = Event()
+    content = PluginImageContent(image_path)
+    result = SimpleNamespace(
+        contents=[content],
+        comment_contents=[],
+        extra={"reply_original_for_single_image": True},
+        platform=SimpleNamespace(display_name="测试"),
+        text="",
+        extra_info=None,
+        url="https://example.com",
+    )
+
+    with (
+        patch.object(ParserXPlugin, "_download_content", fake_download_content),
+        patch.object(
+            ParserXPlugin,
+            "_convert_to_seg",
+            return_value=MessageImage(str(image_path)),
+        ),
+    ):
+        asyncio.run(plugin._send_parse_result(event, result))
+
+    assert len(event.sent) == 1
+    assert isinstance(event.sent[0][0], Reply)
+    assert event.sent[0][0].id == 2468
+    assert isinstance(event.sent[0][1], MessageImage)
 
 
 def test_plugin_initializes_and_registers_aiocqhttp_parsers(tmp_path):

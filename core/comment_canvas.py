@@ -11,6 +11,12 @@ from playwright.async_api import async_playwright
 
 from .canvas_image import save_comment_canvas_image
 
+_REPLY_ICON = (
+    '<svg class="reply-icon" viewBox="0 0 24 24" aria-hidden="true">'
+    '<path d="M9 7 4 12l5 5v-3h4.5c3.1 0 5.6 1.2 7.5 4-1-5.1-4-8-8.5-8H9V7Z"/>'
+    "</svg>"
+)
+
 
 @dataclass(slots=True)
 class CommentTheme:
@@ -249,7 +255,7 @@ class SocialCommentCanvas:
             '<div class="actions">'
             f'<span class="action-meta">{self._text(metadata_text)}</span>'
             f'<span class="action">♡ {self._text(entry.like_text)}</span>'
-            f'<span class="action">◌ {self._text(entry.reply_text)}</span>'
+            f'<span class="action">{_REPLY_ICON}{self._text(entry.reply_text)}</span>'
             f"{creator_liked}</div>"
         )
 
@@ -315,7 +321,7 @@ body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Mic
 .comment-content,.reply-content{{margin-top:8px;color:{theme.text};font-size:19px;line-height:1.62;word-break:break-word}}.reply-content{{font-size:16px}}.highlight{{color:{theme.accent}}}.emoji-text{{display:inline-block;margin:0 2px;padding:0 4px;border-radius:5px;background:{theme.accent_soft};color:{theme.muted}}}
 .emote{{display:inline-block;width:24px;height:24px;margin:0 2px;object-fit:contain;vertical-align:-6px}}.pinned{{display:inline-block;margin-right:7px;padding:1px 7px;border-radius:5px;background:{theme.accent_soft};color:{theme.accent};font-size:12px;line-height:21px;vertical-align:2px}}
 .comment-image-wrap,.sticker-image-wrap{{display:block;width:fit-content;max-width:100%;margin:10px 0 0;overflow:hidden;border:1px solid {theme.border};border-radius:10px;background:{theme.nested_surface}}}.comment-image{{display:block;width:auto;height:auto;max-width:540px;object-fit:contain}}.sticker-image{{display:block;width:auto;height:auto;max-width:180px;max-height:180px;object-fit:contain}}
-.actions{{display:flex;align-items:center;gap:17px;margin-top:9px;color:{theme.muted};font-size:13px;line-height:20px;flex-wrap:wrap}}.action-meta{{margin-right:auto}}.creator-liked{{padding:1px 6px;border-radius:5px;background:{theme.accent_soft};color:{theme.accent}}}
+.actions{{display:flex;align-items:center;gap:17px;margin-top:9px;color:{theme.muted};font-size:13px;line-height:20px;flex-wrap:wrap}}.action{{display:inline-flex;align-items:center;gap:4px}}.reply-icon{{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}}.action-meta{{margin-right:auto}}.creator-liked{{padding:1px 6px;border-radius:5px;background:{theme.accent_soft};color:{theme.accent}}}
 .reply-card{{display:grid;grid-template-columns:31px 1fr;gap:9px;max-width:600px;margin-top:13px;padding:11px 12px;border-radius:12px;background:{theme.nested_surface}}}.reply-card .actions{{gap:12px}}
 .footer{{padding:14px 18px 16px;border-top:1px solid {theme.border};color:{theme.muted};font-size:12px;text-align:center}}
 </style></head><body><div id="parser-x-comment-root" class="page"><div class="shell">

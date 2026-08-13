@@ -15,6 +15,7 @@ from astrbot.api.message_components import (
     Nodes,
     Plain,
     Record,
+    Reply,
     Video,
 )
 from astrbot.api.star import Context, Star, StarTools
@@ -303,7 +304,14 @@ class ParserXPlugin(Star):
         node_uin = str(event.get_sender_id())
         node_name = event.get_sender_name() or "R-Parser"
 
+        def original_message_reply() -> Reply | None:
+            message_id = getattr(event.message_obj, "message_id", None)
+            if message_id in (None, ""):
+                return None
+            return Reply(id=message_id)
+
         async def process_main_content():
+            parsed_contents = tuple(result.contents)
             if not result.contents:
                 if result.extra.get("plain_text_only"):
                     text = (result.text or "").strip()
@@ -416,8 +424,29 @@ class ParserXPlugin(Star):
                             )
                         )
             else:
+                if result.extra.get("reply_original_for_single_image"):
+                    image_segs = [seg for seg in segs if isinstance(seg, Image)]
+                    if len(segs) == 1 and len(image_segs) == 1:
+                        chain: list[BaseMessageComponent] = []
+                        if (reply := original_message_reply()) is not None:
+                            chain.append(reply)
+                        chain.append(image_segs[0])
+                        await event.send(event.chain_result(chain))
+                        return
+
                 if len(segs) == 1:
-                    await event.send(event.chain_result([segs[0]]))
+                    chain: list[BaseMessageComponent] = []
+                    if (
+                        len(parsed_contents) == 1
+                        and isinstance(
+                            parsed_contents[0], (ImageContent, GraphicsContent)
+                        )
+                        and isinstance(segs[0], Image)
+                        and (reply := original_message_reply()) is not None
+                    ):
+                        chain.append(reply)
+                    chain.append(segs[0])
+                    await event.send(event.chain_result(chain))
                     return
 
                 # 先尝试合并转发；若 send_group_forward_msg 超时/失败（NapCat 上传多图
