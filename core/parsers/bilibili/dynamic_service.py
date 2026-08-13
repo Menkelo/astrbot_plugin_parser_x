@@ -670,7 +670,7 @@ class BiliDynamicService:
         max_bytes: int = 4 * 1024 * 1024,
     ) -> str | None:
         """
-        将 B站图片转 data URI，避免 Playwright 渲染时头像加载失败。
+        将 B站图片转 data URI，避免远端 Canvas 渲染时头像加载失败。
         """
         headers = self.parser.headers.copy()
         headers["Cache-Control"] = "no-cache"

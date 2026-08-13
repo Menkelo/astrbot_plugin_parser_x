@@ -1,10 +1,14 @@
 from html import escape
 from pathlib import Path
 
-from playwright.async_api import async_playwright
+from .constants import COMMENT_FOOTER_BRAND
+from .html_renderer import HtmlRenderService
 
 
 class LiveCardRenderer:
+    def __init__(self, render_service: HtmlRenderService):
+        self.render_service = render_service
+
     async def render_live_card(
         self,
         out_path: Path,
@@ -103,44 +107,17 @@ class LiveCardRenderer:
               <div class="title">{esc(title)}</div>
               <div class="user">{avatar_html}<div><div class="uname">{esc(streamer_name)}</div>{user_time_html}</div></div>
               {meta_html}
-              <div class="footer">Parser X</div>
+              <div class="footer">{esc(COMMENT_FOOTER_BRAND)}</div>
             </div>
           </div>
         </body>
         </html>
         """
 
-        async with async_playwright() as p:
-            browser = await p.chromium.launch()
-            try:
-                page = await browser.new_page(
-                    viewport={"width": 748, "height": 10},
-                    device_scale_factor=2,
-                )
-                await page.set_content(html, wait_until="domcontentloaded")
-                await page.wait_for_timeout(300)
-                await page.evaluate(
-                    """
-                    () => {
-                      const imgs = document.querySelectorAll('img.live-cover');
-                      for (const img of imgs) {
-                        const apply = () => {
-                          const w = img.naturalWidth || 0;
-                          const h = img.naturalHeight || 0;
-                          if (!w || !h) return;
-                          const r = w / h;
-                          if (r < 1.2) img.classList.add('is-portrait');
-                          else if (r > 2.2) img.classList.add('is-ultrawide');
-                        };
-                        if (img.complete) apply();
-                        else img.addEventListener('load', apply, { once: true });
-                      }
-                    }
-                    """
-                )
-                await page.wait_for_timeout(120)
-                height = await page.evaluate("document.body.scrollHeight")
-                await page.set_viewport_size({"width": 748, "height": height})
-                await page.screenshot(path=str(out_path), full_page=True)
-            finally:
-                await browser.close()
+        return await self.render_service.render(
+            out_path,
+            html,
+            options={"type": "png", "full_page": True, "scale": "css"},
+            target_width=748,
+            bottom_padding=24,
+        )

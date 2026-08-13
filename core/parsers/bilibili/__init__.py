@@ -15,6 +15,7 @@ from ...comment_settings import CommentSettings
 from ...constants import BILIBILI_HEADER
 from ...data import Platform
 from ...exception import SizeLimitException
+from ...html_renderer import HtmlRenderService
 from ...live_renderer import LiveCardRenderer
 from ...utils import ck2dict
 from ..base import BaseParser, Downloader, ParseException, handle
@@ -87,7 +88,8 @@ class BilibiliParser(BaseParser):
         self._video_info_cache: dict[str, tuple[float, dict]] = {}
         self._playurl_cache: dict[str, tuple[float, dict]] = {}
 
-        self.comment_canvas = BiliCommentCanvas()
+        self.render_service = HtmlRenderService.from_config(config)
+        self.comment_canvas = BiliCommentCanvas(self.render_service)
         self.comment_feed = BiliCommentFeed(
             parser=self,
             canvas=self.comment_canvas,
@@ -96,15 +98,18 @@ class BilibiliParser(BaseParser):
 
         self.stream_selector = BiliStreamSelector()
 
-        self.live_renderer = LiveCardRenderer()
-        self.dynamic_renderer = BiliDynamicRenderer()
+        self.live_renderer = LiveCardRenderer(self.render_service)
+        self.dynamic_renderer = BiliDynamicRenderer(self.render_service)
 
         self.live_service = BiliLiveService(self)
         self.dynamic_service = BiliDynamicService(self)
 
-    def set_canvas_render(self, canvas_render):
-        """注入 AstrBot 官方 html_render，用于评论区 Canvas 卡片。"""
-        self.comment_canvas.bind(canvas_render)
+    def set_render_service(self, render_service: HtmlRenderService) -> None:
+        """Reuse the plugin-wide renderer for comments, dynamics and live cards."""
+        self.render_service = render_service
+        self.comment_canvas.render_service = render_service
+        self.live_renderer.render_service = render_service
+        self.dynamic_renderer.render_service = render_service
 
     # region 路由
 

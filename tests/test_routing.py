@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
 from astrbot.api import AstrBotConfig
 from astrbot.api.event import MessageChain
 from astrbot.api.message_components import Image as MessageImage
@@ -14,9 +15,8 @@ from astrbot.api.star import StarTools
 from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import (
     AiocqhttpMessageEvent,
 )
-from PIL import Image
+from PIL import Image, ImageDraw
 
-from core.canvas_image import save_comment_canvas_image
 from core.comment_canvas import (
     DOUYIN_THEME,
     CommentAuthor,
@@ -29,6 +29,8 @@ from core.comment_settings import CommentSettings
 from core.constants import COMMENT_FOOTER_BRAND
 from core.data import ImageContent
 from core.download import Downloader, VideoInfo
+from core.html_renderer import HtmlRenderService
+from core.live_renderer import LiveCardRenderer
 from core.parsers import (
     BaseParser,
     DouyinParser,
@@ -50,7 +52,21 @@ from core.parsers.douyin.a_bogus import _sm3_fallback, generate_a_bogus
 from core.parsers.douyin.comment_feed import DouyinCommentFeed
 from core.parsers.weibo_comment import WeiboCommentFeed
 from core.parsers.ytdlp import AcFunParser
+from core.rendered_image import save_rendered_image
+from core.text_renderer import TextCardRenderer
 from core.utils import extract_json_url, generate_file_name
+
+
+def _save_render_fixture(
+    path: Path,
+    *,
+    size: tuple[int, int] = (1280, 220),
+    background: str = "white",
+) -> None:
+    with Image.new("RGB", size, background) as image:
+        draw = ImageDraw.Draw(image)
+        draw.rectangle((24, 24, min(size[0] - 24, 700), 150), fill="#303744")
+        image.save(path)
 
 
 def test_comment_settings_normalize_bool_and_clamp_values():
@@ -137,6 +153,42 @@ def test_foreign_platform_routes_are_not_registered():
         & platform_keys
     )
     assert "web_summary" not in schema
+
+
+def test_config_schema_uses_latest_astrbot_panel_features():
+    schema = json.loads(
+        (Path(__file__).parents[1] / "_conf_schema.json").read_text(encoding="utf-8")
+    )
+    assert schema["rendering"]["obvious_hint"] is True
+    assert schema["cookies"]["obvious_hint"] is True
+    assert schema["performance"]["items"]["video_codec"]["labels"] == [
+        "自动选择",
+        "优先 HEVC / H.265",
+        "优先 AVC / H.264",
+    ]
+    assert schema["cookies"]["items"]["ytdlp_cookie_file"]["type"] == "file"
+    assert schema["cookies"]["items"]["ytdlp_cookie_file"]["file_types"] == ["txt"]
+    assert schema["behavior"]["items"]["disabled_sessions"]["collapsed"] is True
+
+
+def test_runtime_dependencies_do_not_require_local_browser():
+    requirements = (Path(__file__).parents[1] / "requirements.txt").read_text(
+        encoding="utf-8"
+    )
+    assert "playwright" not in requirements.lower()
+    source_files = [
+        Path(__file__).parents[1] / "core" / "text_renderer.py",
+        Path(__file__).parents[1] / "core" / "live_renderer.py",
+        Path(__file__).parents[1] / "core" / "comment_canvas.py",
+        Path(__file__).parents[1]
+        / "core"
+        / "parsers"
+        / "bilibili"
+        / "comment_canvas.py",
+    ]
+    source = "\n".join(path.read_text(encoding="utf-8") for path in source_files)
+    assert "playwright" not in source.lower()
+    assert "chromium" not in source.lower()
 
 
 def test_ytdlp_parser_builds_a_downloadable_media_result(tmp_path):
@@ -279,11 +331,11 @@ def test_bilibili_comment_renderer_prefers_astrbot_canvas(tmp_path):
             }
         )
         rendered = tmp_path / "canvas.jpg"
-        Image.new("RGB", (1280, 200), "white").save(rendered)
+        _save_render_fixture(rendered)
         return str(rendered)
 
     output = tmp_path / "comments.png"
-    renderer = BiliCommentCanvas(canvas_render=fake_canvas)
+    renderer = BiliCommentCanvas(HtmlRenderService(fake_canvas))
     document = BiliCommentDocument(
         work_title="视频标题",
         cover="",
@@ -298,7 +350,8 @@ def test_bilibili_comment_renderer_prefers_astrbot_canvas(tmp_path):
     asyncio.run(renderer.render(output, document))
 
     with Image.open(output) as image:
-        assert image.size == (1140, 200)
+        assert image.width == 1140
+        assert 170 <= image.height <= 173
     assert calls["return_url"] is False
     assert calls["options"]["full_page"] is True
     assert calls["options"]["scale"] == "css"
@@ -320,11 +373,11 @@ def test_social_comment_renderer_scales_astrbot_canvas(tmp_path):
             }
         )
         rendered = tmp_path / "social-canvas.jpg"
-        Image.new("RGB", (800, 200), "black").save(rendered)
+        _save_render_fixture(rendered, background="#161823")
         return str(rendered)
 
     output = tmp_path / "social-comments.jpg"
-    renderer = SocialCommentCanvas(canvas_render=fake_canvas)
+    renderer = SocialCommentCanvas(HtmlRenderService(fake_canvas))
     document = CommentDocument(
         theme=DOUYIN_THEME,
         work_title="作品",
@@ -340,22 +393,129 @@ def test_social_comment_renderer_scales_astrbot_canvas(tmp_path):
     asyncio.run(renderer.render(output, document))
 
     with Image.open(output) as image:
-        assert image.size == (760, 200)
+        assert image.width == 1140
+        assert 170 <= image.height <= 173
     assert calls["options"]["scale"] == "css"
     assert "@media (min-width:1000px)" in calls["template"]
     assert "#parser-x-comment-root{transform:scale(1.5)" in calls["template"]
 
 
-def test_comment_canvas_crop_keeps_already_exact_width(tmp_path):
-    rendered = tmp_path / "canvas.jpg"
-    Image.new("RGB", (1140, 123), "white").save(rendered)
-    original = rendered.read_bytes()
+def test_html_render_service_requires_official_renderer(tmp_path):
+    renderer = HtmlRenderService()
+    with pytest.raises(RuntimeError, match="html_render"):
+        asyncio.run(renderer.render(tmp_path / "missing.png", "<p>test</p>"))
 
-    save_comment_canvas_image(rendered, rendered)
 
-    assert rendered.read_bytes() == original
-    with Image.open(rendered) as image:
+def test_rendered_image_trims_unused_right_canvas(tmp_path):
+    rendered = tmp_path / "rendered.jpg"
+    output = tmp_path / "cropped.jpg"
+    Image.new("RGB", (1280, 123), "white").save(rendered)
+
+    save_rendered_image(rendered, output, target_width=1140)
+
+    with Image.open(output) as image:
         assert image.size == (1140, 123)
+
+
+def test_rendered_image_uses_base_width_for_unscaled_canvas(tmp_path):
+    rendered = tmp_path / "rendered.jpg"
+    output = tmp_path / "cropped.jpg"
+    Image.new("RGB", (800, 123), "white").save(rendered)
+
+    save_rendered_image(
+        rendered,
+        output,
+        target_width=1140,
+        fallback_width=760,
+    )
+
+    with Image.open(output) as image:
+        assert image.size == (760, 123)
+
+
+@pytest.mark.parametrize("background", ["#f3f5f8", "#161823"])
+def test_rendered_image_trims_bottom_canvas_for_light_and_dark_pages(
+    tmp_path,
+    background,
+):
+    rendered = tmp_path / "rendered.png"
+    output = tmp_path / "cropped.png"
+    with Image.new("RGB", (760, 720), background) as image:
+        draw = ImageDraw.Draw(image)
+        draw.rectangle((40, 52, 718, 335), fill="#ffffff")
+        image.save(rendered)
+
+    save_rendered_image(
+        rendered,
+        output,
+        target_width=760,
+        bottom_padding=26,
+    )
+
+    with Image.open(output) as image:
+        assert image.size == (760, 362)
+
+
+def test_rendered_image_keeps_content_that_already_reaches_bottom(tmp_path):
+    rendered = tmp_path / "rendered.png"
+    output = tmp_path / "cropped.png"
+    with Image.new("RGB", (760, 240), "#161823") as image:
+        draw = ImageDraw.Draw(image)
+        draw.rectangle((30, 24, 729, 232), fill="#252632")
+        image.save(rendered)
+
+    save_rendered_image(
+        rendered,
+        output,
+        target_width=760,
+        bottom_padding=20,
+    )
+
+    with Image.open(output) as image:
+        assert image.size == (760, 240)
+
+
+def test_text_and_live_cards_share_html_render_service(tmp_path):
+    calls = []
+
+    async def fake_html_render(template, data, *, return_url, options):
+        calls.append((template, data, return_url, options))
+        rendered = tmp_path / f"rendered-{len(calls)}.png"
+        _save_render_fixture(rendered)
+        return str(rendered)
+
+    service = HtmlRenderService(fake_html_render)
+    text_output = tmp_path / "text.png"
+    live_output = tmp_path / "live.png"
+
+    async def run():
+        await TextCardRenderer(service).render_text_card(
+            text_output,
+            platform_name="微博",
+            author_name="用户",
+            text="正文 #话题#",
+        )
+        await LiveCardRenderer(service).render_live_card(
+            live_output,
+            platform_name="Bilibili",
+            title="直播标题",
+            streamer_name="主播",
+            cover=None,
+            avatar=None,
+            status_text="直播中",
+            area_text="游戏",
+        )
+
+    asyncio.run(run())
+    with Image.open(text_output) as image:
+        assert image.size == (760, 177)
+    with Image.open(live_output) as image:
+        assert image.size == (748, 175)
+    assert len(calls) == 2
+    assert all(return_url is False for _, _, return_url, _ in calls)
+    assert all(options["scale"] == "css" for _, _, _, options in calls)
+    assert all(options["timeout"] == 45_000 for _, _, _, options in calls)
+    assert all(COMMENT_FOOTER_BRAND in template for template, *_ in calls)
 
 
 def test_comment_images_keep_their_aspect_ratio_without_height_clipping():
@@ -665,10 +825,10 @@ def test_social_comment_canvas_escapes_jinja_from_user_content(tmp_path):
         calls["template"] = template
         calls["data"] = data
         output = tmp_path / "social.jpg"
-        Image.new("RGB", (760, 100), "white").save(output)
+        _save_render_fixture(output)
         return str(output)
 
-    renderer = SocialCommentCanvas(fake_canvas)
+    renderer = SocialCommentCanvas(HtmlRenderService(fake_canvas))
     document = CommentDocument(
         theme=DOUYIN_THEME,
         work_title="{{ 7 * 7 }}",
@@ -685,7 +845,8 @@ def test_social_comment_canvas_escapes_jinja_from_user_content(tmp_path):
     asyncio.run(renderer.render(output, document))
 
     with Image.open(output) as image:
-        assert image.size == (760, 100)
+        assert image.width == 1140
+        assert 170 <= image.height <= 173
     assert "{{ 7 * 7 }}" not in calls["template"]
     assert "{% unsafe %}" not in calls["template"]
     assert "&#123;" in calls["template"]
@@ -1205,9 +1366,9 @@ def test_comment_feed_footers_use_repository_brand(tmp_path):
 
 
 def test_comment_layout_cache_versions_invalidate_pre_fix_images():
-    assert BiliCommentFeed.CACHE_VERSION == "bili_comment_v7_footer_brand"
-    assert DouyinCommentFeed.CACHE_VERSION == "douyin_comment_v6_footer_brand"
-    assert WeiboCommentFeed.CACHE_VERSION == "weibo_comment_v6_avatar_data_uri"
+    assert BiliCommentFeed.CACHE_VERSION == "bili_comment_v8_official_render_crop"
+    assert DouyinCommentFeed.CACHE_VERSION == "douyin_comment_v7_official_render_crop"
+    assert WeiboCommentFeed.CACHE_VERSION == "weibo_comment_v7_official_render_crop"
 
 
 def test_manifest_has_a_reviewable_upstream_baseline():
@@ -1300,8 +1461,6 @@ def test_single_image_result_replies_to_original_message(tmp_path):
 def test_plugin_initializes_and_registers_aiocqhttp_parsers(tmp_path):
     from astrbot_plugin_parser_x.main import ParserXPlugin
 
-    from core.text_renderer import TextCardRenderer
-
     class Context:
         def get_config(self):
             return {}
@@ -1316,10 +1475,7 @@ def test_plugin_initializes_and_registers_aiocqhttp_parsers(tmp_path):
     config["bili_comment"] = "false"
 
     async def run_lifecycle():
-        with (
-            patch.object(StarTools, "get_data_dir", return_value=tmp_path / "data"),
-            patch.object(TextCardRenderer, "check_available", return_value=False),
-        ):
+        with patch.object(StarTools, "get_data_dir", return_value=tmp_path / "data"):
             plugin = ParserXPlugin(Context(), config)
             await plugin.initialize()
             try:
@@ -1334,11 +1490,24 @@ def test_plugin_initializes_and_registers_aiocqhttp_parsers(tmp_path):
                 assert "youtube.com" not in plugin.parser_map
                 assert plugin.key_pattern_list
                 assert plugin.config["comment_settings_migrated"] is True
+                assert plugin.config["config_v2_migrated"] is True
                 assert plugin.config["comments"]["bilibili"] is False
+                assert plugin.config["behavior"]["show_download_fail_tip"] is True
+                assert plugin.config["behavior"]["disabled_sessions"] == []
                 assert plugin.parser_map["b23.tv"].enable_comment_card is False
-                assert plugin.parser_map["b23.tv"].comment_canvas._canvas_render
-                assert plugin.parser_map["douyin"].comment_canvas._canvas_render
-                assert plugin.parser_map["weibo.com"].comment_canvas._canvas_render
+                assert plugin.render_service.available
+                bili = plugin.parser_map["b23.tv"]
+                douyin = plugin.parser_map["douyin"]
+                weibo = plugin.parser_map["weibo.com"]
+                assert bili.render_service is plugin.render_service
+                assert bili.comment_canvas.render_service is plugin.render_service
+                assert bili.live_renderer.render_service is plugin.render_service
+                assert bili.dynamic_renderer.render_service is plugin.render_service
+                assert douyin.render_service is plugin.render_service
+                assert douyin.comment_canvas.render_service is plugin.render_service
+                assert weibo.render_service is plugin.render_service
+                assert weibo.text_renderer.render_service is plugin.render_service
+                assert weibo.comment_canvas.render_service is plugin.render_service
             finally:
                 await plugin.terminate()
 

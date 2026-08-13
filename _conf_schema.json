@@ -1,23 +1,17 @@
 {
-  "disabled_sessions": {
-    "description": "关闭解析的会话",
-    "hint": "可在会话中使用 /开启解析、/关闭解析 管理",
-    "type": "list",
-    "default": []
-  },
   "platforms": {
-    "description": "平台开关",
-    "hint": "原生解析器优先；通用平台由 yt-dlp 兼容层处理",
+    "description": "解析平台",
+    "hint": "关闭不需要的平台可以减少路由匹配与初始化开销。原生解析器优先，部分平台由 yt-dlp 兼容层处理。",
     "type": "object",
     "items": {
-      "bilibili": {"description": "Bilibili（原生）", "type": "bool", "default": true},
-      "douyin": {"description": "抖音（原生）", "type": "bool", "default": true},
-      "kuaishou": {"description": "快手（原生）", "type": "bool", "default": true},
-      "weibo": {"description": "微博（原生）", "type": "bool", "default": true},
-      "xiaohongshu": {"description": "小红书（原生）", "type": "bool", "default": true},
-      "miyoushe": {"description": "米游社（原生）", "type": "bool", "default": true},
-      "tieba": {"description": "贴吧（原生）", "type": "bool", "default": true},
-      "xiaoheihe": {"description": "小黑盒（原生）", "type": "bool", "default": true},
+      "bilibili": {"description": "Bilibili / B站", "type": "bool", "default": true},
+      "douyin": {"description": "抖音", "type": "bool", "default": true},
+      "kuaishou": {"description": "快手", "type": "bool", "default": true},
+      "weibo": {"description": "微博", "type": "bool", "default": true},
+      "xiaohongshu": {"description": "小红书", "type": "bool", "default": true},
+      "miyoushe": {"description": "米游社", "type": "bool", "default": true},
+      "tieba": {"description": "百度贴吧", "type": "bool", "default": true},
+      "xiaoheihe": {"description": "小黑盒", "type": "bool", "default": true},
       "acfun": {"description": "AcFun（yt-dlp）", "type": "bool", "default": true},
       "xigua": {"description": "西瓜视频（yt-dlp）", "type": "bool", "default": true},
       "pipixia": {"description": "皮皮虾（yt-dlp）", "type": "bool", "default": true},
@@ -27,59 +21,58 @@
   },
   "comments": {
     "description": "评论区卡片",
-    "hint": "主内容发送完成后，再通过 AstrBot Canvas 生成热门评论卡片",
+    "hint": "主内容发送后，再通过 AstrBot 官方 html_render 生成一张热门评论长图。",
     "type": "object",
     "items": {
-      "bilibili": {
-        "description": "B站评论区",
-        "type": "bool",
-        "default": true
-      },
+      "bilibili": {"description": "B站评论区", "type": "bool", "default": true},
       "douyin": {
         "description": "抖音评论区",
-        "hint": "需要配置 douyin_ck；未配置时自动跳过",
+        "hint": "需要在“平台登录态”中配置抖音 Cookie；未配置时自动跳过。",
         "type": "bool",
         "default": true
       },
-      "weibo": {
-        "description": "微博评论区",
-        "type": "bool",
-        "default": true
-      },
+      "weibo": {"description": "微博评论区", "type": "bool", "default": true},
       "display_count": {
-        "description": "评论展示总数",
-        "hint": "按热门顺序最多展示多少条评论",
+        "description": "热门评论数量",
+        "hint": "按平台热门顺序最多展示多少条主评论，楼中楼首条回复不计入此数量。",
         "type": "int",
         "slider": {"min": 1, "max": 20, "step": 1},
         "default": 10
       },
       "timeout": {
-        "description": "评论区生成超时（秒）",
+        "description": "评论任务超时（秒）",
+        "hint": "包含评论抓取、头像处理、html_render 和缓存写入；超时后仅跳过评论，不影响主内容。",
         "type": "int",
-        "slider": {"min": 15, "max": 120, "step": 5},
+        "slider": {"min": 15, "max": 180, "step": 5},
         "default": 90
       }
     }
   },
-  "bili_comment": {
-    "description": "旧版 B站评论开关",
-    "type": "bool",
-    "default": true,
-    "invisible": true
-  },
-  "comment_settings_migrated": {
-    "description": "评论配置迁移标记",
-    "type": "bool",
-    "default": false,
-    "invisible": true
-  },
-  "show_download_fail_tip": {
-    "description": "显示下载失败提示",
-    "type": "bool",
-    "default": true
+  "rendering": {
+    "description": "卡片渲染",
+    "hint": "正文卡、动态卡、直播卡和评论卡统一复用 AstrBot 官方 html_render（Canvas/T2I），插件不会启动本地 Chromium。",
+    "obvious_hint": true,
+    "type": "object",
+    "items": {
+      "timeout": {
+        "description": "单次渲染超时（秒）",
+        "hint": "传递给 AstrBot html_render 的截图超时。网络 T2I 较慢时可适当调高。",
+        "type": "int",
+        "slider": {"min": 10, "max": 180, "step": 5},
+        "default": 45
+      },
+      "jpeg_quality": {
+        "description": "评论图 JPEG 质量",
+        "hint": "越高越清晰，但评论长图体积也会增大。正文与直播卡使用 PNG，不受此项影响。",
+        "type": "int",
+        "slider": {"min": 60, "max": 95, "step": 1},
+        "default": 84
+      }
+    }
   },
   "performance": {
-    "description": "性能配置",
+    "description": "下载与媒体",
+    "hint": "这些选项影响下载并发、文件大小限制和 B站取流偏好。",
     "type": "object",
     "items": {
       "max_concurrent_downloads": {
@@ -89,68 +82,98 @@
         "default": 4
       },
       "source_max_size": {
-        "description": "资源最大大小（MB）",
+        "description": "单个资源上限（MB）",
+        "hint": "超过此大小的媒体不会继续下载或发送。",
         "type": "int",
         "slider": {"min": 10, "max": 500, "step": 10},
         "default": 90
       },
       "video_codec": {
         "description": "B站视频编码偏好",
+        "hint": "HEVC 体积通常更小；若协议端或客户端兼容性不好请选择 AVC。",
         "type": "string",
         "options": ["auto", "hevc", "avc"],
+        "labels": ["自动选择", "优先 HEVC / H.265", "优先 AVC / H.264"],
         "default": "hevc"
       }
     }
   },
   "cookies": {
-    "description": "Cookie 配置",
+    "description": "平台登录态",
+    "hint": "Cookie 仅写入本插件配置。建议使用专用小号，并在失效后及时更新。",
+    "obvious_hint": true,
     "type": "object",
     "items": {
       "douyin_ck": {
         "description": "抖音 Cookie",
-        "hint": "用于提升抖音解析稳定性",
+        "hint": "用于抖音解析、图文和评论区。请粘贴完整 Cookie 字符串。",
         "type": "text",
         "default": ""
       },
       "bili_ck": {
         "description": "Bilibili Cookie",
-        "hint": "用于提升 B站接口稳定性与清晰度",
+        "hint": "用于提升 B站接口稳定性、动态解析与可用清晰度。",
         "type": "text",
         "default": ""
       },
       "weibo_cookie": {
         "description": "微博 Cookie",
-        "hint": "可选；公开热门评论无需登录，受限微博可使用该登录态",
+        "hint": "可选；公开微博和热门评论通常无需登录，受限内容可使用该登录态。",
         "type": "text",
         "default": ""
       },
       "xiaoheihe_cookie": {
         "description": "小黑盒 Cookie",
-        "hint": "可选。未配置时仅尝试读取公开页面元数据",
+        "hint": "可选；配置后优先请求签名接口，未配置时读取公开页面与分享跳转信息。",
         "type": "text",
         "default": ""
       },
       "ytdlp_cookie_file": {
-        "description": "yt-dlp Netscape Cookie 文件",
-        "hint": "可选。用于国内 yt-dlp 兼容平台需要登录的情况",
+        "description": "yt-dlp Cookie 文件",
+        "hint": "上传 Netscape 格式的 cookies.txt，用于需要登录的 yt-dlp 兼容平台。",
         "type": "file",
         "file_types": ["txt"],
         "default": []
       }
     }
   },
+  "behavior": {
+    "description": "发送行为",
+    "type": "object",
+    "items": {
+      "show_download_fail_tip": {
+        "description": "显示下载失败提示",
+        "hint": "关闭后，下载失败或超限时只写日志，不在聊天中提示。",
+        "type": "bool",
+        "default": true
+      },
+      "disabled_sessions": {
+        "description": "已关闭解析的会话",
+        "hint": "通常无需手动编辑；可在对应会话中使用 /开启解析、/关闭解析 管理。",
+        "type": "list",
+        "default": [],
+        "collapsed": true
+      }
+    }
+  },
   "integrations": {
-    "description": "可选外部服务",
+    "description": "高级集成",
+    "hint": "可选外部服务；留空时插件使用官方页面或自身解析逻辑。",
     "type": "object",
     "items": {
       "tieba_api_base": {
         "description": "贴吧详情 API 地址",
-        "hint": "可选，需兼容 /tieba/post_detail?tid=；留空时解析官方页面元数据",
+        "hint": "需兼容 /tieba/post_detail?tid=；留空时仅解析贴吧官方页面元数据。",
         "type": "string",
         "default": ""
       }
     }
   },
+  "bili_comment": {"description": "旧版 B站评论开关", "type": "bool", "default": true, "invisible": true},
+  "comment_settings_migrated": {"description": "评论配置迁移标记", "type": "bool", "default": false, "invisible": true},
+  "show_download_fail_tip": {"description": "旧版下载失败提示", "type": "bool", "default": true, "invisible": true},
+  "disabled_sessions": {"description": "旧版关闭解析会话", "type": "list", "default": [], "invisible": true},
+  "config_v2_migrated": {"description": "配置面板 v2 迁移标记", "type": "bool", "default": false, "invisible": true},
   "data_dir": {"description": "数据目录", "type": "string", "invisible": true},
   "cache_dir": {"description": "缓存目录", "type": "string", "invisible": true}
 }

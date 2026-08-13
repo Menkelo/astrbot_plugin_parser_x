@@ -12,6 +12,7 @@ from astrbot.core.config.astrbot_config import AstrBotConfig
 from ...comment_canvas import SocialCommentCanvas
 from ...comment_settings import CommentSettings
 from ...download import Downloader
+from ...html_renderer import HtmlRenderService
 from ...utils import cookies_str_to_netscape
 from ..base import BaseParser, ParseException, Platform, SkipParseException, handle
 from .comment_feed import DouyinCommentFeed
@@ -47,15 +48,17 @@ class DouyinParser(BaseParser):
         self.enable_comment_card = comment_settings.enabled
         self.comment_limit = comment_settings.display_count
         self.comment_timeout = comment_settings.timeout
-        self.comment_canvas = SocialCommentCanvas()
+        self.render_service = HtmlRenderService.from_config(config)
+        self.comment_canvas = SocialCommentCanvas(self.render_service)
         self.comment_feed = DouyinCommentFeed(
             self,
             self.comment_canvas,
             limit=self.comment_limit,
         )
 
-    def set_canvas_render(self, canvas_render):
-        self.comment_canvas.bind(canvas_render)
+    def set_render_service(self, render_service: HtmlRenderService) -> None:
+        self.render_service = render_service
+        self.comment_canvas.render_service = render_service
 
     def _comment_extra(
         self,

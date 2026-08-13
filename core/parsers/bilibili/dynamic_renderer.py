@@ -1,9 +1,13 @@
 from pathlib import Path
 
+from ...html_renderer import HtmlRenderService
 from ...text_renderer import TextCardRenderer
 
 
 class BiliDynamicRenderer(TextCardRenderer):
+    def __init__(self, render_service: HtmlRenderService):
+        super().__init__(render_service)
+
     async def render_dynamic_card(
         self,
         out_path: Path,

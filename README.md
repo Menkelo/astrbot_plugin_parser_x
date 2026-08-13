@@ -8,8 +8,8 @@ Parser X 是面向 AstrBot `aiocqhttp`（OneBot v11）的国内平台分享链�
 
 ### 原生解析器
 
-- Bilibili：视频、分 P、动态/opus、直播卡片、可选评论区卡片；评论卡片优先使用
-  AstrBot 官方 `html_render`（Canvas/T2I）渲染，失败时回退本地 Chromium。评论区按
+- Bilibili：视频、分 P、动态/opus、直播卡片、可选评论区卡片；所有 HTML 卡片统一使用
+  AstrBot 官方 `html_render`（Canvas/T2I）渲染。评论区按
   rconsole-plugin 的用户可见行为独立适配热门/置顶评论、富文本表情、粉丝牌、UP 标识、
   等级、IP 属地、互动数、评论配图和首条楼中楼；选中的评论始终合并为一张自适应高度长图，
   不复用旧 AstrBot
@@ -46,16 +46,9 @@ Parser X 是面向 AstrBot `aiocqhttp`（OneBot v11）的国内平台分享链�
 https://github.com/Menkelo/astrbot_plugin_parser_x
 ```
 
-运行环境还应提供：
-
-- `ffmpeg`：音视频合并、格式转换和 H.264 发送兜底。
-- Playwright Chromium：动态、评论、直播和纯文本卡片渲染。
-
-如 AstrBot 没有自动安装浏览器，可在 AstrBot 的 Python 环境中执行：
-
-```bash
-playwright install chromium
-```
+运行环境还应提供 `ffmpeg`，用于音视频合并、格式转换和 H.264 发送兜底。插件的正文、
+动态、直播与评论卡片全部复用 AstrBot 官方 Canvas/T2I，不需要额外安装 Playwright 或
+Chromium。
 
 ## 使用
 
@@ -82,10 +75,14 @@ playwright install chromium
 - `comments.bilibili`、`comments.douyin`、`comments.weibo`：各平台评论区开关。
 - `comments.display_count`：最多展示的热门评论总数。
 - `comments.timeout`：评论抓取、Canvas 渲染和缓存生成的总超时。
+- `rendering.timeout`：单次 `html_render` 截图超时。
+- `rendering.jpeg_quality`：评论长图的 JPEG 质量。
+- `behavior.show_download_fail_tip`：是否在聊天中提示下载失败或超限。
+- `behavior.disabled_sessions`：已关闭解析的会话列表，通常通过命令自动维护。
 
-评论任务在主内容发送完成后才启动，优先使用 AstrBot 官方 Canvas；Canvas 失败时回退
-Playwright Chromium。B站、抖音、微博的已选评论都会渲染为一张自适应高度长图。合并转发
-失败时会自动降级发送。快手和小红书等平台目前需要
+评论任务在主内容发送完成后才启动，并使用 AstrBot 官方 `html_render`。B站、抖音、微博的
+已选评论都会渲染为一张自适应高度长图。官方渲染不可用或超时时会跳过对应卡片并记录日志，
+不会在插件内启动第二套浏览器。合并转发失败时会自动降级发送。快手和小红书等平台目前需要
 不稳定的私有签名/登录接口，因此没有用网页抓取方式勉强加入评论区。
 
 缓存只写入 AstrBot 官方约定的 `data/plugin_data/astrbot_plugin_parser_x/`，默认每天清理一次。

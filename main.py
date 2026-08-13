@@ -45,6 +45,7 @@ from .core.exception import (
     SkipParseException,
     ZeroSizeException,
 )
+from .core.html_renderer import HtmlRenderService
 from .core.parsers import BaseParser
 from .core.text_renderer import TextCardRenderer
 from .core.utils import exec_ffmpeg_cmd, extract_json_url
@@ -76,6 +77,24 @@ class ParserXPlugin(Star):
             )
             config["comments"] = comment_config
             config["comment_settings_migrated"] = True
+
+        # v2 groups session and notification settings under ``behavior`` for a
+        # cleaner WebUI. Preserve values from the previous top-level fields.
+        if not parse_bool(config.get("config_v2_migrated", False), False):
+            behavior = config.get("behavior", {})
+            if not isinstance(behavior, dict):
+                behavior = {}
+            legacy_sessions = config.get("disabled_sessions", [])
+            if not behavior.get("disabled_sessions") and isinstance(
+                legacy_sessions, list
+            ):
+                behavior["disabled_sessions"] = list(legacy_sessions)
+            behavior["show_download_fail_tip"] = parse_bool(
+                config.get("show_download_fail_tip", True),
+                True,
+            )
+            config["behavior"] = behavior
+            config["config_v2_migrated"] = True
         self.config.save_config()
 
         self.parser_map: dict[str, BaseParser] = {}
@@ -83,14 +102,14 @@ class ParserXPlugin(Star):
         self.downloader = Downloader(config)
         self.arbiter = EmojiLikeArbiter()
         self.cleaner = CacheCleaner(self.context, self.config)
-        self.text_renderer = TextCardRenderer()
+        self.render_service = HtmlRenderService.from_config(config, self.html_render)
+        self.text_renderer = TextCardRenderer(self.render_service)
         self._background_tasks: set[asyncio.Task] = set()
 
     # region 生命周期
 
     async def initialize(self):
         self._register_parser()
-        await self.text_renderer.check_available()
 
     async def terminate(self):
         background_tasks = list(self._background_tasks)
@@ -114,8 +133,8 @@ class ParserXPlugin(Star):
                 logger.info(f"Parser X 已禁用平台: {_cls.platform.display_name}")
                 continue
             parser = _cls(self.config, self.downloader)
-            if hasattr(parser, "set_canvas_render"):
-                parser.set_canvas_render(self.html_render)
+            if hasattr(parser, "set_render_service"):
+                parser.set_render_service(self.render_service)
             platform_names.append(parser.platform.display_name)
             for keyword, _ in _cls._key_patterns:
                 self.parser_map[keyword] = parser
@@ -137,6 +156,32 @@ class ParserXPlugin(Star):
         if isinstance(value, str):
             return value.strip().lower() not in {"0", "false", "off", "no"}
         return bool(value)
+
+    def _behavior(self) -> dict:
+        behavior = self.config.get("behavior", {})
+        return behavior if isinstance(behavior, dict) else {}
+
+    def _disabled_sessions(self) -> list:
+        sessions = self._behavior().get("disabled_sessions", [])
+        if isinstance(sessions, list):
+            return sessions
+        legacy = self.config.get("disabled_sessions", [])
+        return legacy if isinstance(legacy, list) else []
+
+    def _save_disabled_sessions(self, sessions: list) -> None:
+        behavior = self._behavior()
+        behavior["disabled_sessions"] = sessions
+        self.config["behavior"] = behavior
+        self.config.save_config()
+
+    def _show_download_fail_tip(self) -> bool:
+        return parse_bool(
+            self._behavior().get(
+                "show_download_fail_tip",
+                self.config.get("show_download_fail_tip", True),
+            ),
+            True,
+        )
 
     # endregion
 
@@ -299,7 +344,7 @@ class ParserXPlugin(Star):
         return output_path
 
     async def _send_parse_result(self, event: AstrMessageEvent, result: ParseResult):
-        show_download_fail_tip = self.config.get("show_download_fail_tip", True)
+        show_download_fail_tip = self._show_download_fail_tip()
 
         node_uin = str(event.get_sender_id())
         node_name = event.get_sender_name() or "R-Parser"
@@ -627,7 +672,7 @@ class ParserXPlugin(Star):
         umo = event.unified_msg_origin
         text = (event.message_str or "").strip()
 
-        if umo in self.config["disabled_sessions"]:
+        if umo in self._disabled_sessions():
             return
 
         if not text:
@@ -725,9 +770,10 @@ class ParserXPlugin(Star):
     async def open_parser(self, event: AstrMessageEvent):
         """开启当前会话的解析"""
         umo = event.unified_msg_origin
-        if umo in self.config["disabled_sessions"]:
-            self.config["disabled_sessions"].remove(umo)
-            self.config.save_config()
+        sessions = self._disabled_sessions()
+        if umo in sessions:
+            sessions.remove(umo)
+            self._save_disabled_sessions(sessions)
             yield event.plain_result("解析已开启")
         else:
             yield event.plain_result("解析已开启，无需重复开启")
@@ -737,9 +783,10 @@ class ParserXPlugin(Star):
     async def close_parser(self, event: AstrMessageEvent):
         """关闭当前会话的解析"""
         umo = event.unified_msg_origin
-        if umo not in self.config["disabled_sessions"]:
-            self.config["disabled_sessions"].append(umo)
-            self.config.save_config()
+        sessions = self._disabled_sessions()
+        if umo not in sessions:
+            sessions.append(umo)
+            self._save_disabled_sessions(sessions)
             yield event.plain_result("解析已关闭")
         else:
             yield event.plain_result("解析已关闭，无需重复关闭")
@@ -750,9 +797,7 @@ class ParserXPlugin(Star):
         """查看 Parser X 当前会话状态与已启用平台。"""
         enabled = sorted({p.platform.display_name for p in self.parser_map.values()})
         state = (
-            "关闭"
-            if event.unified_msg_origin in self.config["disabled_sessions"]
-            else "开启"
+            "关闭" if event.unified_msg_origin in self._disabled_sessions() else "开启"
         )
         yield event.plain_result(
             f"Parser X 当前会话：{state}\n已启用平台：{'、'.join(enabled) or '无'}"

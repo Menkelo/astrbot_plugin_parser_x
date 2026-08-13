@@ -1,16 +1,12 @@
 from __future__ import annotations
 
-import asyncio
 from dataclasses import dataclass, field
 from html import escape
 from pathlib import Path
-from typing import Awaitable, Callable, Literal
+from typing import Literal
 
-from astrbot.api import logger
-from playwright.async_api import async_playwright
-
-from ...canvas_image import save_comment_canvas_image
 from ...constants import COMMENT_FOOTER_BRAND
+from ...html_renderer import HtmlRenderService
 
 _REPLY_ICON = (
     '<svg class="reply-icon" viewBox="0 0 24 24" aria-hidden="true">'
@@ -87,13 +83,12 @@ class BiliCommentCanvas:
 
     def __init__(
         self,
-        canvas_render: Callable[..., Awaitable[str]] | None = None,
+        render_service: HtmlRenderService | None = None,
     ):
-        self._canvas_render = canvas_render
-        self._render_lock = asyncio.Lock()
+        self.render_service = render_service or HtmlRenderService()
 
-    def bind(self, canvas_render: Callable[..., Awaitable[str]] | None) -> None:
-        self._canvas_render = canvas_render
+    def bind(self, html_render) -> None:
+        self.render_service.bind(html_render)
 
     @staticmethod
     def _escape_jinja(value: str) -> str:
@@ -318,52 +313,19 @@ body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Mic
         out_path.parent.mkdir(parents=True, exist_ok=True)
         html = self.build_html(document)
 
-        async with self._render_lock:
-            if self._canvas_render is not None:
-                try:
-                    canvas_html = self._scale_for_astrbot_canvas(html)
-                    rendered = await self._canvas_render(
-                        canvas_html,
-                        {},
-                        return_url=False,
-                        options={
-                            "type": "jpeg",
-                            "quality": 84,
-                            "full_page": True,
-                            "scale": "css",
-                            "animations": "disabled",
-                            "caret": "hide",
-                        },
-                    )
-                    rendered_path = Path(str(rendered))
-                    if rendered_path.is_file() and rendered_path.stat().st_size > 0:
-                        save_comment_canvas_image(rendered_path, out_path)
-                        return
-                except Exception as exc:
-                    logger.warning(f"B站评论 Canvas 渲染失败，回退本地 Chromium: {exc}")
-
-            async with async_playwright() as playwright:
-                browser = await playwright.chromium.launch()
-                try:
-                    page = await browser.new_page(
-                        viewport={"width": 760, "height": 100},
-                        device_scale_factor=2,
-                    )
-                    await page.set_content(
-                        html,
-                        wait_until="networkidle",
-                        timeout=20_000,
-                    )
-                    await page.screenshot(
-                        path=str(out_path),
-                        type="jpeg",
-                        quality=84,
-                        full_page=True,
-                        animations="disabled",
-                        caret="hide",
-                    )
-                finally:
-                    await browser.close()
+        await self.render_service.render(
+            out_path,
+            self._scale_for_astrbot_canvas(html),
+            options={
+                "type": "jpeg",
+                "quality": self.render_service.jpeg_quality,
+                "full_page": True,
+                "scale": "css",
+            },
+            target_width=1140,
+            fallback_width=760,
+            bottom_padding=20,
+        )
 
     @staticmethod
     def _scale_for_astrbot_canvas(html: str) -> str:

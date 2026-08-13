@@ -14,6 +14,7 @@ from ..comment_canvas import SocialCommentCanvas
 from ..comment_settings import CommentSettings
 from ..data import ImageContent, Platform, VideoContent
 from ..download import Downloader
+from ..html_renderer import HtmlRenderService
 from ..text_renderer import TextCardRenderer
 from ..utils import image_to_data_uri, normalize_image_url
 from .base import BaseParser, ParseException, handle
@@ -36,7 +37,8 @@ class WeiboParser(BaseParser):
         )
         self.cache_dir = Path(config["cache_dir"])
         self.cache_dir.mkdir(parents=True, exist_ok=True)
-        self.text_renderer = TextCardRenderer()
+        self.render_service = HtmlRenderService.from_config(config)
+        self.text_renderer = TextCardRenderer(self.render_service)
         cookies = config.get("cookies", {})
         self.cookie = (
             str(cookies.get("weibo_cookie", "")) if isinstance(cookies, dict) else ""
@@ -45,15 +47,17 @@ class WeiboParser(BaseParser):
         self.enable_comment_card = comment_settings.enabled
         self.comment_limit = comment_settings.display_count
         self.comment_timeout = comment_settings.timeout
-        self.comment_canvas = SocialCommentCanvas()
+        self.comment_canvas = SocialCommentCanvas(self.render_service)
         self.comment_feed = WeiboCommentFeed(
             self,
             self.comment_canvas,
             limit=self.comment_limit,
         )
 
-    def set_canvas_render(self, canvas_render):
-        self.comment_canvas.bind(canvas_render)
+    def set_render_service(self, render_service: HtmlRenderService) -> None:
+        self.render_service = render_service
+        self.text_renderer.render_service = render_service
+        self.comment_canvas.render_service = render_service
 
     def _comment_extra(
         self,
