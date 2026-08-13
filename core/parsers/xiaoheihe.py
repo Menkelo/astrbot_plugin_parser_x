@@ -9,6 +9,8 @@ from re import Match
 from typing import Any, ClassVar
 from urllib.parse import parse_qs, urlparse
 
+from astrbot.api import logger
+
 from ..data import ImageContent, Platform, VideoContent
 from ..exception import ParseException
 from ..utils import normalize_image_url
@@ -223,7 +225,8 @@ class XiaoheiheParser(BaseParser):
 
     @handle(
         "xiaoheihe.cn",
-        r"https?://(?:www\.)?xiaoheihe\.cn/[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%-]+",
+        r"https?://(?:[A-Za-z0-9-]+\.)*xiaoheihe\.cn/"
+        r"[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%-]+",
     )
     async def parse_xiaoheihe(self, searched: Match[str]):
         url = searched.group(0).rstrip(").,;!?，。；！？）]")
@@ -234,8 +237,8 @@ class XiaoheiheParser(BaseParser):
         if self.cookie:
             try:
                 return await self._parse_api(url, kind, item_id)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug(f"[Xiaoheihe] API 解析失败，回退页面: {exc}")
         return await self._parse_page_fallback(url)
 
     async def _parse_api(self, url: str, kind: str, item_id: str):
@@ -346,7 +349,13 @@ class XiaoheiheParser(BaseParser):
         if response.status_code >= 400:
             raise ParseException(f"小黑盒页面请求失败: HTTP {response.status_code}")
         metadata = parse_open_graph(response.text)
-        if not metadata["title"] and not metadata["description"]:
+        redirect_metadata = self._parse_redirect_metadata(str(response.url))
+        page_title = metadata["title"]
+        page_description = metadata["description"]
+        if redirect_metadata:
+            page_title = redirect_metadata.get("title") or page_title
+            page_description = redirect_metadata.get("description") or page_description
+        if not page_title and not page_description:
             if not self.cookie:
                 raise ParseException("小黑盒需要有效 Cookie，且页面元数据不可用")
             raise ParseException("小黑盒内容不可见或 Cookie 已失效")
@@ -360,8 +369,8 @@ class XiaoheiheParser(BaseParser):
                 )
             )
         return self.result(
-            title=metadata["title"],
-            text=metadata["description"],
+            title=page_title,
+            text=page_description,
             contents=contents,
             url=url,
             extra={
@@ -369,6 +378,24 @@ class XiaoheiheParser(BaseParser):
                 "info": "未配置有效小黑盒 Cookie，当前仅展示官方页面元数据。",
             },
         )
+
+    @staticmethod
+    def _parse_redirect_metadata(url: str) -> dict[str, str]:
+        raw = (parse_qs(urlparse(url).query).get("redirect_data") or [""])[0]
+        if not raw:
+            return {}
+        try:
+            payload = json.loads(raw)
+        except (TypeError, ValueError):
+            return {}
+        link = payload.get("link") if isinstance(payload, dict) else None
+        if not isinstance(link, dict):
+            return {}
+        return {
+            key: text
+            for key in ("title", "description")
+            if (text := str(link.get(key) or "").strip())
+        }
 
 
 __all__ = ["XiaoheiheParser"]

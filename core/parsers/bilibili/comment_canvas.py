@@ -10,6 +10,7 @@ from astrbot.api import logger
 from playwright.async_api import async_playwright
 
 from ...canvas_image import save_comment_canvas_image
+from ...constants import COMMENT_FOOTER_BRAND
 
 _REPLY_ICON = (
     '<svg class="reply-icon" viewBox="0 0 24 24" aria-hidden="true">'
@@ -269,7 +270,9 @@ class BiliCommentCanvas:
         entries = "".join(
             self._render_entry(entry, nested=False) for entry in document.entries
         )
-        footer = self._text(document.footer_text or "Parser X · B站评论区")
+        footer = self._text(
+            document.footer_text or f"{COMMENT_FOOTER_BRAND} · B站评论区"
+        )
         display_text = f"展示 {len(document.entries)} 条"
         return f"""<!doctype html>
 <html lang="zh-CN">

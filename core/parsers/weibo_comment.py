@@ -23,8 +23,9 @@ from ..comment_canvas import (
     CommentRichPart,
     SocialCommentCanvas,
 )
+from ..constants import COMMENT_FOOTER_BRAND
 from ..data import ImageContent
-from ..utils import normalize_image_url
+from ..utils import cached_image_to_data_uri, normalize_image_url
 
 
 @dataclass(slots=True)
@@ -66,7 +67,7 @@ class _WeiboRichTextParser(HTMLParser):
 
 class WeiboCommentFeed:
     COMMENT_URL = "https://m.weibo.cn/comments/hotflow"
-    CACHE_VERSION = "weibo_comment_v5_reply_icon"
+    CACHE_VERSION = "weibo_comment_v6_avatar_data_uri"
 
     def __init__(
         self,
@@ -78,6 +79,7 @@ class WeiboCommentFeed:
         self.parser = parser
         self.canvas = canvas
         self.limit = max(1, int(limit))
+        self._avatar_data_uri_cache: dict[str, str | None] = {}
 
     @property
     def cache_dir(self) -> Path:
@@ -331,6 +333,51 @@ class WeiboCommentFeed:
             first_reply=first_reply,
         )
 
+    @staticmethod
+    def _walk_entries(entries: list[CommentEntry]) -> list[CommentEntry]:
+        output = []
+        pending = list(entries)
+        while pending:
+            entry = pending.pop(0)
+            output.append(entry)
+            if entry.first_reply is not None:
+                pending.append(entry.first_reply)
+        return output
+
+    async def _avatar_to_data_uri(self, avatar: str) -> str | None:
+        headers = self._headers()
+        headers["Cache-Control"] = "no-cache"
+        return await cached_image_to_data_uri(
+            self._avatar_data_uri_cache,
+            self.parser.http_get,
+            avatar,
+            headers=headers,
+            referer="https://m.weibo.cn/",
+            max_bytes=2 * 1024 * 1024,
+            timeout=8,
+            debug_label="[Weibo] comment avatar",
+        )
+
+    async def _embed_avatars(self, entries: list[CommentEntry]) -> None:
+        all_entries = self._walk_entries(entries)
+        avatar_urls = list(
+            dict.fromkeys(
+                entry.author.avatar
+                for entry in all_entries
+                if entry.author.avatar and not entry.author.avatar.startswith("data:")
+            )
+        )
+        if not avatar_urls:
+            return
+
+        data_uris = await asyncio.gather(
+            *(self._avatar_to_data_uri(url) for url in avatar_urls)
+        )
+        resolved = dict(zip(avatar_urls, data_uris, strict=True))
+        for entry in all_entries:
+            if data_uri := resolved.get(entry.author.avatar):
+                entry.author.avatar = data_uri
+
     async def build_images(
         self,
         mid: str,
@@ -360,7 +407,9 @@ class WeiboCommentFeed:
             total_text=f"{self._count_text(raw_feed.total)} 条评论",
             entries=entries,
             footer_text=(
-                "仅展示部分热门评论 · Parser X" if partial else "Parser X · 微博评论区"
+                f"仅展示部分热门评论 · {COMMENT_FOOTER_BRAND}"
+                if partial
+                else f"{COMMENT_FOOTER_BRAND} · 微博评论区"
             ),
         )
         serialised = json.dumps(
@@ -377,6 +426,7 @@ class WeiboCommentFeed:
             return [ImageContent(out_path)]
 
         async def render() -> Path:
+            await self._embed_avatars(document.entries)
             await self.canvas.render(out_path, document)
             return out_path
 

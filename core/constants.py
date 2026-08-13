@@ -1,5 +1,7 @@
 from typing import Final
 
+COMMENT_FOOTER_BRAND: Final[str] = "Menkelo/astrbot_plugin_parser_x"
+
 # 通用 PC端 UA (Chrome 120)
 COMMON_HEADER: Final[dict[str, str]] = {
     "User-Agent": (

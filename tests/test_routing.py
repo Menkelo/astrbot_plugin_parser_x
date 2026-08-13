@@ -26,6 +26,7 @@ from core.comment_canvas import (
     SocialCommentCanvas,
 )
 from core.comment_settings import CommentSettings
+from core.constants import COMMENT_FOOTER_BRAND
 from core.data import ImageContent
 from core.download import Downloader, VideoInfo
 from core.parsers import (
@@ -188,6 +189,24 @@ def test_domestic_parser_helpers_cover_new_routes():
     assert XiaoheiheParser.extract_identity(
         "https://www.xiaoheihe.cn/app/game/pc/730"
     ) == ("pc", "730")
+    share_url = "https://api.xiaoheihe.cn/v3/bbs/app/api/web/share?link_id=123456789"
+    assert XiaoheiheParser.extract_identity(share_url) == ("bbs", "123456789")
+    keyword, searched = XiaoheiheParser.search_url(share_url)
+    assert keyword == "xiaoheihe.cn"
+    assert searched.group(0) == share_url
+    for subdomain in ("www", "share", "bbs"):
+        route_url = f"https://{subdomain}.xiaoheihe.cn/app/bbs/link/abc123"
+        keyword, searched = XiaoheiheParser.search_url(route_url)
+        assert keyword == "xiaoheihe.cn"
+        assert XiaoheiheParser.extract_identity(searched.group(0)) == (
+            "bbs",
+            "abc123",
+        )
+    assert XiaoheiheParser._parse_redirect_metadata(
+        "https://www.xiaoheihe.cn/app/bbs/link/123?"
+        "redirect_data=%7B%22link%22%3A%7B%22title%22%3A%22Demo%22%2C"
+        "%22description%22%3A%22Body%22%7D%7D"
+    ) == {"title": "Demo", "description": "Body"}
     assert (
         XiaoheiheParser.build_hkey(
             "bbs/app/link/tree",
@@ -212,6 +231,39 @@ def test_domestic_parser_helpers_cover_new_routes():
     assert tieba["title"] == "主题"
     assert tieba["text"] == "正文"
     assert len(tieba["images"]) == 1
+
+
+def test_xiaoheihe_api_share_route_uses_redirect_metadata(tmp_path):
+    share_url = "https://api.xiaoheihe.cn/v3/bbs/app/api/web/share?link_id=123456789"
+
+    class FakeResponse:
+        status_code = 200
+        url = (
+            "https://www.xiaoheihe.cn/app/bbs/link/123456789?"
+            "redirect_data=%7B%22link%22%3A%7B%22title%22%3A%22Demo%22%2C"
+            "%22description%22%3A%22Body%22%7D%7D"
+        )
+        text = "<html></html>"
+
+    async def run():
+        parser = XiaoheiheParser(
+            {"cache_dir": str(tmp_path), "cookies": {}},
+            object(),
+        )
+
+        async def fake_http_get(url, **_kwargs):
+            assert url == share_url
+            return FakeResponse()
+
+        parser.http_get = fake_http_get
+        keyword, searched = parser.search_url(share_url)
+        return await parser.parse(keyword, searched)
+
+    result = asyncio.run(run())
+    assert result.platform.name == "xiaoheihe"
+    assert result.title == "Demo"
+    assert result.text == "Body"
+    assert result.url == share_url
 
 
 def test_bilibili_comment_renderer_prefers_astrbot_canvas(tmp_path):
@@ -252,7 +304,7 @@ def test_bilibili_comment_renderer_prefers_astrbot_canvas(tmp_path):
     assert calls["options"]["scale"] == "css"
     assert "@media (min-width:1000px)" in calls["template"]
     assert "#parser-x-comment-root{transform:scale(1.5)" in calls["template"]
-    assert "Parser X" in calls["template"]
+    assert COMMENT_FOOTER_BRAND in calls["template"]
 
 
 def test_social_comment_renderer_scales_astrbot_canvas(tmp_path):
@@ -966,10 +1018,196 @@ def test_weibo_comment_feed_renders_all_selected_comments_in_one_image(tmp_path)
     assert len(canvas.documents[0].entries) == 5
 
 
+def test_weibo_comment_feed_embeds_main_and_reply_avatars(tmp_path):
+    avatar_bytes = b"weibo-avatar"
+
+    class FakeResponse:
+        status_code = 200
+        content = avatar_bytes
+        headers = {"Content-Type": "image/jpeg"}
+
+    class FakeParser:
+        headers = {"User-Agent": "test"}
+        cookie = "SUB=test"
+        cache_dir = tmp_path
+        requests = []
+
+        async def http_get(self, url, **kwargs):
+            self.requests.append((url, kwargs))
+            return FakeResponse()
+
+    class FakeCanvas:
+        documents = []
+
+        async def render(self, target, document):
+            self.documents.append(document)
+            target.write_bytes(b"single-image")
+
+    async def run():
+        parser = FakeParser()
+        canvas = FakeCanvas()
+        feed = WeiboCommentFeed(parser, canvas, limit=1)
+
+        async def fake_fetch(_mid):
+            return SimpleNamespace(
+                items=[
+                    {
+                        "id": "1",
+                        "user": {
+                            "id": "1",
+                            "screen_name": "主评论",
+                            "avatar_large": "https://tvax1.sinaimg.cn/avatar.jpg",
+                        },
+                        "text": "评论",
+                        "comments": [
+                            {
+                                "id": "2",
+                                "user": {
+                                    "id": "2",
+                                    "screen_name": "回复",
+                                    "avatar_large": (
+                                        "https://tvax2.sinaimg.cn/reply.jpg"
+                                    ),
+                                },
+                                "text": "回复内容",
+                            }
+                        ],
+                    }
+                ],
+                total=1,
+                has_more=False,
+            )
+
+        feed.fetch = fake_fetch
+        contents = await feed.build_images(
+            "4461526582968019",
+            work_title="标题",
+            cover="",
+            owner_id="42",
+        )
+        await asyncio.gather(*(content.get_path() for content in contents))
+        return parser, canvas
+
+    parser, canvas = asyncio.run(run())
+    document = canvas.documents[0]
+    assert document.entries[0].author.avatar.startswith("data:image/jpeg;base64,")
+    assert document.entries[0].first_reply is not None
+    assert document.entries[0].first_reply.author.avatar.startswith(
+        "data:image/jpeg;base64,"
+    )
+    assert len(parser.requests) == 2
+    for _, kwargs in parser.requests:
+        assert kwargs["headers"]["Referer"] == "https://m.weibo.cn/"
+        assert kwargs["headers"]["Cookie"] == "SUB=test"
+
+
+def test_comment_feed_footers_use_repository_brand(tmp_path):
+    class BiliParser:
+        headers = {}
+        bili_ck = ""
+        cache_dir = tmp_path
+
+        @staticmethod
+        def norm_bili_img(url):
+            return url
+
+    class DouyinParserStub:
+        headers = {}
+        cookies = "sessionid=test"
+        cache_dir = tmp_path
+
+    class WeiboParserStub:
+        headers = {}
+        cookie = ""
+        cache_dir = tmp_path
+
+    class FakeCanvas:
+        def __init__(self):
+            self.documents = []
+
+        async def render(self, target, document):
+            self.documents.append(document)
+            target.write_bytes(b"single-image")
+
+    async def run():
+        bili_canvas = FakeCanvas()
+        bili_feed = BiliCommentFeed(BiliParser(), bili_canvas, limit=1)
+
+        async def bili_fetch(_oid, _type):
+            return SimpleNamespace(
+                items=[
+                    {
+                        "rpid": 1,
+                        "member": {"uname": "用户"},
+                        "content": {"message": "评论"},
+                    }
+                ],
+                owner_mid="",
+                total=2,
+            )
+
+        bili_feed.fetch = bili_fetch
+
+        douyin_canvas = FakeCanvas()
+        douyin_feed = DouyinCommentFeed(DouyinParserStub(), douyin_canvas, limit=1)
+
+        async def douyin_fetch(_aweme_id):
+            return SimpleNamespace(
+                items=[
+                    {
+                        "cid": "1",
+                        "user": {"uid": "1", "nickname": "用户"},
+                        "text": "评论",
+                    }
+                ],
+                total=2,
+                has_more=False,
+            )
+
+        async def fake_emoji_map():
+            return {}
+
+        douyin_feed.fetch = douyin_fetch
+        douyin_feed._load_emoji_map = fake_emoji_map
+
+        weibo_canvas = FakeCanvas()
+        weibo_feed = WeiboCommentFeed(WeiboParserStub(), weibo_canvas, limit=1)
+
+        async def weibo_fetch(_mid):
+            return SimpleNamespace(
+                items=[
+                    {
+                        "id": "1",
+                        "user": {"id": "1", "screen_name": "用户"},
+                        "text": "评论",
+                    }
+                ],
+                total=2,
+                has_more=False,
+            )
+
+        weibo_feed.fetch = weibo_fetch
+
+        results = await asyncio.gather(
+            bili_feed.build_images(2, 1, video_title="标题", video_cover=""),
+            douyin_feed.build_images("3", work_title="标题", cover=""),
+            weibo_feed.build_images("4", work_title="标题", cover="", owner_id=""),
+        )
+        await asyncio.gather(
+            *(content.get_path() for contents in results for content in contents)
+        )
+        return bili_canvas, douyin_canvas, weibo_canvas
+
+    canvases = asyncio.run(run())
+    for canvas in canvases:
+        assert COMMENT_FOOTER_BRAND in canvas.documents[0].footer_text
+        assert "Parser X" not in canvas.documents[0].footer_text
+
+
 def test_comment_layout_cache_versions_invalidate_pre_fix_images():
-    assert BiliCommentFeed.CACHE_VERSION == "bili_comment_v6_reply_icon"
-    assert DouyinCommentFeed.CACHE_VERSION == "douyin_comment_v5_reply_icon"
-    assert WeiboCommentFeed.CACHE_VERSION == "weibo_comment_v5_reply_icon"
+    assert BiliCommentFeed.CACHE_VERSION == "bili_comment_v7_footer_brand"
+    assert DouyinCommentFeed.CACHE_VERSION == "douyin_comment_v6_footer_brand"
+    assert WeiboCommentFeed.CACHE_VERSION == "weibo_comment_v6_avatar_data_uri"
 
 
 def test_manifest_has_a_reviewable_upstream_baseline():

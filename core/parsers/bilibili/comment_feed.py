@@ -14,6 +14,7 @@ from pathlib import Path
 from astrbot.api import logger
 from msgspec import json as msgjson
 
+from ...constants import COMMENT_FOOTER_BRAND
 from ...data import ImageContent
 from .comment_canvas import (
     BiliAuthorBadge,
@@ -103,7 +104,7 @@ class _RawCommentFeed:
 class BiliCommentFeed:
     """Adapt rconsole ``utils/bili-comment.js`` semantics for AstrBot."""
 
-    CACHE_VERSION = "bili_comment_v6_reply_icon"
+    CACHE_VERSION = "bili_comment_v7_footer_brand"
 
     def __init__(
         self,
@@ -687,7 +688,9 @@ class BiliCommentFeed:
             total_text=f"{self._count_text(raw_feed.total)} 条评论",
             entries=entries,
             footer_text=(
-                "仅展示部分热门评论 · Parser X" if partial else "Parser X · B站评论区"
+                f"仅展示部分热门评论 · {COMMENT_FOOTER_BRAND}"
+                if partial
+                else f"{COMMENT_FOOTER_BRAND} · B站评论区"
             ),
         )
         serialised = json.dumps(

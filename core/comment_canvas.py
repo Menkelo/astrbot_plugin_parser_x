@@ -10,6 +10,7 @@ from astrbot.api import logger
 from playwright.async_api import async_playwright
 
 from .canvas_image import save_comment_canvas_image
+from .constants import COMMENT_FOOTER_BRAND
 
 _REPLY_ICON = (
     '<svg class="reply-icon" viewBox="0 0 24 24" aria-hidden="true">'
@@ -299,7 +300,8 @@ class SocialCommentCanvas:
             else ""
         )
         footer = self._text(
-            document.footer_text or f"Parser X · {theme.platform_name}评论区"
+            document.footer_text
+            or f"{COMMENT_FOOTER_BRAND} · {theme.platform_name}评论区"
         )
         return f"""<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8">

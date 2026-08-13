@@ -23,6 +23,7 @@ from ...comment_canvas import (
     CommentRichPart,
     SocialCommentCanvas,
 )
+from ...constants import COMMENT_FOOTER_BRAND
 from ...data import ImageContent
 from ...utils import ck2dict
 from .a_bogus import generate_a_bogus
@@ -40,7 +41,7 @@ class DouyinCommentFeed:
 
     COMMENT_URL = "https://www.douyin.com/aweme/v1/web/comment/list/"
     EMOJI_URL = "https://www.douyin.com/aweme/v1/web/emoji/list"
-    CACHE_VERSION = "douyin_comment_v5_reply_icon"
+    CACHE_VERSION = "douyin_comment_v6_footer_brand"
 
     def __init__(
         self,
@@ -552,7 +553,9 @@ class DouyinCommentFeed:
             total_text=f"{self._count_text(raw_feed.total)} 条评论",
             entries=entries,
             footer_text=(
-                "仅展示部分热门评论 · Parser X" if partial else "Parser X · 抖音评论区"
+                f"仅展示部分热门评论 · {COMMENT_FOOTER_BRAND}"
+                if partial
+                else f"{COMMENT_FOOTER_BRAND} · 抖音评论区"
             ),
         )
         serialised = json.dumps(
