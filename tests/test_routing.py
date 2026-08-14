@@ -10,7 +10,7 @@ import pytest
 from astrbot.api import AstrBotConfig
 from astrbot.api.event import MessageChain
 from astrbot.api.message_components import Image as MessageImage
-from astrbot.api.message_components import Node, Plain, Reply
+from astrbot.api.message_components import Node, Nodes, Plain, Reply
 from astrbot.api.message_components import Video as MessageVideo
 from astrbot.api.star import StarTools
 from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import (
@@ -28,7 +28,7 @@ from core.comment_canvas import (
 )
 from core.comment_settings import CommentSettings
 from core.constants import COMMENT_FOOTER_BRAND
-from core.data import ImageContent
+from core.data import ImageContent, VideoContent
 from core.download import Downloader, VideoInfo
 from core.html_renderer import HtmlRenderService
 from core.live_renderer import LiveCardRenderer
@@ -52,7 +52,9 @@ from core.parsers.bilibili.comment_feed import BiliCommentFeed
 from core.parsers.bilibili.dynamic_service import BiliDynamicService
 from core.parsers.douyin.a_bogus import _sm3_fallback, generate_a_bogus
 from core.parsers.douyin.comment_feed import DouyinCommentFeed
+from core.parsers.miyoushe_comment import MiyousheCommentFeed
 from core.parsers.weibo_comment import WeiboCommentFeed
+from core.parsers.xiaoheihe_comment import XiaoheiheCommentFeed
 from core.parsers.ytdlp import AcFunParser
 from core.rendered_image import save_rendered_image
 from core.text_renderer import TextCardRenderer
@@ -186,26 +188,19 @@ def test_config_schema_uses_latest_astrbot_panel_features():
     assert schema["cookies"]["items"]["ytdlp_cookie_file"]["type"] == "file"
     assert schema["cookies"]["items"]["ytdlp_cookie_file"]["file_types"] == ["txt"]
     assert schema["behavior"]["items"]["disabled_sessions"]["collapsed"] is True
+    assert schema["comments"]["items"]["xiaoheihe"]["default"] is True
+    assert schema["comments"]["items"]["miyoushe"]["default"] is True
 
 
 def test_runtime_dependencies_do_not_require_local_browser():
-    requirements = (Path(__file__).parents[1] / "requirements.txt").read_text(
-        encoding="utf-8"
-    )
+    repo_root = Path(__file__).parents[1]
+    requirements = (repo_root / "requirements.txt").read_text(encoding="utf-8")
     assert "playwright" not in requirements.lower()
-    source_files = [
-        Path(__file__).parents[1] / "core" / "text_renderer.py",
-        Path(__file__).parents[1] / "core" / "live_renderer.py",
-        Path(__file__).parents[1] / "core" / "comment_canvas.py",
-        Path(__file__).parents[1]
-        / "core"
-        / "parsers"
-        / "bilibili"
-        / "comment_canvas.py",
-    ]
+    source_files = [repo_root / "main.py", *(repo_root / "core").rglob("*.py")]
     source = "\n".join(path.read_text(encoding="utf-8") for path in source_files)
     assert "playwright" not in source.lower()
-    assert "chromium" not in source.lower()
+    assert "chromium.launch" not in source.lower()
+    assert "launch_persistent_context" not in source.lower()
 
 
 def test_ytdlp_parser_builds_a_downloadable_media_result(tmp_path):
@@ -289,6 +284,35 @@ def test_domestic_parser_helpers_cover_new_routes():
             "ABCDEF0123456789ABCDEF0123456789",
         )
         == "V2V1Z67"
+    )
+    assert WeiboParser._mid_to_bid("4461526582968019") == "IpOAqcs7h"
+    keyword, searched = WeiboParser.search_url(
+        "https://weibo.com/tv/show/1034:4461526582968019?mid=4461526582968019"
+    )
+    assert keyword == "weibo.com/tv/show"
+    assert searched.group(1) == "4461526582968019"
+    keyword, searched = WeiboParser.search_url("https://m.weibo.cn/detail/IpOAqcs7h")
+    assert keyword == "weibo.cn"
+    assert searched.group(1) == "IpOAqcs7h"
+    assert (
+        WeiboParser._extract_body_text(
+            {
+                "text": "截断正文",
+                "longText": {"longTextContent": "<p>完整正文</p>"},
+            }
+        )
+        == "完整正文"
+    )
+    assert WeiboParser._extract_body_text({"text_raw": "备用正文"}) == "备用正文"
+    assert (
+        WeiboParser._extract_body_text({"longText": "<p>第一段</p><p>第二段</p>"})
+        == "第一段\n第二段"
+    )
+    assert (
+        WeiboParser._delivery_summary(
+            {"status_title": "完整正文..."}, "完整正文还有后续"
+        )
+        == "识别：微博\n完整正文还有后续"
     )
 
 
@@ -392,6 +416,8 @@ def test_xiaoheihe_api_share_route_uses_redirect_metadata(tmp_path):
         )
 
         async def fake_http_get(url, **_kwargs):
+            if url.endswith("/bbs/app/link/tree"):
+                raise RuntimeError("signed api unavailable")
             assert url == share_url
             return FakeResponse()
 
@@ -423,6 +449,13 @@ def test_xiaoheihe_rich_text_extracts_html_body_and_inline_images():
 
     assert text == "第一段 链接 (https://example.com)\n第二段"
     assert images == ["https://img.example.com/demo.jpg"]
+    assert XiaoheiheParser.extract_rich_blocks(
+        '<p>前文</p><img src="https://img.example.com/a.jpg"><p>后文</p>'
+    ) == [
+        ("text", "前文"),
+        ("image", "https://img.example.com/a.jpg"),
+        ("text", "后文"),
+    ]
 
 
 def test_xiaoheihe_app_link_retries_official_share_endpoint(tmp_path):
@@ -444,6 +477,8 @@ def test_xiaoheihe_app_link_retries_official_share_endpoint(tmp_path):
 
         async def fake_http_get(url, **_kwargs):
             calls.append(url)
+            if url.endswith("/bbs/app/link/tree"):
+                raise RuntimeError("signed api unavailable")
             if url == app_url:
                 return FakeResponse(404, url)
             return FakeResponse(
@@ -458,13 +493,51 @@ def test_xiaoheihe_app_link_retries_official_share_endpoint(tmp_path):
         return await parser.parse(keyword, searched)
 
     result = asyncio.run(run())
-    assert calls == [share_url]
+    assert calls == [
+        "https://api.xiaoheihe.cn/bbs/app/link/tree",
+        share_url,
+    ]
     assert result.title == "Demo"
     assert result.text == "Body"
-    assert result.extra["render_text_card"] is True
+    assert result.delivery is not None
 
 
-def test_xiaoheihe_api_uses_link_text_and_shared_card(tmp_path):
+def test_xiaoheihe_uses_embedded_redirect_metadata_even_when_page_is_gone(tmp_path):
+    url = (
+        "https://www.xiaoheihe.cn/app/bbs/link/123?"
+        "redirect_data=%7B%22link%22%3A%7B%22title%22%3A%22Demo%22%2C"
+        "%22description%22%3A%22Body%22%7D%7D"
+    )
+
+    class FakeResponse:
+        status_code = 404
+        text = ""
+
+        def __init__(self, response_url):
+            self.url = response_url
+
+    async def run():
+        parser = XiaoheiheParser(
+            {"cache_dir": str(tmp_path), "cookies": {}},
+            object(),
+        )
+
+        async def fake_http_get(request_url, **_kwargs):
+            if request_url.endswith("/bbs/app/link/tree"):
+                raise RuntimeError("signed api unavailable")
+            return FakeResponse(request_url)
+
+        parser.http_get = fake_http_get
+        keyword, searched = parser.search_url(url)
+        return await parser.parse(keyword, searched)
+
+    result = asyncio.run(run())
+    assert result.title == "Demo"
+    assert result.text == "Body"
+    assert result.delivery is not None
+
+
+def test_xiaoheihe_api_preserves_rich_body_order_and_native_delivery(tmp_path):
     class FakeDownloader:
         def download_img(self, _url, **_kwargs):
             async def done():
@@ -499,7 +572,18 @@ def test_xiaoheihe_api_uses_link_text_and_shared_card(tmp_path):
                             "username": "作者",
                             "avatar_url": "https://img.example.com/avatar.jpg",
                         },
-                    }
+                    },
+                    "comments": [
+                        {
+                            "comment": [
+                                {
+                                    "floor_num": 1,
+                                    "text": "评论内容",
+                                    "user": {"username": "评论用户"},
+                                }
+                            ]
+                        }
+                    ],
                 },
             }
 
@@ -521,11 +605,20 @@ def test_xiaoheihe_api_uses_link_text_and_shared_card(tmp_path):
     assert result.text == "帖子简介\n\n正文内容"
     assert len(result.contents) == 2
     assert result.author is not None and result.author.name == "作者"
-    assert result.extra["render_text_card"] is True
-    assert result.extra["text_card_avatar"].endswith("avatar.jpg")
+    assert "render_text_card" not in result.extra
+    assert result.delivery is not None
+    assert len(result.delivery.batches) == 2
+    overview, body = result.delivery.batches
+    assert overview.mode == "direct"
+    assert isinstance(overview.parts[0], ImageContent)
+    assert "帖子标题" in overview.parts[1]
+    assert body.mode == "forward"
+    assert body.parts[0] == "正文内容"
+    assert isinstance(body.parts[1], ImageContent)
+    assert callable(result.extra["comment_task_factory"])
 
 
-def test_xiaoheihe_game_uses_public_api_without_cookie(tmp_path):
+def test_xiaoheihe_game_uses_signed_api_without_cookie(tmp_path):
     calls = []
 
     class FakeDownloader:
@@ -572,14 +665,109 @@ def test_xiaoheihe_game_uses_public_api_without_cookie(tmp_path):
         return await parser.parse(keyword, searched)
 
     result = asyncio.run(run())
-    assert calls == [
-        ("https://api.xiaoheihe.cn/game/web/get_game_detail/", {"appid": "730"})
-    ]
+    assert len(calls) == 1
+    assert calls[0][0] == "https://api.xiaoheihe.cn/game/get_game_detail"
+    assert calls[0][1]["steam_appid"] == "730"
+    assert calls[0][1]["hkey"]
     assert result.title == "CS2"
     assert "游戏简介" in (result.text or "")
     assert "Valve" in (result.text or "")
     assert len(result.contents) == 1
-    assert result.extra["render_text_card"] is True
+    assert result.delivery is not None
+    assert "render_text_card" not in result.extra
+
+
+def test_miyoushe_uses_native_delivery_and_enables_comments(tmp_path):
+    calls = []
+
+    class FakeDownloader:
+        def download_img(self, _url, **_kwargs):
+            async def done():
+                return tmp_path / "miyoushe.jpg"
+
+            return asyncio.create_task(done())
+
+        def download_video(self, _url, **_kwargs):
+            async def done():
+                return tmp_path / "miyoushe.mp4"
+
+            return asyncio.create_task(done())
+
+    class FakeResponse:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {
+                "retcode": 0,
+                "data": {
+                    "post": {
+                        "post": {
+                            "post_id": "75247726",
+                            "uid": "42",
+                            "subject": "文章标题",
+                            "content": "<p>第一段</p><p>第二段</p>",
+                            "cover": "https://img.example.com/cover.jpg",
+                            "images": ["https://img.example.com/body.jpg"],
+                            "created_at": 1_700_000_000,
+                        },
+                        "user": {
+                            "uid": "42",
+                            "nickname": "作者",
+                            "avatar_url": "https://img.example.com/avatar.jpg",
+                        },
+                        "vod_list": [
+                            {
+                                "duration": 12,
+                                "resolutions": [
+                                    {
+                                        "width": 640,
+                                        "height": 360,
+                                        "url": "https://video.example.com/demo.mp4",
+                                    }
+                                ],
+                            }
+                        ],
+                    }
+                },
+            }
+
+    async def run():
+        parser = MiyousheParser(
+            {
+                "cache_dir": str(tmp_path),
+                "comments": {"miyoushe": True},
+                "performance": {},
+            },
+            FakeDownloader(),
+        )
+
+        async def fake_http_get(url, **kwargs):
+            calls.append((url, kwargs))
+            return FakeResponse()
+
+        parser.http_get = fake_http_get
+        keyword, searched = parser.search_url(
+            "https://www.miyoushe.com/ys/article/75247726"
+        )
+        return await parser.parse(keyword, searched)
+
+    result = asyncio.run(run())
+    assert calls[0][0] == MiyousheParser.api_url
+    assert calls[0][1]["params"] == {"post_id": "75247726"}
+    assert calls[0][1]["headers"]["DS"]
+    assert result.text == "第一段\n第二段"
+    assert len(result.contents) == 3
+    assert result.delivery is not None
+    assert len(result.delivery.batches) == 3
+    overview, images, video = result.delivery.batches
+    assert isinstance(overview.parts[0], ImageContent)
+    assert "文章标题" in overview.parts[1]
+    assert images.reply_original is True
+    assert isinstance(images.parts[0], ImageContent)
+    assert isinstance(video.parts[0], VideoContent)
+    assert callable(result.extra["comment_task_factory"])
+    assert "render_text_card" not in result.extra
 
 
 def test_bilibili_comment_renderer_prefers_astrbot_canvas(tmp_path):
@@ -881,6 +1069,7 @@ def test_comment_reply_action_uses_svg_icon_instead_of_dotted_circle():
     for html in (bili_html, social_html):
         assert '<svg class="reply-icon"' in html
         assert "◌" not in html
+        assert ".reply-icon{width:15px;height:15px;fill:currentColor}" in html
 
 
 def test_image_download_preserves_detected_animated_format(tmp_path):
@@ -1251,7 +1440,7 @@ def test_native_parsers_attach_comment_factories(tmp_path):
     assert weibo_extra["comment_timeout"] == 45
 
 
-def test_weibo_media_result_preserves_body_for_shared_text_card(tmp_path):
+def test_weibo_media_result_keeps_body_before_single_image_reply(tmp_path):
     class FakeDownloader:
         def download_img(self, _url, **_kwargs):
             async def done():
@@ -1300,10 +1489,6 @@ def test_weibo_media_result_preserves_body_for_shared_text_card(tmp_path):
         )
         parser._session = FakeClient()
 
-        async def fake_avatar(_url, max_bytes=0):
-            return "data:image/jpeg;base64,YXZhdGFy"
-
-        parser._img_to_data_uri = fake_avatar
         try:
             keyword, searched = parser.search_url(
                 "https://weibo.com/1088413295/IpOAqcs7h"
@@ -1315,8 +1500,77 @@ def test_weibo_media_result_preserves_body_for_shared_text_card(tmp_path):
     result = asyncio.run(run())
     assert result.text == "微博正文"
     assert len(result.contents) == 1
-    assert result.extra["render_text_card"] is True
-    assert result.extra["text_card_avatar"].startswith("data:image/jpeg;base64,")
+    assert result.delivery is not None
+    assert len(result.delivery.batches) == 2
+    assert result.delivery.batches[0].parts == ["识别：微博\n微博正文"]
+    assert result.delivery.batches[0].reply_original is False
+    assert result.delivery.batches[1].parts == result.contents
+    assert result.delivery.batches[1].reply_original is True
+
+
+def test_weibo_long_post_fetches_complete_body(tmp_path):
+    calls = []
+
+    class FakeResponse:
+        status_code = 200
+
+        def __init__(self, payload):
+            self.payload = payload
+
+        def json(self):
+            return self.payload
+
+    class FakeClient:
+        async def get(self, url, **_kwargs):
+            calls.append(url)
+            if "/statuses/extend" in url:
+                return FakeResponse(
+                    {
+                        "ok": 1,
+                        "data": {"longTextContent": "<p>完整长微博正文</p>"},
+                    }
+                )
+            return FakeResponse(
+                {
+                    "ok": 1,
+                    "data": {
+                        "id": "4910316167105260",
+                        "isLongText": True,
+                        "text": "<p>截断正文...</p>",
+                        "user": {"id": "42", "screen_name": "作者"},
+                    },
+                }
+            )
+
+        async def close(self):
+            return None
+
+    async def run():
+        parser = WeiboParser(
+            {
+                "cache_dir": str(tmp_path),
+                "cookies": {},
+                "comments": {"weibo": False},
+            },
+            object(),
+        )
+        parser._session = FakeClient()
+        try:
+            keyword, searched = parser.search_url(
+                "https://m.weibo.cn/detail/4910316167105260"
+            )
+            return await parser.parse(keyword, searched)
+        finally:
+            await parser.close_session()
+
+    result = asyncio.run(run())
+    assert calls == [
+        "https://m.weibo.cn/statuses/show?id=4910316167105260",
+        "https://m.weibo.cn/statuses/extend?id=4910316167105260",
+    ]
+    assert result.text == "完整长微博正文"
+    assert result.delivery is not None
+    assert result.delivery.batches[0].parts == ["识别：微博\n完整长微博正文"]
 
 
 def test_weibo_comment_normalization_preserves_html_and_nested_reply(tmp_path):
@@ -1636,6 +1890,14 @@ def test_comment_feed_footers_use_repository_brand(tmp_path):
         cookie = ""
         cache_dir = tmp_path
 
+    class XiaoheiheParserStub:
+        headers = {}
+        cache_dir = tmp_path
+
+    class MiyousheParserStub:
+        headers = {}
+        cache_dir = tmp_path
+
     class FakeCanvas:
         def __init__(self):
             self.documents = []
@@ -1703,15 +1965,76 @@ def test_comment_feed_footers_use_repository_brand(tmp_path):
 
         weibo_feed.fetch = weibo_fetch
 
+        xiaoheihe_canvas = FakeCanvas()
+        xiaoheihe_feed = XiaoheiheCommentFeed(
+            XiaoheiheParserStub(),
+            xiaoheihe_canvas,
+            limit=1,
+        )
+        xiaoheihe_contents = xiaoheihe_feed.build_images(
+            "5",
+            [
+                {"comment": "malformed"},
+                {
+                    "comment": [
+                        {
+                            "floor_num": 2,
+                            "text": "评论",
+                            "user": {"username": "用户"},
+                        }
+                    ]
+                },
+            ],
+            work_title="标题",
+            cover="",
+            owner_id="",
+            total=2,
+        )
+
+        miyoushe_canvas = FakeCanvas()
+        miyoushe_feed = MiyousheCommentFeed(
+            MiyousheParserStub(),
+            miyoushe_canvas,
+            limit=1,
+        )
+
+        async def miyoushe_fetch(_post_id):
+            return SimpleNamespace(
+                items=[
+                    {
+                        "reply": {"content": "评论", "created_at": 1},
+                        "user": {"uid": "1", "nickname": "用户"},
+                        "stat": {"like_num": 2},
+                    }
+                ],
+                total=2,
+                has_more=False,
+            )
+
+        miyoushe_feed.fetch = miyoushe_fetch
+
         results = await asyncio.gather(
             bili_feed.build_images(2, 1, video_title="标题", video_cover=""),
             douyin_feed.build_images("3", work_title="标题", cover=""),
             weibo_feed.build_images("4", work_title="标题", cover="", owner_id=""),
+            asyncio.sleep(0, result=xiaoheihe_contents),
+            miyoushe_feed.build_images(
+                "6",
+                work_title="标题",
+                cover="",
+                owner_id="",
+            ),
         )
         await asyncio.gather(
             *(content.get_path() for contents in results for content in contents)
         )
-        return bili_canvas, douyin_canvas, weibo_canvas
+        return (
+            bili_canvas,
+            douyin_canvas,
+            weibo_canvas,
+            xiaoheihe_canvas,
+            miyoushe_canvas,
+        )
 
     canvases = asyncio.run(run())
     for canvas in canvases:
@@ -1720,9 +2043,11 @@ def test_comment_feed_footers_use_repository_brand(tmp_path):
 
 
 def test_comment_layout_cache_versions_invalidate_pre_fix_images():
-    assert BiliCommentFeed.CACHE_VERSION == "bili_comment_v8_official_render_crop"
-    assert DouyinCommentFeed.CACHE_VERSION == "douyin_comment_v7_official_render_crop"
-    assert WeiboCommentFeed.CACHE_VERSION == "weibo_comment_v7_official_render_crop"
+    assert BiliCommentFeed.CACHE_VERSION == "bili_comment_v9_reply_icon"
+    assert DouyinCommentFeed.CACHE_VERSION == "douyin_comment_v8_reply_icon"
+    assert WeiboCommentFeed.CACHE_VERSION == "weibo_comment_v8_avatar_reply_icon"
+    assert XiaoheiheCommentFeed.CACHE_VERSION == "xiaoheihe_comment_v1_official_render"
+    assert MiyousheCommentFeed.CACHE_VERSION == "miyoushe_comment_v1_official_render"
 
 
 def test_manifest_has_a_reviewable_upstream_baseline():
@@ -1810,6 +2135,310 @@ def test_single_image_result_replies_to_original_message(tmp_path):
     assert isinstance(event.sent[0][0], Reply)
     assert event.sent[0][0].id == 2468
     assert isinstance(event.sent[0][1], MessageImage)
+
+
+def test_delivery_plan_sends_weibo_body_before_single_image_reply(tmp_path):
+    from astrbot_plugin_parser_x.core.data import (
+        Author,
+        DeliveryBatch,
+        DeliveryPlan,
+        ParseResult,
+        Platform,
+    )
+    from astrbot_plugin_parser_x.core.data import (
+        ImageContent as PluginImageContent,
+    )
+    from astrbot_plugin_parser_x.main import ParserXPlugin
+
+    image_path = tmp_path / "single.jpg"
+    image_path.write_bytes(b"image")
+    plugin = object.__new__(ParserXPlugin)
+    plugin.config = {"behavior": {"show_download_fail_tip": True}}
+    plugin._background_tasks = set()
+
+    async def fake_download_content(_self, content):
+        return content, image_path, None
+
+    class Event:
+        message_obj = SimpleNamespace(message_id=9753)
+
+        def __init__(self):
+            self.sent = []
+
+        @staticmethod
+        def get_sender_id():
+            return "42"
+
+        @staticmethod
+        def get_sender_name():
+            return "用户"
+
+        @staticmethod
+        def chain_result(chain):
+            return chain
+
+        @staticmethod
+        def plain_result(text):
+            return [Plain(text)]
+
+        async def send(self, result):
+            self.sent.append(result)
+
+    event = Event()
+    content = PluginImageContent(image_path)
+    result = ParseResult(
+        platform=Platform(name="weibo", display_name="微博"),
+        author=Author(name="作者"),
+        text="不能被吞掉的正文",
+        contents=[content],
+        delivery=DeliveryPlan(
+            [
+                DeliveryBatch(["识别：微博\n不能被吞掉的正文"]),
+                DeliveryBatch([content], reply_original=True),
+            ]
+        ),
+        url="https://weibo.com/example",
+    )
+
+    with (
+        patch.object(ParserXPlugin, "_download_content", fake_download_content),
+        patch.object(
+            ParserXPlugin,
+            "_convert_to_seg",
+            return_value=MessageImage(str(image_path)),
+        ),
+    ):
+        asyncio.run(plugin._send_parse_result(event, result))
+
+    assert len(event.sent) == 2
+    assert isinstance(event.sent[0][0], Plain)
+    assert "不能被吞掉的正文" in event.sent[0][0].text
+    assert isinstance(event.sent[1][0], Reply)
+    assert event.sent[1][0].id == 9753
+    assert isinstance(event.sent[1][1], MessageImage)
+
+
+def test_delivery_plan_sends_body_before_waiting_for_media(tmp_path):
+    from astrbot_plugin_parser_x.core.data import (
+        DeliveryBatch,
+        DeliveryPlan,
+        ParseResult,
+        Platform,
+    )
+    from astrbot_plugin_parser_x.core.data import (
+        ImageContent as PluginImageContent,
+    )
+    from astrbot_plugin_parser_x.main import ParserXPlugin
+
+    image_path = tmp_path / "delayed.jpg"
+    image_path.write_bytes(b"image")
+    plugin = object.__new__(ParserXPlugin)
+    plugin.config = {"behavior": {"show_download_fail_tip": True}}
+    plugin._background_tasks = set()
+
+    class Event:
+        message_obj = SimpleNamespace(message_id=8642)
+
+        def __init__(self):
+            self.sent = []
+
+        @staticmethod
+        def get_sender_id():
+            return "42"
+
+        @staticmethod
+        def get_sender_name():
+            return "用户"
+
+        @staticmethod
+        def chain_result(chain):
+            return chain
+
+        @staticmethod
+        def plain_result(text):
+            return [Plain(text)]
+
+        async def send(self, result):
+            self.sent.append(result)
+
+    event = Event()
+    content = PluginImageContent(image_path)
+    result = ParseResult(
+        platform=Platform(name="weibo", display_name="微博"),
+        text="正文先发",
+        contents=[content],
+        delivery=DeliveryPlan(
+            [
+                DeliveryBatch(["识别：微博\n正文先发"]),
+                DeliveryBatch([content], reply_original=True),
+            ]
+        ),
+        url="https://weibo.com/example",
+    )
+
+    async def run():
+        download_started = asyncio.Event()
+        release_download = asyncio.Event()
+
+        async def delayed_download(_self, media):
+            download_started.set()
+            await release_download.wait()
+            return media, image_path, None
+
+        with patch.object(ParserXPlugin, "_download_content", delayed_download):
+            send_task = asyncio.create_task(plugin._send_parse_result(event, result))
+            await asyncio.wait_for(download_started.wait(), timeout=1)
+            assert len(event.sent) == 1
+            assert isinstance(event.sent[0][0], Plain)
+            assert "正文先发" in event.sent[0][0].text
+            release_download.set()
+            await send_task
+
+    asyncio.run(run())
+    assert len(event.sent) == 2
+    assert isinstance(event.sent[1][0], Reply)
+    assert isinstance(event.sent[1][1], MessageImage)
+
+
+def test_delivery_plan_keeps_images_and_video_in_separate_messages(tmp_path):
+    from astrbot_plugin_parser_x.core.data import (
+        DeliveryBatch,
+        DeliveryPlan,
+        ParseResult,
+        Platform,
+    )
+    from astrbot_plugin_parser_x.core.data import (
+        ImageContent as PluginImageContent,
+    )
+    from astrbot_plugin_parser_x.core.data import (
+        VideoContent as PluginVideoContent,
+    )
+    from astrbot_plugin_parser_x.main import ParserXPlugin
+
+    first_path = tmp_path / "first.jpg"
+    second_path = tmp_path / "second.jpg"
+    video_path = tmp_path / "video.mp4"
+    for path in (first_path, second_path, video_path):
+        path.write_bytes(b"media")
+
+    plugin = object.__new__(ParserXPlugin)
+    plugin.config = {"behavior": {"show_download_fail_tip": True}}
+    plugin._background_tasks = set()
+
+    class Event:
+        message_obj = SimpleNamespace(message_id=1)
+
+        def __init__(self):
+            self.sent = []
+
+        @staticmethod
+        def get_sender_id():
+            return "42"
+
+        @staticmethod
+        def get_sender_name():
+            return "用户"
+
+        @staticmethod
+        def chain_result(chain):
+            return chain
+
+        @staticmethod
+        def plain_result(text):
+            return [Plain(text)]
+
+        async def send(self, result):
+            self.sent.append(result)
+
+    first = PluginImageContent(first_path)
+    second = PluginImageContent(second_path)
+    video = PluginVideoContent(video_path)
+    result = ParseResult(
+        platform=Platform(name="test", display_name="测试"),
+        contents=[first, second, video],
+        delivery=DeliveryPlan(
+            [
+                DeliveryBatch(["正文"]),
+                DeliveryBatch([first, second]),
+                DeliveryBatch([video]),
+            ]
+        ),
+        url="https://example.com",
+    )
+    event = Event()
+    asyncio.run(plugin._send_parse_result(event, result))
+
+    assert len(event.sent) == 3
+    assert isinstance(event.sent[0][0], Plain)
+    assert all(isinstance(item, MessageImage) for item in event.sent[1])
+    assert len(event.sent[1]) == 2
+    assert isinstance(event.sent[2][0], MessageVideo)
+
+
+def test_delivery_plan_forward_failure_falls_back_in_original_order(tmp_path):
+    from astrbot_plugin_parser_x.core.data import (
+        DeliveryBatch,
+        DeliveryPlan,
+        ParseResult,
+        Platform,
+    )
+    from astrbot_plugin_parser_x.core.data import (
+        ImageContent as PluginImageContent,
+    )
+    from astrbot_plugin_parser_x.main import ParserXPlugin
+
+    image_path = tmp_path / "body.jpg"
+    image_path.write_bytes(b"image")
+    plugin = object.__new__(ParserXPlugin)
+    plugin.config = {"behavior": {"show_download_fail_tip": True}}
+    plugin._background_tasks = set()
+
+    class Event:
+        message_obj = SimpleNamespace(message_id=1)
+
+        def __init__(self):
+            self.sent = []
+            self.forward_attempts = 0
+
+        @staticmethod
+        def get_sender_id():
+            return "42"
+
+        @staticmethod
+        def get_sender_name():
+            return "用户"
+
+        @staticmethod
+        def chain_result(chain):
+            return chain
+
+        @staticmethod
+        def plain_result(text):
+            return [Plain(text)]
+
+        async def send(self, result):
+            if result and isinstance(result[0], Nodes):
+                self.forward_attempts += 1
+                raise RuntimeError("forward unavailable")
+            self.sent.append(result)
+
+    image = PluginImageContent(image_path)
+    result = ParseResult(
+        platform=Platform(name="test", display_name="测试"),
+        contents=[image],
+        delivery=DeliveryPlan([DeliveryBatch(["前文", image, "后文"], mode="forward")]),
+        url="https://example.com",
+    )
+    event = Event()
+    asyncio.run(plugin._send_parse_result(event, result))
+
+    assert event.forward_attempts == 1
+    assert len(event.sent) == 3
+    assert isinstance(event.sent[0][0], Plain)
+    assert event.sent[0][0].text == "前文"
+    assert isinstance(event.sent[1][0], MessageImage)
+    assert isinstance(event.sent[2][0], Plain)
+    assert event.sent[2][0].text == "后文"
 
 
 def test_single_image_shared_card_keeps_body_in_direct_reply(tmp_path):
@@ -1991,6 +2620,8 @@ def test_plugin_initializes_and_registers_aiocqhttp_parsers(tmp_path):
                 bili = plugin.parser_map["b23.tv"]
                 douyin = plugin.parser_map["douyin"]
                 weibo = plugin.parser_map["weibo.com"]
+                miyoushe = plugin.parser_map["miyoushe.com"]
+                xiaoheihe = plugin.parser_map["xiaoheihe.cn"]
                 assert bili.render_service is plugin.render_service
                 assert bili.comment_canvas.render_service is plugin.render_service
                 assert bili.live_renderer.render_service is plugin.render_service
@@ -1999,6 +2630,10 @@ def test_plugin_initializes_and_registers_aiocqhttp_parsers(tmp_path):
                 assert douyin.comment_canvas.render_service is plugin.render_service
                 assert weibo.render_service is plugin.render_service
                 assert weibo.comment_canvas.render_service is plugin.render_service
+                assert miyoushe.render_service is plugin.render_service
+                assert miyoushe.comment_canvas.render_service is plugin.render_service
+                assert xiaoheihe.render_service is plugin.render_service
+                assert xiaoheihe.comment_canvas.render_service is plugin.render_service
             finally:
                 await plugin.terminate()
 

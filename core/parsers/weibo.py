@@ -10,10 +10,16 @@ from astrbot.core.config.astrbot_config import AstrBotConfig
 
 from ..comment_canvas import SocialCommentCanvas
 from ..comment_settings import CommentSettings
-from ..data import ImageContent, Platform, VideoContent
+from ..data import (
+    DeliveryBatch,
+    DeliveryPlan,
+    ImageContent,
+    Platform,
+    VideoContent,
+)
 from ..download import Downloader
 from ..html_renderer import HtmlRenderService
-from ..utils import image_to_data_uri, normalize_image_url
+from ..utils import normalize_image_url
 from .base import BaseParser, ParseException, handle
 from .weibo_comment import WeiboCommentFeed
 
@@ -78,10 +84,133 @@ class WeiboParser(BaseParser):
             "comment_timeout": self.comment_timeout,
         }
 
-    @handle("weibo.com", r"weibo\.com/[0-9]+/([a-zA-Z0-9]+)")
+    @staticmethod
+    def _mid_to_bid(mid: str) -> str:
+        alphabet = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+        def base62_encode(number: int) -> str:
+            if number == 0:
+                return "0"
+            output = ""
+            while number > 0:
+                number, remainder = divmod(number, 62)
+                output = alphabet[remainder] + output
+            return output
+
+        reversed_mid = str(mid)[::-1]
+        groups = []
+        for index in range(0, len(reversed_mid), 7):
+            encoded = base62_encode(int(reversed_mid[index : index + 7][::-1]))
+            if index + 7 < len(reversed_mid):
+                encoded = encoded.zfill(4)
+            groups.append(encoded)
+        return "".join(reversed(groups))
+
+    @classmethod
+    def _delivery_summary(cls, data: dict, text: str) -> str:
+        lines = ["识别：微博"]
+        if text:
+            lines.append(text)
+        if status_title := cls._html_to_plain_text(data.get("status_title")):
+            title_prefix = re.sub(r"[.。…]+$", "", status_title).strip()
+            if not title_prefix or not text.startswith(title_prefix):
+                lines.append(status_title)
+        source = cls._html_to_plain_text(data.get("source"))
+        region = re.sub(r"^发布于", "", str(data.get("region_name") or "")).strip()
+        if source or region:
+            lines.append("\t".join(item for item in (source, region) if item))
+        return "\n".join(lines)
+
+    @classmethod
+    def _extract_body_text(cls, data: dict) -> str:
+        long_text = data.get("longText")
+        candidates = []
+        if isinstance(long_text, dict):
+            candidates.extend(
+                [
+                    long_text.get("longTextContent"),
+                    long_text.get("content"),
+                    long_text.get("text"),
+                ]
+            )
+        elif isinstance(long_text, str):
+            candidates.append(long_text)
+        candidates.extend(
+            [
+                data.get("longTextContent"),
+                data.get("text"),
+                data.get("text_raw"),
+            ]
+        )
+        for candidate in candidates:
+            if text := cls._html_to_plain_text(candidate):
+                return text
+        return ""
+
+    async def _resolve_body_text(self, data: dict, bid: str) -> str:
+        inline_long_text = self._extract_body_text(
+            {
+                "longText": data.get("longText"),
+                "longTextContent": data.get("longTextContent"),
+            }
+        )
+        fallback = self._extract_body_text(data)
+        if inline_long_text or not data.get("isLongText"):
+            return inline_long_text or fallback
+
+        status_id = str(data.get("id") or data.get("mid") or bid).strip()
+        if not status_id:
+            return fallback
+
+        try:
+            response = await self.client.get(
+                f"https://m.weibo.cn/statuses/extend?id={status_id}",
+                headers=self.headers,
+                timeout=8,
+            )
+            if response.status_code != 200:
+                return fallback
+            payload = response.json()
+            if not isinstance(payload, dict) or payload.get("ok") != 1:
+                return fallback
+            extended_data = payload.get("data") or {}
+            if isinstance(extended_data, dict):
+                return self._extract_body_text(extended_data) or fallback
+        except Exception as exc:
+            logger.debug(f"[Weibo] 获取长微博正文失败，使用摘要正文: {exc}")
+        return fallback
+
+    @staticmethod
+    def _delivery_plan(
+        summary: str,
+        images: list[ImageContent],
+        videos: list[VideoContent],
+    ) -> DeliveryPlan:
+        batches = []
+        if summary:
+            batches.append(DeliveryBatch([summary]))
+        if images:
+            batches.append(
+                DeliveryBatch(
+                    list(images),
+                    mode="direct" if len(images) <= 9 else "forward",
+                    reply_original=len(images) == 1,
+                )
+            )
+        batches.extend(DeliveryBatch([video]) for video in videos)
+        return DeliveryPlan(batches)
+
+    @handle(
+        "weibo.com/tv/show",
+        r"weibo\.com/tv/show/[^\s?]+[^\s]*?[?&]mid=([0-9]+)",
+    )
+    @handle("weibo.com", r"weibo\.com/(?:u/)?[A-Za-z0-9]+/([a-zA-Z0-9]+)")
     @handle("weibo.cn", r"weibo\.cn/(?:status|detail)/([a-zA-Z0-9]+)")
+    @handle("weibo.cn", r"m\.weibo\.cn/[A-Za-z0-9]+/([a-zA-Z0-9]+)")
     async def _parse_weibo(self, searched: Match[str]):
         bid = searched.group(1)
+        if "/tv/show/" in searched.group(0):
+            bid = self._mid_to_bid(bid)
         url = f"https://m.weibo.cn/statuses/show?id={bid}"
 
         logger.debug(f"[Weibo] 尝试 API 解析: {url}")
@@ -117,11 +246,7 @@ class WeiboParser(BaseParser):
             or ""
         )
 
-        text = data.get("text", "")
-        if data.get("isLongText") and "longText" in data:
-            text = data["longText"].get("longTextContent", text)
-
-        text = self._html_to_plain_text(text)
+        text = await self._resolve_body_text(data, bid)
 
         timestamp = None
         if created_at := data.get("created_at"):
@@ -131,9 +256,8 @@ class WeiboParser(BaseParser):
             except Exception:
                 pass
 
-        contents = []
         static_pic_urls = self._collect_static_pic_urls(data)
-
+        video_contents = []
         for index, (video_url, duration) in enumerate(
             self._collect_video_items(data), start=1
         ):
@@ -143,45 +267,45 @@ class WeiboParser(BaseParser):
                 ext_headers=self.headers,
             )
             # 提纯：不下载封面
-            contents.append(VideoContent(video_task, None, duration=duration))
+            video_contents.append(VideoContent(video_task, None, duration=duration))
 
+        image_contents = []
         for url in static_pic_urls:
             img_task = self.downloader.download_img(
                 url,
                 ext_headers=self.headers,
             )
-            contents.append(ImageContent(img_task))
+            image_contents.append(ImageContent(img_task))
 
-        extra = {}
-        if text:
-            text_card_avatar = (
-                await self._img_to_data_uri(author_avatar) or author_avatar
-            )
-            if text_card_avatar:
-                extra["text_card_avatar"] = text_card_avatar
-            extra["render_text_card"] = True
+        contents = [*image_contents, *video_contents]
+        summary = self._delivery_summary(data, text)
+        delivery = self._delivery_plan(summary, image_contents, video_contents)
 
         comment_title = re.sub(r"\s+", " ", text).strip()
         if len(comment_title) > 64:
             comment_title = f"{comment_title[:61]}..."
-        extra.update(
-            self._comment_extra(
-                str(data.get("id") or data.get("mid") or bid),
-                title=comment_title or f"{author_name}的微博",
-                cover=(static_pic_urls[0] if static_pic_urls else author_avatar),
-                owner_id=user.get("id"),
-            )
+        extra = self._comment_extra(
+            str(data.get("id") or data.get("mid") or bid),
+            title=comment_title or f"{author_name}的微博",
+            cover=(static_pic_urls[0] if static_pic_urls else author_avatar),
+            owner_id=user.get("id"),
         )
 
         author = self.create_author(
             author_name, author_avatar, ext_headers=self.headers
         )
-        original_url = f"https://weibo.com/{user.get('id')}/{bid}"
+        original_url = (
+            f"https://weibo.com/{user.get('id')}/{bid}"
+            if user.get("id")
+            else f"https://m.weibo.cn/detail/{bid}"
+        )
 
         return self.result(
+            title=self._html_to_plain_text(data.get("status_title")) or None,
             text=text,
             author=author,
             contents=contents,
+            delivery=delivery,
             timestamp=timestamp,
             url=original_url,
             extra=extra,
@@ -427,7 +551,12 @@ class WeiboParser(BaseParser):
             return ""
 
         text = str(text)
-        text = re.sub(r"<br\s*/?>", "\n", text, flags=re.IGNORECASE)
+        text = re.sub(
+            r"</(?:p|div|h[1-6]|blockquote|li)>|<br\s*/?>",
+            "\n",
+            text,
+            flags=re.IGNORECASE,
+        )
 
         def replace_img(match: re.Match[str]) -> str:
             tag = match.group(0)
@@ -447,19 +576,8 @@ class WeiboParser(BaseParser):
             flags=re.IGNORECASE | re.DOTALL,
         )
         text = re.sub(r"<[^>]+>", "", text)
-        return unescape(text).strip()
-
-    async def _img_to_data_uri(
-        self,
-        url: str | None,
-        max_bytes: int = 2 * 1024 * 1024,
-    ) -> str | None:
-        return await image_to_data_uri(
-            self.http_get,
-            url,
-            headers=self.headers,
-            referer="https://m.weibo.cn/",
-            max_bytes=max_bytes,
-            timeout=10,
-            debug_label="[Weibo] image",
-        )
+        text = unescape(text)
+        text = re.sub(r"[ \t]+\n", "\n", text)
+        text = re.sub(r"\n[ \t]+", "\n", text)
+        text = re.sub(r"\n{3,}", "\n\n", text)
+        return text.strip()

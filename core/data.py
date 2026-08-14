@@ -2,7 +2,7 @@ from asyncio import Task
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, TypedDict
+from typing import Any, Literal, TypedDict
 
 
 def repr_path_task(path_task: Path | Task[Path]) -> str:
@@ -131,6 +131,33 @@ class Author:
         return repr + ")"
 
 
+@dataclass(slots=True)
+class DeliveryBatch:
+    """One explicit outbound message in a platform delivery plan."""
+
+    parts: list[str | MediaContent] = field(default_factory=list)
+    mode: Literal["direct", "forward"] = "direct"
+    reply_original: bool = False
+
+
+@dataclass(slots=True)
+class DeliveryPlan:
+    """Ordered messages used by platforms whose native layout is not a card."""
+
+    batches: list[DeliveryBatch] = field(default_factory=list)
+
+    def media_contents(self) -> list[MediaContent]:
+        contents: list[MediaContent] = []
+        seen: set[int] = set()
+        for batch in self.batches:
+            for part in batch.parts:
+                if not isinstance(part, MediaContent) or id(part) in seen:
+                    continue
+                seen.add(id(part))
+                contents.append(part)
+        return contents
+
+
 @dataclass(repr=False, slots=True)
 class ParseResult:
     platform: Platform
@@ -142,6 +169,7 @@ class ParseResult:
 
     contents: list[MediaContent] = field(default_factory=list)
     comment_contents: list[MediaContent] = field(default_factory=list)
+    delivery: DeliveryPlan | None = None
 
     extra: dict[str, Any] = field(default_factory=dict)
     repost: "ParseResult | None" = None
@@ -201,6 +229,7 @@ class ParseResultKwargs(TypedDict, total=False):
     text: str | None
     contents: list[MediaContent]
     comment_contents: list[MediaContent]
+    delivery: DeliveryPlan | None
     timestamp: int | None
     url: str | None
     author: Author | None

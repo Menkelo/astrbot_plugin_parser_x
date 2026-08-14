@@ -373,6 +373,142 @@ class ParserXPlugin(Star):
         await exec_ffmpeg_cmd(cmd)
         return output_path
 
+    async def _send_video_segment(
+        self,
+        event: AstrMessageEvent,
+        result: ParseResult,
+        segment: Video,
+    ) -> None:
+        try:
+            await event.send(event.chain_result([segment]))
+            return
+        except Exception as exc:
+            error_text = str(exc)
+            should_transcode = any(
+                marker in error_text for marker in ("rich media", "1200", "Timeout")
+            )
+            path_text = getattr(segment, "file", None)
+            if should_transcode and path_text:
+                try:
+                    input_path = Path(path_text)
+                    new_path = await self._transcode_to_h264(input_path)
+                    await event.send(event.chain_result([Video(str(new_path))]))
+                    try:
+                        if input_path.exists():
+                            await asyncio.to_thread(input_path.unlink)
+                    except Exception:
+                        pass
+                    return
+                except Exception as transcode_exc:
+                    logger.warning(f"视频转码重试失败: {transcode_exc}")
+
+            logger.warning(f"视频发送失败: {exc}")
+            await event.send(
+                event.plain_result(f"⚠️ 媒体发送失败\n🔗 原链接: {result.url or '未知'}")
+            )
+
+    async def _send_delivery_plan(
+        self,
+        event: AstrMessageEvent,
+        result: ParseResult,
+        *,
+        node_uin: str,
+        node_name: str,
+        original_message_reply,
+    ) -> None:
+        plan = result.delivery
+        if plan is None:
+            return
+
+        show_download_fail_tip = self._show_download_fail_tip()
+        path_map: dict[int, tuple[Path | None, str | None]] = {}
+
+        async def send_individually(
+            segments: list[BaseMessageComponent],
+            *,
+            reply_first: bool = False,
+        ) -> None:
+            for index, segment in enumerate(segments):
+                if isinstance(segment, Video):
+                    await self._send_video_segment(event, result, segment)
+                    continue
+                try:
+                    chain: list[BaseMessageComponent] = []
+                    if (
+                        reply_first
+                        and index == 0
+                        and (reply := original_message_reply()) is not None
+                    ):
+                        chain.append(reply)
+                    chain.append(segment)
+                    await event.send(event.chain_result(chain))
+                except Exception as exc:
+                    logger.warning(f"平台消息逐段发送失败: {exc}")
+
+        for batch in plan.batches:
+            pending_media = [
+                part
+                for part in batch.parts
+                if isinstance(part, MediaContent) and id(part) not in path_map
+            ]
+            if pending_media:
+                download_results = await asyncio.gather(
+                    *(self._download_content(content) for content in pending_media)
+                )
+                path_map.update(
+                    {
+                        id(content): (path, error)
+                        for content, path, error in download_results
+                    }
+                )
+
+            segments: list[BaseMessageComponent] = []
+            for part in batch.parts:
+                if isinstance(part, str):
+                    text = part.strip()
+                    if text:
+                        segments.append(Plain(text.replace("@", "@\u200b")))
+                    continue
+
+                path, error = path_map.get(id(part), (None, None))
+                if error:
+                    if show_download_fail_tip:
+                        segments.append(Plain(error.strip()))
+                    continue
+                if path and (segment := self._convert_to_seg(part, path)):
+                    segments.append(segment)
+
+            if not segments:
+                continue
+
+            if batch.mode == "forward":
+                for offset in range(0, len(segments), 20):
+                    group = segments[offset : offset + 20]
+                    nodes = Nodes([Node(uin=node_uin, name=node_name, content=group)])
+                    try:
+                        await event.send(event.chain_result([nodes]))
+                    except Exception as exc:
+                        logger.warning(f"平台合并转发发送失败，降级逐段发送: {exc}")
+                        await send_individually(group)
+                continue
+
+            if len(segments) == 1 and isinstance(segments[0], Video):
+                await self._send_video_segment(event, result, segments[0])
+                continue
+
+            chain: list[BaseMessageComponent] = []
+            if batch.reply_original and (reply := original_message_reply()) is not None:
+                chain.append(reply)
+            chain.extend(segments)
+            try:
+                await event.send(event.chain_result(chain))
+            except Exception as exc:
+                logger.warning(f"平台消息链发送失败，降级逐段发送: {exc}")
+                await send_individually(
+                    segments,
+                    reply_first=batch.reply_original,
+                )
+
     async def _send_parse_result(self, event: AstrMessageEvent, result: ParseResult):
         show_download_fail_tip = self._show_download_fail_tip()
 
@@ -387,6 +523,16 @@ class ParserXPlugin(Star):
 
         async def process_main_content():
             parsed_contents = tuple(result.contents)
+            if getattr(result, "delivery", None) is not None:
+                await self._send_delivery_plan(
+                    event,
+                    result,
+                    node_uin=node_uin,
+                    node_name=node_name,
+                    original_message_reply=original_message_reply,
+                )
+                return
+
             text_card_failed = False
             if result.contents and result.extra.get("render_text_card"):
                 try:

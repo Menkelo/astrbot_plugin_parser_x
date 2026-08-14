@@ -41,7 +41,7 @@ class DouyinCommentFeed:
 
     COMMENT_URL = "https://www.douyin.com/aweme/v1/web/comment/list/"
     EMOJI_URL = "https://www.douyin.com/aweme/v1/web/emoji/list"
-    CACHE_VERSION = "douyin_comment_v7_official_render_crop"
+    CACHE_VERSION = "douyin_comment_v8_reply_icon"
 
     def __init__(
         self,

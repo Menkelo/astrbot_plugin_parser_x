@@ -6,14 +6,25 @@ import random
 import re
 import string
 import time
+from html import unescape
 from re import Match
 from typing import Any, ClassVar
 from urllib.parse import urlparse
 
-from ..data import ImageContent, Platform, VideoContent
+from ..comment_canvas import SocialCommentCanvas
+from ..comment_settings import CommentSettings
+from ..data import (
+    DeliveryBatch,
+    DeliveryPlan,
+    ImageContent,
+    Platform,
+    VideoContent,
+)
 from ..exception import ParseException
+from ..html_renderer import HtmlRenderService
 from ..utils import normalize_image_url
 from .base import BaseParser, handle
+from .miyoushe_comment import MiyousheCommentFeed
 
 
 class MiyousheParser(BaseParser):
@@ -32,6 +43,45 @@ class MiyousheParser(BaseParser):
                 "x-rpc-client_type": "4",
             }
         )
+        self.render_service = HtmlRenderService.from_config(config)
+        comment_settings = CommentSettings.from_config(config, "miyoushe")
+        self.enable_comment_card = comment_settings.enabled
+        self.comment_limit = comment_settings.display_count
+        self.comment_timeout = comment_settings.timeout
+        self.comment_canvas = SocialCommentCanvas(self.render_service)
+        self.comment_feed = MiyousheCommentFeed(
+            self,
+            self.comment_canvas,
+            limit=self.comment_limit,
+        )
+
+    def set_render_service(self, render_service: HtmlRenderService) -> None:
+        self.render_service = render_service
+        self.comment_canvas.render_service = render_service
+
+    def _comment_extra(
+        self,
+        post_id: str,
+        *,
+        title: str,
+        cover: str | None,
+        owner_id: str | int | None,
+    ) -> dict:
+        if not self.enable_comment_card or not post_id:
+            return {}
+
+        async def build_comments():
+            return await self.comment_feed.build_images(
+                post_id,
+                work_title=title,
+                cover=cover,
+                owner_id=owner_id,
+            )
+
+        return {
+            "comment_task_factory": build_comments,
+            "comment_timeout": self.comment_timeout,
+        }
 
     @classmethod
     def build_ds(cls, timestamp: int | None = None, nonce: str | None = None) -> str:
@@ -61,7 +111,25 @@ class MiyousheParser(BaseParser):
             try:
                 decoded = json.loads(value)
             except (TypeError, ValueError):
-                return re.sub(r"\s+", " ", value).strip()
+                if "<" in value and ">" in value:
+                    value = re.sub(
+                        r"<(?:script|style)\b[^>]*>.*?</(?:script|style)>",
+                        "",
+                        value,
+                        flags=re.IGNORECASE | re.DOTALL,
+                    )
+                    value = re.sub(
+                        r"</(?:p|div|h[1-6]|blockquote|li)>|<br\s*/?>",
+                        "\n",
+                        value,
+                        flags=re.IGNORECASE,
+                    )
+                    value = re.sub(r"<[^>]+>", "", value)
+                lines = [
+                    re.sub(r"[ \t\u00a0]+", " ", line).strip()
+                    for line in unescape(value).splitlines()
+                ]
+                return "\n".join(line for line in lines if line)
             return MiyousheParser._plain_content(decoded)
         if isinstance(value, dict):
             for key in ("describe", "content", "text"):
@@ -86,9 +154,6 @@ class MiyousheParser(BaseParser):
                 continue
             if normalized := normalize_image_url(url):
                 urls.append(normalized)
-        cover = normalize_image_url(post.get("cover"))
-        if cover:
-            urls.insert(0, cover)
         return list(dict.fromkeys(urls))
 
     @staticmethod
@@ -155,13 +220,24 @@ class MiyousheParser(BaseParser):
         if len(text) > 4000:
             text = text[:3997] + "..."
 
-        contents = [
+        cover_url = normalize_image_url(post.get("cover"))
+        cover_content = None
+        if cover_url:
+            cover_content = ImageContent(
+                self.downloader.download_img(
+                    cover_url,
+                    ext_headers=self.headers,
+                )
+            )
+        image_contents = [
             ImageContent(self.downloader.download_img(item, ext_headers=self.headers))
             for item in self._image_urls(post)
+            if item != cover_url
         ]
+        video_contents = []
         video_url, duration = self._video_url(post_container.get("vod_list"))
         if video_url:
-            contents.append(
+            video_contents.append(
                 VideoContent(
                     self.downloader.download_video(
                         video_url,
@@ -176,19 +252,49 @@ class MiyousheParser(BaseParser):
                     duration=duration,
                 )
             )
+
+        title = str(post.get("subject") or post.get("title") or "米游社文章")
+        overview_lines = ["识别：米游社", f"📝标题：{title}"]
+        if text:
+            overview_lines.append(f"📄简介：{text}")
+        overview_parts: list[str | ImageContent] = []
+        if cover_content is not None:
+            overview_parts.append(cover_content)
+        overview_parts.append("\n".join(overview_lines))
+        batches = [DeliveryBatch(overview_parts)]
+        if image_contents:
+            batches.append(
+                DeliveryBatch(
+                    list(image_contents),
+                    mode="direct" if len(image_contents) <= 9 else "forward",
+                    reply_original=len(image_contents) == 1,
+                )
+            )
+        batches.extend(DeliveryBatch([video]) for video in video_contents)
+
+        contents = [
+            *([cover_content] if cover_content is not None else []),
+            *image_contents,
+            *video_contents,
+        ]
         timestamp = post.get("created_at") or post.get("publish_time")
         try:
             timestamp = int(timestamp) if timestamp else None
         except (TypeError, ValueError):
             timestamp = None
-        extra = {"render_text_card": True}
-        if normalized_avatar := normalize_image_url(author_avatar):
-            extra["text_card_avatar"] = normalized_avatar
+        owner_id = user.get("uid") or user.get("user_id") or user.get("id")
+        extra = self._comment_extra(
+            post_id,
+            title=title,
+            cover=cover_url,
+            owner_id=owner_id,
+        )
         return self.result(
-            title=post.get("subject") or post.get("title") or "米游社文章",
+            title=title,
             author=self.create_author(author_name, author_avatar),
             text=text or None,
             contents=contents,
+            delivery=DeliveryPlan(batches),
             timestamp=timestamp,
             url=url,
             extra=extra,

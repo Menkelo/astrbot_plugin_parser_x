@@ -17,11 +17,12 @@ Parser X 是面向 AstrBot `aiocqhttp`（OneBot v11）的国内平台分享链�
 - 抖音：视频、图文和图集；短链跳转；Cookie 与 yt-dlp 兜底；配置 `douyin_ck` 后可发送
   热门评论卡片，支持作者标识、表情、评论图片、贴纸和首条楼中楼。
 - 快手：视频、图片和图文作品。
-- 微博：视频、图片、纯文本卡片与公开热门评论卡片；支持认证/VIP、原博标识、微博表情、
-  作者点赞和首条楼中楼。
+- 微博：正文纯文本、图片和视频分开发送；单图引用原消息。公开热门评论卡片支持认证/VIP、
+  原博标识、微博表情、作者点赞和首条楼中楼。
 - 小红书：视频、图片和图文笔记。
-- 米游社：文章正文、图片与视频。
-- 小黑盒：帖子与游戏卡片；公开游戏详情无需 Cookie，配置 Cookie 后可进一步读取帖子正文与媒体。
+- 米游社：文章正文、图片与视频原生消息链，以及公开热门评论区。
+- 小黑盒：帖子与游戏原生消息链、富文本图文顺序和帖子评论区；公开内容会先尝试签名接口，
+  Cookie 仅用于提升受限内容与验证码场景的可用性。
 
 ### yt-dlp 兼容层
 
@@ -71,8 +72,9 @@ Chromium。
 - `cookies.douyin_ck`、`cookies.bili_ck`：原生解析器 Cookie。
 - `cookies.weibo_cookie`：可选微博登录态；公开热门评论通常无需配置。
 - `cookies.ytdlp_cookie_file`：Netscape 格式 Cookie 文件，用于需要登录的平台。
-- `cookies.xiaoheihe_cookie`：小黑盒原生接口登录态；留空时仅解析公开页面信息。
-- `comments.bilibili`、`comments.douyin`、`comments.weibo`：各平台评论区开关。
+- `cookies.xiaoheihe_cookie`：可选的小黑盒登录态；公开内容未配置时也会先尝试签名接口。
+- `comments.bilibili`、`comments.douyin`、`comments.weibo`、`comments.xiaoheihe`、
+  `comments.miyoushe`：各平台评论区开关。
 - `comments.display_count`：最多展示的热门评论总数。
 - `comments.timeout`：评论抓取、Canvas 渲染和缓存生成的总超时。
 - `rendering.timeout`：单次 `html_render` 截图超时。
@@ -80,10 +82,10 @@ Chromium。
 - `behavior.show_download_fail_tip`：是否在聊天中提示下载失败或超限。
 - `behavior.disabled_sessions`：已关闭解析的会话列表，通常通过命令自动维护。
 
-评论任务在主内容发送完成后才启动，并使用 AstrBot 官方 `html_render`。B站、抖音、微博的
-已选评论都会渲染为一张自适应高度长图。官方渲染不可用或超时时会跳过对应卡片并记录日志，
-不会在插件内启动第二套浏览器。合并转发失败时会自动降级发送。快手和小红书等平台目前需要
-不稳定的私有签名/登录接口，因此没有用网页抓取方式勉强加入评论区。
+评论任务在主内容发送完成后才启动，并使用 AstrBot 官方 `html_render`。B站、抖音、微博、
+小黑盒和米游社的已选评论都会渲染为一张自适应高度长图。官方渲染不可用或超时时会跳过
+对应卡片并记录日志，不会在插件内启动第二套浏览器。合并转发失败时会自动降级发送。快手和
+小红书等平台目前需要不稳定的私有签名/登录接口，因此没有用网页抓取方式勉强加入评论区。
 
 缓存只写入 AstrBot 官方约定的 `data/plugin_data/astrbot_plugin_parser_x/`，默认每天清理一次。
 

@@ -12,11 +12,21 @@ from urllib.parse import parse_qs, quote, urlparse
 
 from astrbot.api import logger
 
-from ..data import ImageContent, Platform, VideoContent
+from ..comment_canvas import SocialCommentCanvas
+from ..comment_settings import CommentSettings
+from ..data import (
+    DeliveryBatch,
+    DeliveryPlan,
+    ImageContent,
+    Platform,
+    VideoContent,
+)
 from ..exception import ParseException
+from ..html_renderer import HtmlRenderService
 from ..utils import normalize_image_url
 from .base import BaseParser, handle
 from .metadata import parse_open_graph
+from .xiaoheihe_comment import XiaoheiheCommentFeed
 
 
 class XiaoheiheParser(BaseParser):
@@ -39,6 +49,49 @@ class XiaoheiheParser(BaseParser):
                 **({"Cookie": self.cookie} if self.cookie else {}),
             }
         )
+        self.render_service = HtmlRenderService.from_config(config)
+        comment_settings = CommentSettings.from_config(config, "xiaoheihe")
+        self.enable_comment_card = comment_settings.enabled
+        self.comment_limit = comment_settings.display_count
+        self.comment_timeout = comment_settings.timeout
+        self.comment_canvas = SocialCommentCanvas(self.render_service)
+        self.comment_feed = XiaoheiheCommentFeed(
+            self,
+            self.comment_canvas,
+            limit=self.comment_limit,
+        )
+
+    def set_render_service(self, render_service: HtmlRenderService) -> None:
+        self.render_service = render_service
+        self.comment_canvas.render_service = render_service
+
+    def _comment_extra(
+        self,
+        link_id: str,
+        threads: list[dict],
+        *,
+        title: str,
+        cover: str | None,
+        owner_id: str | int | None,
+        total: int | None,
+    ) -> dict:
+        if not self.enable_comment_card or not link_id or not threads:
+            return {}
+
+        async def build_comments():
+            return self.comment_feed.build_images(
+                link_id,
+                threads,
+                work_title=title,
+                cover=cover,
+                owner_id=owner_id,
+                total=total,
+            )
+
+        return {
+            "comment_task_factory": build_comments,
+            "comment_timeout": self.comment_timeout,
+        }
 
     @staticmethod
     def _da(value: int) -> int:
@@ -281,6 +334,114 @@ class XiaoheiheParser(BaseParser):
                 images.extend(nested_images)
         return "\n".join(dict.fromkeys(texts)), list(dict.fromkeys(images))
 
+    @classmethod
+    def _extract_html_blocks(cls, value: str) -> list[tuple[str, str]]:
+        blocks: list[tuple[str, str]] = []
+        parts = re.split(
+            r"(<img\b[^>]*>)",
+            value,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        for part in parts:
+            if not part:
+                continue
+            if re.match(r"<img\b", part, flags=re.IGNORECASE):
+                matched = re.search(
+                    r"\b(?:data-original|data-src|src)=([\"'])(.*?)\1",
+                    part,
+                    flags=re.IGNORECASE | re.DOTALL,
+                )
+                if matched:
+                    image_url = unescape(matched.group(2)).replace("\\", "")
+                    if cls._is_image_url(image_url):
+                        blocks.append(("image", image_url))
+                continue
+
+            text, _ = cls._extract_html_content(part)
+            if text:
+                blocks.append(("text", text))
+        return blocks
+
+    @classmethod
+    def extract_rich_blocks(cls, value: Any) -> list[tuple[str, str]]:
+        """Return ordered text/image blocks from Xiaoheihe rich content."""
+
+        blocks: list[tuple[str, str]] = []
+
+        def append(kind: str, item: str) -> None:
+            item = str(item or "").strip()
+            if not item:
+                return
+            if kind == "image":
+                if any(old_kind == "image" and old == item for old_kind, old in blocks):
+                    return
+                blocks.append((kind, item))
+                return
+            if blocks and blocks[-1][0] == "text":
+                previous = blocks[-1][1]
+                if item == previous or item in previous:
+                    return
+                blocks[-1] = ("text", f"{previous}\n\n{item}")
+                return
+            blocks.append((kind, item))
+
+        def walk(item: Any) -> None:
+            if isinstance(item, str):
+                stripped = item.strip()
+                if not stripped:
+                    return
+                if stripped.startswith(("{", "[")):
+                    try:
+                        walk(json.loads(stripped))
+                        return
+                    except (TypeError, ValueError):
+                        pass
+                if "<" in stripped and ">" in stripped:
+                    for kind, value_part in cls._extract_html_blocks(stripped):
+                        append(kind, value_part)
+                    return
+                if cls._is_image_url(stripped):
+                    append("image", stripped)
+                else:
+                    append("text", stripped)
+                return
+
+            if isinstance(item, list):
+                for child in item:
+                    walk(child)
+                return
+
+            if not isinstance(item, dict):
+                return
+
+            for key, child in item.items():
+                low_key = str(key).lower()
+                if isinstance(child, str) and low_key in {
+                    "url",
+                    "src",
+                    "image",
+                    "image_url",
+                    "img",
+                    "cdn_src",
+                    "original",
+                }:
+                    if cls._is_image_url(child):
+                        append("image", child)
+                    continue
+                if low_key in {
+                    "type",
+                    "id",
+                    "width",
+                    "height",
+                    "size",
+                }:
+                    continue
+                if isinstance(child, (str, dict, list)):
+                    walk(child)
+
+        walk(value)
+        return blocks
+
     @staticmethod
     def _canonical_share_url(kind: str, item_id: str) -> str:
         item_id = quote(str(item_id), safe="")
@@ -304,11 +465,10 @@ class XiaoheiheParser(BaseParser):
         if not kind or not item_id:
             raise ParseException("小黑盒链接类型或编号无法识别")
 
-        if self.cookie:
-            try:
-                return await self._parse_api(url, kind, item_id)
-            except Exception as exc:
-                logger.debug(f"[Xiaoheihe] API 解析失败，回退页面: {exc}")
+        try:
+            return await self._parse_api(url, kind, item_id)
+        except Exception as exc:
+            logger.debug(f"[Xiaoheihe] 签名 API 解析失败，尝试公开回退: {exc}")
         if kind != "bbs":
             try:
                 return await self._parse_public_game_api(url, kind, item_id)
@@ -364,17 +524,14 @@ class XiaoheiheParser(BaseParser):
             user = link.get("user") or {}
             if not isinstance(user, dict):
                 user = {}
-            text_parts: list[str] = []
-            images: list[str] = []
-            for source in (link.get("text"), link.get("content")):
-                source_text, source_images = self.extract_rich_content(source)
-                if source_text and source_text not in text_parts:
-                    text_parts.append(source_text)
-                images.extend(source_images)
-            description = str(link.get("description") or "").strip()
-            if description and not any(description in item for item in text_parts):
-                text_parts.insert(0, description)
 
+            rich_blocks: list[tuple[str, str]] = []
+            for source in (link.get("text"), link.get("content")):
+                for block in self.extract_rich_blocks(source):
+                    if block not in rich_blocks:
+                        rich_blocks.append(block)
+
+            description = str(link.get("description") or "").strip()
             tags = []
             for item in link.get("hashtags") or link.get("content_tags") or []:
                 if not isinstance(item, dict):
@@ -382,28 +539,63 @@ class XiaoheiheParser(BaseParser):
                 tag = str(item.get("name") or item.get("text") or "").strip()
                 if tag:
                     tags.append(f"#{tag}")
-            if tags:
-                text_parts.append(" ".join(dict.fromkeys(tags[:10])))
 
-            text = "\n\n".join(text_parts).strip()
+            title = str(link.get("title") or "小黑盒帖子").strip()
+            author_name = str(
+                user.get("username") or user.get("nickname") or "小黑盒用户"
+            ).strip()
+            overview_lines = ["识别：小黑盒帖子", f"👤作者：{author_name}"]
+            if title:
+                overview_lines.append(f"📝标题：{title}")
+            if description:
+                overview_lines.append(f"📄简介：{description}")
+            if tags:
+                overview_lines.append(f"🏷️标签：{' '.join(dict.fromkeys(tags[:10]))}")
+            overview = "\n".join(overview_lines)
+
+            text_parts = [description] if description else []
+            text_parts.extend(
+                value for block_type, value in rich_blocks if block_type == "text"
+            )
+            text = "\n\n".join(dict.fromkeys(text_parts)).strip()
             if len(text) > 6000:
                 text = f"{text[:5997]}..."
-            cover = link.get("thumb") or link.get("video_thumb")
-            if cover:
-                images.insert(0, cover)
-            images = [
-                normalized
-                for item in images
-                if (normalized := normalize_image_url(item))
-            ]
-            contents = [
-                ImageContent(
-                    self.downloader.download_img(item, ext_headers=self.headers)
+
+            cover_url = normalize_image_url(
+                link.get("thumb") or link.get("video_thumb")
+            )
+            cover_content = None
+            if cover_url:
+                cover_content = ImageContent(
+                    self.downloader.download_img(
+                        cover_url,
+                        ext_headers=self.headers,
+                    )
                 )
-                for item in list(dict.fromkeys(images))[:12]
-            ]
+
+            body_parts: list[str | ImageContent] = []
+            image_contents: list[ImageContent] = []
+            image_count = 0
+            for block_type, value in rich_blocks:
+                if block_type == "text":
+                    body_parts.append(value)
+                    continue
+                normalized = normalize_image_url(value)
+                if not normalized or normalized == cover_url or image_count >= 20:
+                    continue
+                content = ImageContent(
+                    self.downloader.download_img(
+                        normalized,
+                        ext_headers=self.headers,
+                    )
+                )
+                image_contents.append(content)
+                body_parts.append(content)
+                image_count += 1
+
+            video_contents: list[VideoContent] = []
             if link.get("has_video") in (1, "1", True) and link.get("video_url"):
-                contents.append(
+                video_contents.append(
                     VideoContent(
                         self.downloader.download_video(
                             link["video_url"],
@@ -417,6 +609,21 @@ class XiaoheiheParser(BaseParser):
                         )
                     )
                 )
+
+            overview_parts: list[str | ImageContent] = []
+            if cover_content is not None:
+                overview_parts.append(cover_content)
+            overview_parts.append(overview)
+            batches = [DeliveryBatch(overview_parts)]
+            if body_parts:
+                batches.append(DeliveryBatch(body_parts, mode="forward"))
+            batches.extend(DeliveryBatch([video]) for video in video_contents)
+
+            contents = [
+                *([cover_content] if cover_content is not None else []),
+                *image_contents,
+                *video_contents,
+            ]
             timestamp = link.get("create_at")
             try:
                 timestamp = int(timestamp) if timestamp else None
@@ -425,17 +632,37 @@ class XiaoheiheParser(BaseParser):
             avatar = normalize_image_url(
                 user.get("avatar") or user.get("avatar_url") or user.get("head_url")
             )
-            extra = {"render_text_card": True}
-            if avatar:
-                extra["text_card_avatar"] = avatar
+            threads = [
+                item for item in result.get("comments") or [] if isinstance(item, dict)
+            ]
+            total_value = (
+                link.get("comment_num")
+                or link.get("comment_count")
+                or result.get("comment_num")
+                or result.get("comment_count")
+            )
+            try:
+                total = int(total_value) if total_value is not None else None
+            except (TypeError, ValueError):
+                total = None
+            owner_id = user.get("userid") or user.get("user_id") or user.get("id")
+            extra = self._comment_extra(
+                item_id,
+                threads,
+                title=title,
+                cover=cover_url,
+                owner_id=owner_id,
+                total=total,
+            )
             return self.result(
-                title=link.get("title") or "小黑盒帖子",
+                title=title,
                 author=self.create_author(
-                    user.get("username") or user.get("nickname") or "小黑盒用户",
+                    author_name,
                     avatar,
                 ),
                 text=text or None,
                 contents=contents,
+                delivery=DeliveryPlan(batches),
                 timestamp=timestamp,
                 url=url,
                 extra=extra,
@@ -450,7 +677,7 @@ class XiaoheiheParser(BaseParser):
         item_id: str,
         result: dict[str, Any],
     ):
-        title = (
+        title = str(
             result.get("name")
             or result.get("game_name")
             or result.get("steam_name")
@@ -517,12 +744,15 @@ class XiaoheiheParser(BaseParser):
             if price.get("initial") not in (None, price.get("current")):
                 price_text += f"（原价 ¥{price['initial']}）"
             text_parts.append(price_text)
-        cover = result.get("image") or result.get("logo") or result.get("game_img")
-        contents = []
-        if normalized := normalize_image_url(cover):
-            contents.append(
-                ImageContent(
-                    self.downloader.download_img(normalized, ext_headers=self.headers)
+        cover_url = normalize_image_url(
+            result.get("image") or result.get("logo") or result.get("game_img")
+        )
+        cover_content = None
+        if cover_url:
+            cover_content = ImageContent(
+                self.downloader.download_img(
+                    cover_url,
+                    ext_headers=self.headers,
                 )
             )
         screenshots = list(description_images)
@@ -535,14 +765,18 @@ class XiaoheiheParser(BaseParser):
                 video_url = media.get("url") or video_url
             elif media_url:
                 screenshots.append(media_url)
+        screenshot_contents = []
         for media_url in list(dict.fromkeys(screenshots))[:8]:
-            contents.append(
+            if media_url == cover_url:
+                continue
+            screenshot_contents.append(
                 ImageContent(
                     self.downloader.download_img(media_url, ext_headers=self.headers)
                 )
             )
+        video_contents = []
         if video_url:
-            contents.append(
+            video_contents.append(
                 VideoContent(
                     self.downloader.download_video(
                         video_url,
@@ -559,12 +793,47 @@ class XiaoheiheParser(BaseParser):
         text = "\n".join(text_parts)
         if len(text) > 6000:
             text = f"{text[:5997]}..."
+
+        overview_lines = ["识别：小黑盒游戏", f"🕹️ {title}"]
+        if result.get("score"):
+            comment_stats = result.get("comment_stats") or {}
+            comment_count = (
+                comment_stats.get("score_comment")
+                if isinstance(comment_stats, dict)
+                else None
+            )
+            score_text = f"🌟 小黑盒评分：{result['score']}"
+            if comment_count:
+                score_text += f"（{comment_count} 人评价）"
+            overview_lines.append(score_text)
+        if isinstance(price, dict) and price.get("current") is not None:
+            overview_lines.append(f"💰 当前价格：¥{price['current']}")
+
+        overview_parts: list[str | ImageContent] = []
+        if cover_content is not None:
+            overview_parts.append(cover_content)
+        overview_parts.append("\n".join(overview_lines))
+        batches = [DeliveryBatch(overview_parts)]
+        detail_parts: list[str | ImageContent] = []
+        if text:
+            detail_parts.append(text)
+        if screenshot_contents:
+            detail_parts.extend(["🖼️ 游戏截图", *screenshot_contents])
+        if detail_parts:
+            batches.append(DeliveryBatch(detail_parts, mode="forward"))
+        batches.extend(DeliveryBatch([video]) for video in video_contents)
+
+        contents = [
+            *([cover_content] if cover_content is not None else []),
+            *screenshot_contents,
+            *video_contents,
+        ]
         return self.result(
             title=title,
             text=text or None,
             contents=contents,
+            delivery=DeliveryPlan(batches),
             url=url,
-            extra={"render_text_card": True},
         )
 
     async def _parse_page_fallback(self, url: str, kind: str, item_id: str):
@@ -578,6 +847,12 @@ class XiaoheiheParser(BaseParser):
         page_image = ""
         last_status: int | None = None
         for candidate in candidates:
+            candidate_redirect = self._parse_redirect_metadata(candidate)
+            if candidate_redirect:
+                page_title = candidate_redirect.get("title", page_title)
+                page_description = candidate_redirect.get(
+                    "description", page_description
+                )
             try:
                 response = await self.http_get(
                     candidate,
@@ -587,14 +862,18 @@ class XiaoheiheParser(BaseParser):
                 )
             except Exception as exc:
                 logger.debug(f"[Xiaoheihe] 页面候选请求失败 {candidate}: {exc}")
+                if page_title or page_description:
+                    break
                 continue
             last_status = response.status_code
             if response.status_code >= 400:
+                if page_title or page_description:
+                    break
                 continue
 
             metadata = parse_open_graph(response.text)
             redirect_metadata = {
-                **self._parse_redirect_metadata(candidate),
+                **candidate_redirect,
                 **self._parse_redirect_metadata(str(response.url)),
             }
             page_title = redirect_metadata.get("title") or metadata["title"]
@@ -627,19 +906,25 @@ class XiaoheiheParser(BaseParser):
                     )
                 )
             )
+        fallback_info = (
+            "小黑盒接口不可用，当前展示官方分享信息。"
+            if self.cookie
+            else "签名接口不可用，当前展示官方分享信息。"
+        )
+        summary_lines = [f"识别：{'小黑盒帖子' if kind == 'bbs' else '小黑盒游戏'}"]
+        if page_title:
+            summary_lines.append(f"📝标题：{page_title}")
+        if page_description:
+            summary_lines.append(f"📄简介：{page_description}")
+        summary_lines.append(f"提示：{fallback_info}")
+        delivery_parts: list[str | ImageContent] = [*contents, "\n".join(summary_lines)]
         return self.result(
             title=page_title,
             text=page_description,
             contents=contents,
+            delivery=DeliveryPlan([DeliveryBatch(delivery_parts)]),
             url=url,
-            extra={
-                "render_text_card": True,
-                "info": (
-                    "小黑盒接口不可用，当前展示官方分享信息。"
-                    if self.cookie
-                    else "未配置有效小黑盒 Cookie，当前展示官方分享信息。"
-                ),
-            },
+            extra={"info": fallback_info},
         )
 
     @staticmethod

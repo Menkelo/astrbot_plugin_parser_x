@@ -31,6 +31,8 @@
         "default": true
       },
       "weibo": {"description": "微博评论区", "type": "bool", "default": true},
+      "xiaoheihe": {"description": "小黑盒评论区", "type": "bool", "default": true},
+      "miyoushe": {"description": "米游社评论区", "type": "bool", "default": true},
       "display_count": {
         "description": "热门评论数量",
         "hint": "按平台热门顺序最多展示多少条主评论，楼中楼首条回复不计入此数量。",
@@ -123,7 +125,7 @@
       },
       "xiaoheihe_cookie": {
         "description": "小黑盒 Cookie",
-        "hint": "可选；帖子配置后优先请求签名接口，未配置时读取官方分享信息；游戏详情可直接使用公开接口。",
+        "hint": "可选；公开帖子和游戏会先请求签名接口，受限内容或触发验证码时可配置登录态。",
         "type": "text",
         "default": ""
       },
