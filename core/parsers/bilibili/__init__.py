@@ -16,7 +16,6 @@ from ...constants import BILIBILI_HEADER
 from ...data import Platform
 from ...exception import SizeLimitException
 from ...html_renderer import HtmlRenderService
-from ...live_renderer import LiveCardRenderer
 from ...utils import ck2dict
 from ..base import BaseParser, Downloader, ParseException, handle
 from .comment_canvas import BiliCommentCanvas
@@ -98,17 +97,15 @@ class BilibiliParser(BaseParser):
 
         self.stream_selector = BiliStreamSelector()
 
-        self.live_renderer = LiveCardRenderer(self.render_service)
         self.dynamic_renderer = BiliDynamicRenderer(self.render_service)
 
         self.live_service = BiliLiveService(self)
         self.dynamic_service = BiliDynamicService(self)
 
     def set_render_service(self, render_service: HtmlRenderService) -> None:
-        """Reuse the plugin-wide renderer for comments, dynamics and live cards."""
+        """Reuse the plugin-wide renderer for comments and dynamics."""
         self.render_service = render_service
         self.comment_canvas.render_service = render_service
-        self.live_renderer.render_service = render_service
         self.dynamic_renderer.render_service = render_service
 
     # region 路由

@@ -49,8 +49,8 @@ https://github.com/Menkelo/astrbot_plugin_parser_x
 ```
 
 运行环境还应提供 `ffmpeg`，用于音视频合并、格式转换和 H.264 发送兜底。插件的正文、
-动态、直播与评论卡片全部复用 AstrBot 官方 Canvas/T2I，不需要额外安装 Playwright 或
-Chromium。
+动态与评论卡片复用 AstrBot 官方 Canvas/T2I；直播改为原生图片与文字消息链。插件不安装、
+导入或启动 Playwright/Chromium。
 
 ## 使用
 

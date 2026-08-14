@@ -4,5 +4,5 @@
   "commit": "2f74647778d166b746ac3a72294888f2b7e38917",
   "synced_at": "2026-08-15",
   "strategy": "semantic-port",
-  "notes": "0.5.2 已复核平台发送顺序、评论接口与活跃 forks；保持语义移植，不直接嵌入 Yunzai 运行时代码。"
+  "notes": "0.5.2 已复核平台发送顺序、评论接口与 33 个 forks，并移除直播 HTML 卡片；保持语义移植，不直接嵌入 Yunzai 运行时代码。"
 }

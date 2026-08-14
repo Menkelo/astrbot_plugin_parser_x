@@ -31,9 +31,9 @@ from core.constants import COMMENT_FOOTER_BRAND
 from core.data import ImageContent, VideoContent
 from core.download import Downloader, VideoInfo
 from core.html_renderer import HtmlRenderService
-from core.live_renderer import LiveCardRenderer
 from core.parsers import (
     BaseParser,
+    BilibiliParser,
     DouyinParser,
     KuaiShouParser,
     MiyousheParser,
@@ -199,7 +199,8 @@ def test_runtime_dependencies_do_not_require_local_browser():
     source_files = [repo_root / "main.py", *(repo_root / "core").rglob("*.py")]
     source = "\n".join(path.read_text(encoding="utf-8") for path in source_files)
     assert "playwright" not in source.lower()
-    assert "chromium.launch" not in source.lower()
+    assert "chromium" not in source.lower()
+    assert not (repo_root / "core" / "live_renderer.py").exists()
     assert "launch_persistent_context" not in source.lower()
 
 
@@ -927,7 +928,7 @@ def test_rendered_image_keeps_content_that_already_reaches_bottom(tmp_path):
         assert image.size == (760, 240)
 
 
-def test_text_and_live_cards_share_html_render_service(tmp_path):
+def test_text_card_uses_html_render_service(tmp_path):
     calls = []
 
     async def fake_html_render(template, data, *, return_url, options):
@@ -938,7 +939,6 @@ def test_text_and_live_cards_share_html_render_service(tmp_path):
 
     service = HtmlRenderService(fake_html_render)
     text_output = tmp_path / "text.png"
-    live_output = tmp_path / "live.png"
 
     async def run():
         await TextCardRenderer(service).render_text_card(
@@ -947,27 +947,97 @@ def test_text_and_live_cards_share_html_render_service(tmp_path):
             author_name="用户",
             text="正文 #话题#",
         )
-        await LiveCardRenderer(service).render_live_card(
-            live_output,
-            platform_name="Bilibili",
-            title="直播标题",
-            streamer_name="主播",
-            cover=None,
-            avatar=None,
-            status_text="直播中",
-            area_text="游戏",
-        )
 
     asyncio.run(run())
     with Image.open(text_output) as image:
         assert image.size == (760, 177)
-    with Image.open(live_output) as image:
-        assert image.size == (748, 175)
-    assert len(calls) == 2
+    assert len(calls) == 1
     assert all(return_url is False for _, _, return_url, _ in calls)
     assert all(options["scale"] == "css" for _, _, _, options in calls)
     assert all(options["timeout"] == 45_000 for _, _, _, options in calls)
     assert all(COMMENT_FOOTER_BRAND in template for template, *_ in calls)
+
+
+def test_bilibili_live_uses_native_images_and_text_without_render_card(tmp_path):
+    downloaded = []
+
+    class FakeDownloader:
+        def download_img(self, url, **kwargs):
+            downloaded.append((url, kwargs))
+
+            async def done():
+                return tmp_path / f"live-{len(downloaded)}.jpg"
+
+            return asyncio.create_task(done())
+
+    async def run():
+        parser = BilibiliParser(
+            {
+                "cache_dir": str(tmp_path),
+                "cookies": {},
+                "comments": {"bilibili": False},
+                "performance": {},
+                "rendering": {},
+            },
+            FakeDownloader(),
+        )
+
+        async def fake_get_json(url, _params, _room_id, retry=3):
+            del retry
+            if url.endswith("room_init"):
+                return {
+                    "code": 0,
+                    "data": {
+                        "room_id": 123,
+                        "live_status": 1,
+                        "uid": 42,
+                    },
+                }
+            if url.endswith("getInfoByRoom"):
+                return {
+                    "code": 0,
+                    "data": {
+                        "room_info": {
+                            "title": "直播标题",
+                            "description": "<p>直播简介</p>",
+                            "tags": "游戏,攻略",
+                            "user_cover": "https://img.example.com/cover.jpg",
+                            "keyframe": "https://img.example.com/keyframe.jpg",
+                            "parent_area_name": "游戏",
+                            "area_name": "原神",
+                            "live_start_time": 1_700_000_000,
+                        },
+                        "anchor_info": {"base_info": {"uid": 42, "uname": "主播"}},
+                    },
+                }
+            raise AssertionError(url)
+
+        parser.live_service._get_json = fake_get_json
+        try:
+            result = await parser.live_service.parse_live(123)
+            assert not hasattr(parser, "live_renderer")
+            return result
+        finally:
+            await parser.close_session()
+
+    result = asyncio.run(run())
+    assert result.title == "直播标题"
+    assert len(result.contents) == 2
+    assert result.delivery is not None
+    assert len(result.delivery.batches) == 1
+    batch = result.delivery.batches[0]
+    assert batch.parts[:2] == result.contents
+    assert "识别：哔哩哔哩直播" in batch.parts[2]
+    assert "直播简介" in batch.parts[2]
+    assert "独立播放器" in batch.parts[2]
+    assert [item[0] for item in downloaded] == [
+        "https://img.example.com/cover.jpg",
+        "https://img.example.com/keyframe.jpg",
+    ]
+    assert all(
+        item[1]["ext_headers"]["Referer"] == "https://live.bilibili.com/123"
+        for item in downloaded
+    )
 
 
 def test_text_card_without_author_does_not_render_empty_avatar(tmp_path):
@@ -2624,7 +2694,6 @@ def test_plugin_initializes_and_registers_aiocqhttp_parsers(tmp_path):
                 xiaoheihe = plugin.parser_map["xiaoheihe.cn"]
                 assert bili.render_service is plugin.render_service
                 assert bili.comment_canvas.render_service is plugin.render_service
-                assert bili.live_renderer.render_service is plugin.render_service
                 assert bili.dynamic_renderer.render_service is plugin.render_service
                 assert douyin.render_service is plugin.render_service
                 assert douyin.comment_canvas.render_service is plugin.render_service

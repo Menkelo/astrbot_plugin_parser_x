@@ -1,19 +1,18 @@
-import hashlib
 import json
 import random
+import re
 import time
-from pathlib import Path
+from html import unescape
 
 from astrbot.api import logger
 
-from ...data import ImageContent
-from ...utils import cached_image_to_data_uri, normalize_image_url
+from ...data import DeliveryBatch, DeliveryPlan, ImageContent
+from ...utils import normalize_image_url
 
 
 class BiliLiveService:
     def __init__(self, parser):
         self.parser = parser
-        self._img_data_uri_cache: dict[str, str | None] = {}
 
     @staticmethod
     def _first_str(*values) -> str | None:
@@ -76,6 +75,20 @@ class BiliLiveService:
                 if text:
                     return text
         return None
+
+    @staticmethod
+    def _plain_text(value) -> str:
+        text = str(value or "")
+        text = re.sub(
+            r"</(?:p|div|h[1-6]|blockquote|li)>|<br\s*/?>",
+            "\n",
+            text,
+            flags=re.IGNORECASE,
+        )
+        text = re.sub(r"<[^>]+>", "", text)
+        text = unescape(text)
+        lines = [re.sub(r"[ \t]+", " ", line).strip() for line in text.splitlines()]
+        return "\n".join(line for line in lines if line)
 
     async def _get_json(self, url: str, params: dict, room_id: int, retry: int = 3):
         headers = self.parser.headers.copy()
@@ -228,29 +241,6 @@ class BiliLiveService:
         card = data.get("card") or {}
         return card if isinstance(card, dict) else {}
 
-    async def _img_to_data_uri(
-        self,
-        img_url: str | None,
-        *,
-        referer: str,
-    ) -> str | None:
-        headers = self.parser.headers.copy()
-        headers["Cache-Control"] = "no-cache"
-        if self.parser.bili_ck:
-            headers["Cookie"] = self.parser.bili_ck
-
-        return await cached_image_to_data_uri(
-            self._img_data_uri_cache,
-            self.parser.http_get,
-            img_url,
-            headers=headers,
-            referer=referer,
-            normalizer=normalize_image_url,
-            max_bytes=2 * 1024 * 1024,
-            timeout=8,
-            debug_label="[Bilibili-live] image",
-        )
-
     async def parse_live(self, room_id: int):
         init_api = "https://api.live.bilibili.com/room/v1/Room/room_init"
         info_api = "https://api.live.bilibili.com/xlive/web-room/v1/index/getInfoByRoom"
@@ -304,17 +294,12 @@ class BiliLiveService:
             init_data.get("uid"),
         )
         anchor_fallback = {}
-        if uid and (
-            not self._first_key(anchor_base, "face", "avatar")
-            or not self._first_key(anchor_base, "uname", "name")
-        ):
+        if uid and not self._first_key(anchor_base, "uname", "name"):
             anchor_fallback = await self._fetch_anchor_info(uid, real_room_id)
 
         member_card = {}
         if uid and (
-            not self._first_key(anchor_base, "face", "avatar")
-            and not self._first_key(anchor_fallback, "face", "avatar")
-            or not self._first_key(anchor_base, "uname", "name")
+            not self._first_key(anchor_base, "uname", "name")
             and not self._first_key(anchor_fallback, "uname", "name")
         ):
             member_card = await self._fetch_member_card(uid, real_room_id)
@@ -324,22 +309,6 @@ class BiliLiveService:
             self._first_key(anchor_fallback, "uname", "name"),
             self._first_key(member_card, "name", "uname"),
             "B站主播",
-        )
-        cover = (
-            room_info.get("cover")
-            or room_info.get("user_cover")
-            or room_info.get("keyframe")
-        )
-        avatar = normalize_image_url(
-            self._first_str(
-                self._first_key(anchor_base, "face", "avatar"),
-                self._first_key(anchor_fallback, "face", "avatar"),
-                self._first_key(member_card, "face", "avatar"),
-            )
-        )
-        avatar_data_uri = await self._img_to_data_uri(
-            avatar,
-            referer=f"https://live.bilibili.com/{real_room_id}",
         )
         parent_area = room_info.get("parent_area_name") or ""
         area = room_info.get("area_name") or ""
@@ -355,30 +324,55 @@ class BiliLiveService:
                 "startTime",
             ),
         )
-        status_text = "直播中"
-        user_time_text = f"开播时间 {start_time_text}" if start_time_text else None
 
-        digest = hashlib.md5(
-            f"{real_room_id}|{title}|{uname}|{avatar}|{cover}|{live_status}|{user_time_text or ''}|live_service_v6".encode()
-        ).hexdigest()[:10]
-        out_path = (
-            Path(self.parser.cache_dir) / f"bili_live_{real_room_id}_{digest}.png"
+        summary_lines = [
+            "识别：哔哩哔哩直播",
+            f"📝 标题：{title}",
+            f"👤 主播：{uname}",
+        ]
+        if description := self._plain_text(room_info.get("description")):
+            summary_lines.append(f"📄 简述：{description}")
+        if tags := self._plain_text(room_info.get("tags")):
+            summary_lines.append(f"🔖 标签：{tags}")
+        if area_text:
+            summary_lines.append(f"📍 分区：{area_text}")
+        if start_time_text:
+            summary_lines.append(f"⏰ 开播时间：{start_time_text}")
+        summary_lines.append(
+            "📺 独立播放器："
+            "https://www.bilibili.com/blackboard/live/"
+            f"live-activity-player.html?enterTheRoom=0&cid={real_room_id}"
         )
+        summary = "\n".join(summary_lines)
 
-        if not out_path.exists():
-            await self.parser.live_renderer.render_live_card(
-                out_path=out_path,
-                platform_name="Bilibili",
-                title=title,
-                streamer_name=uname,
-                cover=cover,
-                avatar=avatar_data_uri or avatar,
-                status_text=status_text,
-                area_text=area_text,
-                user_time_text=user_time_text,
+        media_headers = self.parser.headers.copy()
+        media_headers["Referer"] = f"https://live.bilibili.com/{real_room_id}"
+        if self.parser.bili_ck:
+            media_headers["Cookie"] = self.parser.bili_ck
+
+        image_urls = []
+        for value in (
+            room_info.get("user_cover") or room_info.get("cover"),
+            room_info.get("keyframe"),
+        ):
+            normalized = normalize_image_url(value)
+            if normalized and normalized not in image_urls:
+                image_urls.append(normalized)
+        image_contents = [
+            ImageContent(
+                self.parser.downloader.download_img(
+                    image_url,
+                    ext_headers=media_headers,
+                )
             )
+            for image_url in image_urls
+        ]
 
         return self.parser.result(
-            contents=[ImageContent(out_path)],
-            extra={"force_direct_media": True},
+            title=title,
+            author=self.parser.create_author(uname),
+            text=summary,
+            contents=image_contents,
+            delivery=DeliveryPlan([DeliveryBatch([*image_contents, summary])]),
+            url=f"https://live.bilibili.com/{real_room_id}",
         )
