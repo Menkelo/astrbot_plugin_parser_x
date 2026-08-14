@@ -5,7 +5,6 @@ from .bilibili import BilibiliParser
 from .douyin import DouyinParser
 from .kuaishou import KuaiShouParser
 from .miyoushe import MiyousheParser
-from .tieba import TiebaParser
 from .weibo import WeiboParser
 from .xiaoheihe import XiaoheiheParser
 from .xiaohongshu import XiaoHongShuParser
@@ -29,7 +28,6 @@ __all__ = [
     "WeiboParser",
     "XiaoHongShuParser",
     "MiyousheParser",
-    "TiebaParser",
     "XiaoheiheParser",
     "AcFunParser",
     "XiguaParser",

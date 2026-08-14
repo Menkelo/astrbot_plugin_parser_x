@@ -1,6 +1,4 @@
-import hashlib
 import re
-import time
 from email.utils import parsedate_to_datetime
 from html import unescape
 from pathlib import Path
@@ -15,7 +13,6 @@ from ..comment_settings import CommentSettings
 from ..data import ImageContent, Platform, VideoContent
 from ..download import Downloader
 from ..html_renderer import HtmlRenderService
-from ..text_renderer import TextCardRenderer
 from ..utils import image_to_data_uri, normalize_image_url
 from .base import BaseParser, ParseException, handle
 from .weibo_comment import WeiboCommentFeed
@@ -38,7 +35,6 @@ class WeiboParser(BaseParser):
         self.cache_dir = Path(config["cache_dir"])
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.render_service = HtmlRenderService.from_config(config)
-        self.text_renderer = TextCardRenderer(self.render_service)
         cookies = config.get("cookies", {})
         self.cookie = (
             str(cookies.get("weibo_cookie", "")) if isinstance(cookies, dict) else ""
@@ -56,7 +52,6 @@ class WeiboParser(BaseParser):
 
     def set_render_service(self, render_service: HtmlRenderService) -> None:
         self.render_service = render_service
-        self.text_renderer.render_service = render_service
         self.comment_canvas.render_service = render_service
 
     def _comment_extra(
@@ -158,24 +153,13 @@ class WeiboParser(BaseParser):
             contents.append(ImageContent(img_task))
 
         extra = {}
-        if text and not contents:
+        if text:
             text_card_avatar = (
                 await self._img_to_data_uri(author_avatar) or author_avatar
             )
             if text_card_avatar:
                 extra["text_card_avatar"] = text_card_avatar
-
-            try:
-                text_card = await self._render_text_card(
-                    bid=bid,
-                    author_name=author_name,
-                    author_avatar=text_card_avatar,
-                    text=text,
-                    timestamp=timestamp,
-                )
-                contents.append(text_card)
-            except Exception as e:
-                logger.warning(f"[Weibo] 正文卡渲染失败: {e}")
+            extra["render_text_card"] = True
 
         comment_title = re.sub(r"\s+", " ", text).strip()
         if len(comment_title) > 64:
@@ -438,15 +422,6 @@ class WeiboParser(BaseParser):
         return url if isinstance(url, str) and url else None
 
     @staticmethod
-    def _fmt_time(ts: int | None) -> str | None:
-        if not ts:
-            return None
-        try:
-            return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ts))
-        except Exception:
-            return None
-
-    @staticmethod
     def _html_to_plain_text(text: str | None) -> str:
         if not text:
             return ""
@@ -473,46 +448,6 @@ class WeiboParser(BaseParser):
         )
         text = re.sub(r"<[^>]+>", "", text)
         return unescape(text).strip()
-
-    async def _render_text_card(
-        self,
-        *,
-        bid: str,
-        author_name: str,
-        author_avatar: str | None,
-        text: str,
-        timestamp: int | None,
-    ) -> ImageContent:
-        avatar_digest = (
-            hashlib.md5(author_avatar.encode("utf-8")).hexdigest()
-            if author_avatar
-            else ""
-        )
-        digest = hashlib.md5(
-            "\n".join(
-                [
-                    bid,
-                    author_name,
-                    avatar_digest,
-                    self._fmt_time(timestamp) or "",
-                    text,
-                    "weibo_text_card_v3",
-                ]
-            ).encode("utf-8")
-        ).hexdigest()[:12]
-
-        out_path = self.cache_dir / f"weibo_text_card_{bid}_{digest}.png"
-        if not out_path.exists():
-            await self.text_renderer.render_text_card(
-                out_path=out_path,
-                platform_name=self.platform.display_name,
-                author_name=author_name,
-                author_avatar=author_avatar,
-                text=text,
-                timestamp_text=self._fmt_time(timestamp),
-            )
-
-        return ImageContent(out_path)
 
     async def _img_to_data_uri(
         self,

@@ -181,6 +181,9 @@ class MiyousheParser(BaseParser):
             timestamp = int(timestamp) if timestamp else None
         except (TypeError, ValueError):
             timestamp = None
+        extra = {"render_text_card": True}
+        if normalized_avatar := normalize_image_url(author_avatar):
+            extra["text_card_avatar"] = normalized_avatar
         return self.result(
             title=post.get("subject") or post.get("title") or "米游社文章",
             author=self.create_author(author_name, author_avatar),
@@ -188,7 +191,7 @@ class MiyousheParser(BaseParser):
             contents=contents,
             timestamp=timestamp,
             url=url,
-            extra={"send_text": True},
+            extra=extra,
         )
 
 

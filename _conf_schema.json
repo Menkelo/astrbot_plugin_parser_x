@@ -10,7 +10,6 @@
       "weibo": {"description": "微博", "type": "bool", "default": true},
       "xiaohongshu": {"description": "小红书", "type": "bool", "default": true},
       "miyoushe": {"description": "米游社", "type": "bool", "default": true},
-      "tieba": {"description": "百度贴吧", "type": "bool", "default": true},
       "xiaoheihe": {"description": "小黑盒", "type": "bool", "default": true},
       "acfun": {"description": "AcFun（yt-dlp）", "type": "bool", "default": true},
       "xigua": {"description": "西瓜视频（yt-dlp）", "type": "bool", "default": true},
@@ -124,7 +123,7 @@
       },
       "xiaoheihe_cookie": {
         "description": "小黑盒 Cookie",
-        "hint": "可选；配置后优先请求签名接口，未配置时读取公开页面与分享跳转信息。",
+        "hint": "可选；帖子配置后优先请求签名接口，未配置时读取官方分享信息；游戏详情可直接使用公开接口。",
         "type": "text",
         "default": ""
       },
@@ -153,19 +152,6 @@
         "type": "list",
         "default": [],
         "collapsed": true
-      }
-    }
-  },
-  "integrations": {
-    "description": "高级集成",
-    "hint": "可选外部服务；留空时插件使用官方页面或自身解析逻辑。",
-    "type": "object",
-    "items": {
-      "tieba_api_base": {
-        "description": "贴吧详情 API 地址",
-        "hint": "需兼容 /tieba/post_detail?tid=；留空时仅解析贴吧官方页面元数据。",
-        "type": "string",
-        "default": ""
       }
     }
   },

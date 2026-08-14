@@ -116,7 +116,7 @@ class KuaiShouParser(BaseParser):
                     (d.photo for d in init_state.values() if d.photo is not None), None
                 )
                 if photo:
-                    return self._build_result_from_photo(photo)
+                    return self._build_result_from_photo(photo, real_url)
         except Exception as e:
             logger.debug(f"[快手] INIT_STATE 解析失败: {e}，尝试正则提取")
 
@@ -159,9 +159,10 @@ class KuaiShouParser(BaseParser):
 
         raise ParseException("快手解析失败: 未找到视频信息")
 
-    def _build_result_from_photo(self, photo):
+    def _build_result_from_photo(self, photo, url: str | None = None):
         contents = []
-        if video_url := photo.video_url:
+        video_url = photo.video_url
+        if video_url:
             contents.append(
                 # BaseParser 已修改，create_video_content 会自动忽略传入的 cover
                 self.create_video_content(
@@ -185,12 +186,19 @@ class KuaiShouParser(BaseParser):
         author = self.create_author(
             photo.name, photo.head_url, ext_headers=self.ios_headers
         )
+        extra = {}
+        if contents and not video_url:
+            extra["render_text_card"] = True
+            if photo.head_url:
+                extra["text_card_avatar"] = photo.head_url
 
         return self.result(
             title=photo.caption,
             author=author,
             contents=contents,
             timestamp=photo.timestamp // 1000,
+            url=url,
+            extra=extra,
         )
 
 

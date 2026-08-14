@@ -95,6 +95,21 @@ class ParserXPlugin(Star):
             )
             config["behavior"] = behavior
             config["config_v2_migrated"] = True
+
+        # Tieba was previously exposed through an unreliable third-party
+        # detail service. Remove stale values from upgraded installations so
+        # the deleted route does not linger in the persisted configuration.
+        platforms = config.get("platforms", {})
+        if isinstance(platforms, dict):
+            platforms.pop("tieba", None)
+            config["platforms"] = platforms
+        integrations = config.get("integrations", {})
+        if isinstance(integrations, dict):
+            integrations.pop("tieba_api_base", None)
+            if integrations:
+                config["integrations"] = integrations
+            else:
+                config.pop("integrations", None)
         self.config.save_config()
 
         self.parser_map: dict[str, BaseParser] = {}
@@ -251,27 +266,33 @@ class ParserXPlugin(Star):
             parts.append(f"链接：{result.url}")
         return "\n\n".join(parts).replace("@", "@\u200b")
 
-    async def _ensure_text_only_content(self, result: ParseResult) -> bool:
-        if result.contents:
-            return False
-
+    @staticmethod
+    def _text_card_body(result: ParseResult) -> str:
+        parts: list[str] = []
         text = (result.text or "").strip()
-        if not text:
-            fallback_parts = []
-            if result.extra_info:
-                fallback_parts.append(result.extra_info.strip())
-            if result.url:
-                fallback_parts.append(f"链接：{result.url}")
-            text = "\n\n".join(fallback_parts)
-        if not text:
-            return False
+        if text:
+            parts.append(text)
+        extra_info = (result.extra_info or "").strip()
+        if extra_info and extra_info not in text:
+            parts.append(extra_info)
+        return "\n\n".join(parts)
+
+    async def _build_text_card_content(
+        self,
+        result: ParseResult,
+    ) -> ImageContent | None:
+        text = self._text_card_body(result)
+        title = (result.title or "").strip() or None
+        if not text and not title:
+            text = (result.url or "").strip()
+        if not text and not title:
+            return None
 
         author_name = result.author.name if result.author else None
         author_avatar = result.extra.get("text_card_avatar")
         if not isinstance(author_avatar, str) or not author_avatar.strip():
             author_avatar = None
         platform_name = result.platform.display_name or result.platform.name
-        title = (result.title or "").strip() or None
         timestamp_text = result.formatted_datetime
 
         digest = hashlib.md5(
@@ -284,7 +305,7 @@ class ParserXPlugin(Star):
                     timestamp_text or "",
                     result.url or "",
                     text,
-                    "text_card_v6",
+                    "text_card_v7_shared_media",
                 ]
             ).encode("utf-8")
         ).hexdigest()[:12]
@@ -307,7 +328,16 @@ class ParserXPlugin(Star):
                 timestamp_text=timestamp_text,
             )
 
-        result.contents = [ImageContent(out_path)]
+        return ImageContent(out_path)
+
+    async def _ensure_text_only_content(self, result: ParseResult) -> bool:
+        if result.contents:
+            return False
+
+        card = await self._build_text_card_content(result)
+        if card is None:
+            return False
+        result.contents = [card]
         return True
 
     async def _transcode_to_h264(self, input_path: Path) -> Path:
@@ -357,6 +387,15 @@ class ParserXPlugin(Star):
 
         async def process_main_content():
             parsed_contents = tuple(result.contents)
+            text_card_failed = False
+            if result.contents and result.extra.get("render_text_card"):
+                try:
+                    if card := await self._build_text_card_content(result):
+                        result.contents.insert(0, card)
+                except Exception as e:
+                    text_card_failed = True
+                    logger.warning(f"media text-card render failed: {e}")
+
             if not result.contents:
                 if result.extra.get("plain_text_only"):
                     text = (result.text or "").strip()
@@ -370,10 +409,9 @@ class ParserXPlugin(Star):
                     await self._ensure_text_only_content(result)
                 except Exception as e:
                     logger.warning(f"text-only render failed: {e}")
-                    if result.text and result.text.strip():
-                        await event.send(
-                            event.plain_result(self._format_text_fallback(result))
-                        )
+                    fallback = self._format_text_fallback(result)
+                    if fallback:
+                        await event.send(event.plain_result(fallback))
                     return
 
                 if not result.contents:
@@ -384,7 +422,7 @@ class ParserXPlugin(Star):
             path_map = {id(c): (p, err) for c, p, err in download_results}
 
             segs = []
-            if result.extra.get("send_text"):
+            if result.extra.get("send_text") or text_card_failed:
                 summary = self._format_media_summary(result)
                 if summary:
                     segs.append(Plain(summary))
@@ -469,13 +507,18 @@ class ParserXPlugin(Star):
                             )
                         )
             else:
-                if result.extra.get("reply_original_for_single_image"):
-                    image_segs = [seg for seg in segs if isinstance(seg, Image)]
-                    if len(segs) == 1 and len(image_segs) == 1:
+                source_is_single_image = len(parsed_contents) == 1 and isinstance(
+                    parsed_contents[0], (ImageContent, GraphicsContent)
+                )
+                if (
+                    result.extra.get("reply_original_for_single_image")
+                    or source_is_single_image
+                ):
+                    if segs and all(isinstance(seg, (Plain, Image)) for seg in segs):
                         chain: list[BaseMessageComponent] = []
                         if (reply := original_message_reply()) is not None:
                             chain.append(reply)
-                        chain.append(image_segs[0])
+                        chain.extend(segs)
                         await event.send(event.chain_result(chain))
                         return
 

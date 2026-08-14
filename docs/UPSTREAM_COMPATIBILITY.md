@@ -22,9 +22,8 @@
 | 微视 | 兼容层 | `core/parsers/ytdlp.py` | 取决于 yt-dlp extractor 可用性 |
 | 网易云音乐 | 兼容层 | `core/parsers/ytdlp.py` | 发送音频文件 |
 | 米游社 | 原生 | `core/parsers/miyoushe.py` | 正文、图片、视频和作者信息 |
-| 贴吧 | 原生 | `core/parsers/tieba.py` | 默认官方页面元数据；可选详情 API 获取楼主正文与媒体 |
-| 小黑盒 | 原生 | `core/parsers/xiaoheihe.py` | 帖子/游戏卡片；Cookie 可用时调用签名接口 |
-| 微信视频号、QQ音乐、酷狗音乐、汽水音乐、通用网页 AI 总结 | 已移除 | - | 不注册路由、配置项或命令 |
+| 小黑盒 | 原生 | `core/parsers/xiaoheihe.py` | 帖子/游戏卡片；游戏使用公开详情接口，Cookie 可用时帖子调用签名接口 |
+| 贴吧、微信视频号、QQ音乐、酷狗音乐、汽水音乐、通用网页 AI 总结 | 已移除 | - | 不注册路由、配置项或命令；贴吧官方页面不稳定且正文依赖非官方服务，因此不保留虚假可用入口 |
 | 点歌、云盘上传、扫码登录 | 不适用 | - | 强依赖 Yunzai 群文件、Redis 与管理员模型 |
 | 插件自更新 | 不适用 | - | 由 AstrBot 插件管理器负责 |
 | Redis 信任用户/海外开关 | 不适用 | - | 改用 AstrBot 配置与会话开关 |

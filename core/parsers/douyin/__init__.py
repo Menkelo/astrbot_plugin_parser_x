@@ -11,6 +11,7 @@ from astrbot.core.config.astrbot_config import AstrBotConfig
 
 from ...comment_canvas import SocialCommentCanvas
 from ...comment_settings import CommentSettings
+from ...data import ImageContent
 from ...download import Downloader
 from ...html_renderer import HtmlRenderService
 from ...utils import cookies_str_to_netscape
@@ -625,17 +626,21 @@ class DouyinParser(BaseParser):
             ext_headers=self.ios_headers,
         )
         comment_cover = meta.cover_url or (image_urls[0] if image_urls else None)
+        extra = self._comment_extra(
+            meta.id or vid,
+            title=meta.desc,
+            cover=comment_cover,
+            owner=aweme.get("author") if isinstance(aweme, dict) else None,
+        )
+        if contents and all(isinstance(item, ImageContent) for item in contents):
+            extra["render_text_card"] = True
         return self.result(
             title=meta.desc,
             author=author,
             contents=contents,
             timestamp=meta.create_time,
-            extra=self._comment_extra(
-                meta.id or vid,
-                title=meta.desc,
-                cover=comment_cover,
-                owner=aweme.get("author") if isinstance(aweme, dict) else None,
-            ),
+            url=f"https://www.douyin.com/video/{meta.id or vid}",
+            extra=extra,
         )
 
     async def parse_slides(self, video_id: str):
@@ -715,17 +720,21 @@ class DouyinParser(BaseParser):
             ext_headers=self.android_headers,
         )
 
+        extra = self._comment_extra(
+            video_id,
+            title=slides.desc,
+            cover=comment_cover,
+            owner={"nickname": slides.name},
+        )
+        if contents:
+            extra["render_text_card"] = True
         return self.result(
             title=slides.desc,
             author=author,
             contents=contents,
             timestamp=slides.create_time,
-            extra=self._comment_extra(
-                video_id,
-                title=slides.desc,
-                cover=comment_cover,
-                owner={"nickname": slides.name},
-            ),
+            url=f"https://www.douyin.com/note/{video_id}",
+            extra=extra,
         )
 
     async def _parse_with_ytdlp(self, vid: str):

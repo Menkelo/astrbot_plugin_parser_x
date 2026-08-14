@@ -396,6 +396,11 @@ class XiaoHongShuParser(BaseParser):
             contents.extend(self.create_image_contents(image_urls))
 
         author = self.create_author(note_detail.nickname, note_detail.avatar_url)
+        extra = {}
+        if contents and not note_detail.video_url:
+            extra["render_text_card"] = True
+            if note_detail.avatar_url:
+                extra["text_card_avatar"] = note_detail.avatar_url
 
         return self.result(
             title=note_detail.title,
@@ -404,6 +409,7 @@ class XiaoHongShuParser(BaseParser):
             contents=contents,
             timestamp=note_detail.time // 1000 if note_detail.time else None,
             url=final_url,
+            extra=extra,
         )
 
     def _process_discovery_data(
@@ -483,6 +489,12 @@ class XiaoHongShuParser(BaseParser):
         elif img_urls := note_data_obj.image_urls:
             contents.extend(self.create_image_contents(img_urls))
 
+        extra = {}
+        if contents and not note_data_obj.video_url:
+            extra["render_text_card"] = True
+            if note_data_obj.user.avatar:
+                extra["text_card_avatar"] = note_data_obj.user.avatar
+
         return self.result(
             title=note_data_obj.title,
             author=self.create_author(
@@ -492,6 +504,7 @@ class XiaoHongShuParser(BaseParser):
             text=note_data_obj.desc,
             timestamp=note_data_obj.time // 1000 if note_data_obj.time else None,
             url=final_url,
+            extra=extra,
         )
 
     def _extract_initial_state_json(self, html: str) -> dict[str, Any]:

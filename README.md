@@ -21,8 +21,7 @@ Parser X 是面向 AstrBot `aiocqhttp`（OneBot v11）的国内平台分享链�
   作者点赞和首条楼中楼。
 - 小红书：视频、图片和图文笔记。
 - 米游社：文章正文、图片与视频。
-- 贴吧：官方页面元数据；可选详情 API 提取楼主正文和媒体。
-- 小黑盒：帖子与游戏卡片；配置 Cookie 后使用原生签名接口。
+- 小黑盒：帖子与游戏卡片；公开游戏详情无需 Cookie，配置 Cookie 后可进一步读取帖子正文与媒体。
 
 ### yt-dlp 兼容层
 
@@ -34,6 +33,8 @@ Parser X 是面向 AstrBot `aiocqhttp`（OneBot v11）的国内平台分享链�
 
 插件不注册 TikTok、Twitter/X、Instagram、YouTube、Apple Music、Spotify 等国外平台路由，
 也不注册微信视频号、QQ 音乐、酷狗音乐、汽水音乐和通用网页 AI 总结功能。
+贴吧同样不再注册：官方帖子页目前只稳定返回小程序壳，完整正文依赖非官方服务，无法作为
+可靠的平台支持保留。
 
 各平台均可在 AstrBot 插件配置页单独启停。完整的上游功能映射和未移植项见
 [docs/UPSTREAM_COMPATIBILITY.md](docs/UPSTREAM_COMPATIBILITY.md)。
@@ -71,7 +72,6 @@ Chromium。
 - `cookies.weibo_cookie`：可选微博登录态；公开热门评论通常无需配置。
 - `cookies.ytdlp_cookie_file`：Netscape 格式 Cookie 文件，用于需要登录的平台。
 - `cookies.xiaoheihe_cookie`：小黑盒原生接口登录态；留空时仅解析公开页面信息。
-- `integrations.tieba_api_base`：可选贴吧详情服务；留空时不依赖第三方接口。
 - `comments.bilibili`、`comments.douyin`、`comments.weibo`：各平台评论区开关。
 - `comments.display_count`：最多展示的热门评论总数。
 - `comments.timeout`：评论抓取、Canvas 渲染和缓存生成的总超时。

@@ -41,11 +41,11 @@ class TextCardRenderer:
         title: str | None = None,
         timestamp_text: str | None = None,
     ):
-        avatar_html = (
-            f'<img class="avatar" src="{escape(author_avatar)}" alt="">'
-            if author_avatar
-            else '<div class="avatar avatar-ph"></div>'
-        )
+        avatar_html = ""
+        if author_avatar:
+            avatar_html = f'<img class="avatar" src="{escape(author_avatar)}" alt="">'
+        elif author_name:
+            avatar_html = '<div class="avatar avatar-ph"></div>'
         author_html = (
             f'<div class="author">{escape(author_name)}</div>' if author_name else ""
         )
@@ -54,8 +54,16 @@ class TextCardRenderer:
             if timestamp_text
             else ""
         )
+        profile_html = ""
+        if avatar_html or author_html or time_html:
+            profile_html = (
+                '<div class="profile">'
+                f'{avatar_html}<div class="author-block">'
+                f"{author_html}{time_html}</div></div>"
+            )
         title_html = f'<div class="title">{escape(title)}</div>' if title else ""
         text_html = self._render_text_html(text)
+        text_block = f'<div class="text">{text_html}</div>' if text else ""
 
         html = f"""
         <!doctype html>
@@ -193,15 +201,9 @@ class TextCardRenderer:
             <div class="meta">
               <div class="platform">{escape(platform_name)}</div>
             </div>
-            <div class="profile">
-              {avatar_html}
-              <div class="author-block">
-                {author_html}
-                {time_html}
-              </div>
-            </div>
+            {profile_html}
             {title_html}
-            <div class="text">{text_html}</div>
+            {text_block}
             <div class="footer">{escape(COMMENT_FOOTER_BRAND)}</div>
           </div>
 
