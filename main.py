@@ -28,6 +28,7 @@ from .core.clean import CacheCleaner
 from .core.comment_settings import parse_bool
 from .core.data import (
     AudioContent,
+    DeliveryBatch,
     DynamicContent,
     FileContent,
     GraphicsContent,
@@ -420,6 +421,37 @@ class ParserXPlugin(Star):
         if plan is None:
             return
 
+        batches = list(plan.batches)
+        body = (result.text or "").strip()
+        if result.platform.name == "weibo" and body:
+            planned_text = "\n".join(
+                part
+                for batch in batches
+                for part in batch.parts
+                if isinstance(part, str)
+            )
+            normalized_body = re.sub(r"\s+", " ", body).strip()
+            normalized_planned = re.sub(r"\s+", " ", planned_text).strip()
+            if normalized_body not in normalized_planned:
+                if (
+                    batches
+                    and batches[0].mode == "direct"
+                    and not batches[0].reply_original
+                    and batches[0].parts
+                    and all(isinstance(part, str) for part in batches[0].parts)
+                ):
+                    first = batches[0]
+                    first_parts = list(first.parts)
+                    first_parts[0] = f"{first_parts[0].rstrip()}\n{body}".strip()
+                    batches[0] = DeliveryBatch(
+                        first_parts,
+                        mode=first.mode,
+                        reply_original=first.reply_original,
+                    )
+                else:
+                    batches.insert(0, DeliveryBatch([f"识别：微博\n{body}"]))
+                logger.warning("微博投递计划缺少正文，已自动补回")
+
         show_download_fail_tip = self._show_download_fail_tip()
         path_map: dict[int, tuple[Path | None, str | None]] = {}
 
@@ -445,7 +477,7 @@ class ParserXPlugin(Star):
                 except Exception as exc:
                     logger.warning(f"平台消息逐段发送失败: {exc}")
 
-        for batch in plan.batches:
+        for batch in batches:
             pending_media = [
                 part
                 for part in batch.parts

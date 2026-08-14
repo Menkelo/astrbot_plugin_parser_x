@@ -315,6 +315,10 @@ def test_domestic_parser_helpers_cover_new_routes():
         )
         == "识别：微博\n完整正文还有后续"
     )
+    assert WeiboParser._extract_detail_status(
+        '<script>$render_data = [{"status":{"id":"1",'
+        '"text":"<p>详情页正文</p>"}}][0]</script>'
+    ) == {"id": "1", "text": "<p>详情页正文</p>"}
 
 
 def test_image_post_parsers_use_shared_cards_and_keep_canonical_urls(tmp_path):
@@ -1643,6 +1647,100 @@ def test_weibo_long_post_fetches_complete_body(tmp_path):
     assert result.delivery.batches[0].parts == ["识别：微博\n完整长微博正文"]
 
 
+def test_weibo_recovers_missing_api_body_from_authenticated_detail(tmp_path):
+    calls = []
+
+    class FakeResponse:
+        status_code = 200
+
+        def __init__(self, *, payload=None, text=""):
+            self.payload = payload
+            self.text = text
+
+        def json(self):
+            return self.payload
+
+    class FakeClient:
+        async def get(self, url, **kwargs):
+            calls.append((url, kwargs["headers"].get("Cookie")))
+            if "/statuses/show" in url:
+                return FakeResponse(
+                    payload={
+                        "ok": 1,
+                        "data": {
+                            "id": "123",
+                            "text": "",
+                            "user": {"id": "42", "screen_name": "作者"},
+                        },
+                    }
+                )
+            return FakeResponse(
+                text=(
+                    '<script>$render_data = [{"status":{"id":"123",'
+                    '"text":"<p>详情页补回的正文</p>",'
+                    '"user":{"id":"42","screen_name":"作者"}}}][0]</script>'
+                )
+            )
+
+        async def close(self):
+            return None
+
+    async def run():
+        parser = WeiboParser(
+            {
+                "cache_dir": str(tmp_path),
+                "cookies": {"weibo_cookie": "SUB=test"},
+                "comments": {"weibo": False},
+            },
+            object(),
+        )
+        assert "Cookie" not in parser.headers
+        assert parser._request_headers()["Cookie"] == "SUB=test"
+        parser._session = FakeClient()
+        try:
+            keyword, searched = parser.search_url("https://m.weibo.cn/detail/123")
+            return await parser.parse(keyword, searched)
+        finally:
+            await parser.close_session()
+
+    result = asyncio.run(run())
+    assert result.text == "详情页补回的正文"
+    assert result.delivery is not None
+    assert result.delivery.batches[0].parts == ["识别：微博\n详情页补回的正文"]
+    assert calls == [
+        ("https://m.weibo.cn/statuses/show?id=123", "SUB=test"),
+        ("https://m.weibo.cn/detail/123", "SUB=test"),
+    ]
+
+
+def test_weibo_keeps_original_body_for_reposts(tmp_path):
+    async def run():
+        parser = WeiboParser(
+            {
+                "cache_dir": str(tmp_path),
+                "cookies": {},
+                "comments": {"weibo": False},
+            },
+            object(),
+        )
+        try:
+            return await parser._resolve_body_text(
+                {
+                    "text": "转发微博",
+                    "retweeted_status": {
+                        "id": "456",
+                        "text": "<p>不能被吞掉的原微博正文</p>",
+                        "user": {"screen_name": "原作者"},
+                    },
+                },
+                "123",
+            )
+        finally:
+            await parser.close_session()
+
+    assert asyncio.run(run()) == "转发自 @原作者：不能被吞掉的原微博正文"
+
+
 def test_weibo_comment_normalization_preserves_html_and_nested_reply(tmp_path):
     class FakeParser:
         headers = {}
@@ -2286,6 +2384,57 @@ def test_delivery_plan_sends_weibo_body_before_single_image_reply(tmp_path):
     assert isinstance(event.sent[1][0], Reply)
     assert event.sent[1][0].id == 9753
     assert isinstance(event.sent[1][1], MessageImage)
+
+
+def test_delivery_plan_repairs_missing_weibo_body():
+    from astrbot_plugin_parser_x.core.data import (
+        DeliveryBatch,
+        DeliveryPlan,
+        ParseResult,
+        Platform,
+    )
+    from astrbot_plugin_parser_x.main import ParserXPlugin
+
+    plugin = object.__new__(ParserXPlugin)
+    plugin.config = {"behavior": {"show_download_fail_tip": True}}
+    plugin._background_tasks = set()
+
+    class Event:
+        message_obj = SimpleNamespace(message_id=9754)
+
+        def __init__(self):
+            self.sent = []
+
+        @staticmethod
+        def get_sender_id():
+            return "42"
+
+        @staticmethod
+        def get_sender_name():
+            return "用户"
+
+        @staticmethod
+        def chain_result(chain):
+            return chain
+
+        @staticmethod
+        def plain_result(text):
+            return [Plain(text)]
+
+        async def send(self, result):
+            self.sent.append(result)
+
+    result = ParseResult(
+        platform=Platform(name="weibo", display_name="微博"),
+        text="必须补回的微博正文",
+        delivery=DeliveryPlan([DeliveryBatch(["识别：微博"])]),
+    )
+    event = Event()
+    asyncio.run(plugin._send_parse_result(event, result))
+
+    assert len(event.sent) == 1
+    assert isinstance(event.sent[0][0], Plain)
+    assert event.sent[0][0].text == "识别：微博\n必须补回的微博正文"
 
 
 def test_delivery_plan_sends_body_before_waiting_for_media(tmp_path):

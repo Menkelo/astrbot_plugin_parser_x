@@ -1,3 +1,4 @@
+import json
 import re
 from email.utils import parsedate_to_datetime
 from html import unescape
@@ -59,6 +60,12 @@ class WeiboParser(BaseParser):
     def set_render_service(self, render_service: HtmlRenderService) -> None:
         self.render_service = render_service
         self.comment_canvas.render_service = render_service
+
+    def _request_headers(self) -> dict[str, str]:
+        headers = dict(self.headers)
+        if self.cookie:
+            headers["Cookie"] = self.cookie
+        return headers
 
     def _comment_extra(
         self,
@@ -142,12 +149,128 @@ class WeiboParser(BaseParser):
                 data.get("text_raw"),
             ]
         )
-        for candidate in candidates:
-            if text := cls._html_to_plain_text(candidate):
-                return text
-        return ""
+        texts = [
+            text
+            for candidate in candidates
+            if (text := cls._html_to_plain_text(candidate))
+        ]
+        return max(texts, key=len, default="")
 
-    async def _resolve_body_text(self, data: dict, bid: str) -> str:
+    @staticmethod
+    def _looks_like_status_data(value: object) -> bool:
+        return isinstance(value, dict) and any(
+            key in value
+            for key in (
+                "id",
+                "mid",
+                "text",
+                "text_raw",
+                "longText",
+                "status_title",
+                "pics",
+                "user",
+            )
+        )
+
+    @classmethod
+    def _find_status_data(cls, value: object) -> dict | None:
+        if not isinstance(value, dict):
+            return None
+
+        status = value.get("status")
+        if cls._looks_like_status_data(status):
+            return status
+        if cls._looks_like_status_data(value):
+            return value
+
+        for key in ("data", "mblog"):
+            nested = value.get(key)
+            if found := cls._find_status_data(nested):
+                return found
+        return None
+
+    @classmethod
+    def _extract_detail_status(cls, html: str) -> dict | None:
+        if not html:
+            return None
+
+        decoder = json.JSONDecoder()
+        sources = (html, unescape(html))
+        for source in sources:
+            for marker in re.finditer(r'"status"\s*:\s*', source):
+                try:
+                    value, _ = decoder.raw_decode(source[marker.end() :])
+                except (json.JSONDecodeError, TypeError):
+                    continue
+                if found := cls._find_status_data({"status": value}):
+                    return found
+
+            for marker in re.finditer(r"\$render_data\s*=\s*", source):
+                try:
+                    value, _ = decoder.raw_decode(source[marker.end() :])
+                except (json.JSONDecodeError, TypeError):
+                    continue
+                if isinstance(value, list):
+                    for item in value:
+                        if found := cls._find_status_data(item):
+                            return found
+                elif found := cls._find_status_data(value):
+                    return found
+        return None
+
+    async def _fetch_detail_status(self, bid: str) -> dict | None:
+        try:
+            response = await self.client.get(
+                f"https://m.weibo.cn/detail/{bid}",
+                headers=self._request_headers(),
+                timeout=8,
+            )
+            if response.status_code != 200:
+                return None
+            return self._extract_detail_status(response.text)
+        except Exception as exc:
+            logger.debug(f"[Weibo] 获取详情页正文失败: {exc}")
+            return None
+
+    @staticmethod
+    def _merge_status_data(primary: dict, fallback: dict) -> dict:
+        merged = dict(primary)
+        for key, value in fallback.items():
+            if value not in (None, "", [], {}):
+                merged[key] = value
+        return merged
+
+    async def _fetch_status_data(self, bid: str) -> dict:
+        api_error = ""
+        try:
+            response = await self.client.get(
+                f"https://m.weibo.cn/statuses/show?id={bid}",
+                headers=self._request_headers(),
+                timeout=8,
+            )
+            if response.status_code == 200:
+                payload = response.json()
+                if isinstance(payload, dict) and payload.get("ok") == 1:
+                    data = payload.get("data") or {}
+                    if isinstance(data, dict) and data:
+                        if self._extract_body_text(data):
+                            return data
+                        if detail := await self._fetch_detail_status(bid):
+                            return self._merge_status_data(data, detail)
+                        return data
+                api_error = str(
+                    payload.get("msg") if isinstance(payload, dict) else payload
+                )
+            else:
+                api_error = f"HTTP {response.status_code}"
+        except Exception as exc:
+            api_error = str(exc)
+
+        if detail := await self._fetch_detail_status(bid):
+            return detail
+        raise ParseException(f"微博 API 请求失败: {api_error or '未获取到微博数据'}")
+
+    async def _resolve_single_body_text(self, data: dict, bid: str) -> str:
         inline_long_text = self._extract_body_text(
             {
                 "longText": data.get("longText"),
@@ -165,7 +288,7 @@ class WeiboParser(BaseParser):
         try:
             response = await self.client.get(
                 f"https://m.weibo.cn/statuses/extend?id={status_id}",
-                headers=self.headers,
+                headers=self._request_headers(),
                 timeout=8,
             )
             if response.status_code != 200:
@@ -179,6 +302,37 @@ class WeiboParser(BaseParser):
         except Exception as exc:
             logger.debug(f"[Weibo] 获取长微博正文失败，使用摘要正文: {exc}")
         return fallback
+
+    async def _resolve_body_text(self, data: dict, bid: str) -> str:
+        text = await self._resolve_single_body_text(data, bid)
+        retweeted = data.get("retweeted_status")
+        if not isinstance(retweeted, dict):
+            return text or self._html_to_plain_text(data.get("status_title"))
+
+        retweeted_bid = str(
+            retweeted.get("id") or retweeted.get("mid") or retweeted.get("bid") or ""
+        ).strip()
+        retweeted_text = await self._resolve_single_body_text(
+            retweeted,
+            retweeted_bid,
+        )
+        if not retweeted_text:
+            return text or self._html_to_plain_text(data.get("status_title"))
+
+        retweeted_user = retweeted.get("user") or {}
+        retweeted_name = (
+            str(retweeted_user.get("screen_name") or "").strip()
+            if isinstance(retweeted_user, dict)
+            else ""
+        )
+        original = (
+            f"转发自 @{retweeted_name}：{retweeted_text}"
+            if retweeted_name
+            else f"转发微博：{retweeted_text}"
+        )
+        if text and text not in {"转发微博", "转发"}:
+            return f"{text}\n\n{original}"
+        return original
 
     @staticmethod
     def _delivery_plan(
@@ -211,29 +365,8 @@ class WeiboParser(BaseParser):
         bid = searched.group(1)
         if "/tv/show/" in searched.group(0):
             bid = self._mid_to_bid(bid)
-        url = f"https://m.weibo.cn/statuses/show?id={bid}"
-
-        logger.debug(f"[Weibo] 尝试 API 解析: {url}")
-
-        try:
-            resp = await self.client.get(url, headers=self.headers, timeout=8)
-            if resp.status_code != 200:
-                raise ParseException(f"微博 API 请求失败: HTTP {resp.status_code}")
-
-            data = resp.json()
-        except ParseException:
-            raise
-        except Exception as e:
-            raise ParseException(f"连接微博 API 失败: {e}") from e
-
-        if not isinstance(data, dict) or data.get("ok") != 1:
-            raise ParseException(
-                f"微博 API 返回错误: {data.get('msg') if isinstance(data, dict) else data}"
-            )
-
-        data = data.get("data", {})
-        if not data:
-            raise ParseException("未获取到微博数据")
+        logger.debug(f"[Weibo] 尝试解析微博: {bid}")
+        data = await self._fetch_status_data(bid)
 
         user = data.get("user", {})
         author_name = user.get("screen_name", "微博用户")
@@ -256,11 +389,31 @@ class WeiboParser(BaseParser):
             except Exception:
                 pass
 
-        static_pic_urls = self._collect_static_pic_urls(data)
+        media_sources = [data]
+        if isinstance(data.get("retweeted_status"), dict):
+            media_sources.append(data["retweeted_status"])
+
+        static_pic_urls = []
+        seen_pic_urls: set[str] = set()
+        for media_source in media_sources:
+            for pic_url in self._collect_static_pic_urls(media_source):
+                if pic_url in seen_pic_urls:
+                    continue
+                seen_pic_urls.add(pic_url)
+                static_pic_urls.append(pic_url)
+
+        video_items = []
+        seen_video_urls: set[str] = set()
+        for media_source in media_sources:
+            for video_url, duration in self._collect_video_items(media_source):
+                key = self._normalize_video_url_key(video_url)
+                if key in seen_video_urls:
+                    continue
+                seen_video_urls.add(key)
+                video_items.append((video_url, duration))
+
         video_contents = []
-        for index, (video_url, duration) in enumerate(
-            self._collect_video_items(data), start=1
-        ):
+        for index, (video_url, duration) in enumerate(video_items, start=1):
             video_task = self.downloader.download_video(
                 video_url,
                 video_name=f"weibo_{bid}_{index}.mp4",
