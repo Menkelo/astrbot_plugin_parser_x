@@ -56,6 +56,10 @@ from core.parsers.miyoushe_comment import MiyousheCommentFeed
 from core.parsers.weibo_comment import WeiboCommentFeed
 from core.parsers.xiaoheihe_comment import XiaoheiheCommentFeed
 from core.parsers.ytdlp import AcFunParser
+from core.platform_emotes import (
+    build_miyoushe_emote_map,
+    build_xiaoheihe_emote_map,
+)
 from core.rendered_image import save_rendered_image
 from core.text_renderer import TextCardRenderer
 from core.utils import extract_json_url, generate_file_name
@@ -437,6 +441,115 @@ def test_image_post_parsers_use_shared_cards_and_keep_canonical_urls(tmp_path):
         assert result.extra["text_card_media"]
 
 
+def test_video_post_parsers_and_ytdlp_use_shared_cards(tmp_path):
+    from core.parsers.kuaishou import CdnUrl, Photo
+
+    class FakeDownloader:
+        def download_video(self, *_args, **_kwargs):
+            async def done():
+                output = tmp_path / "video.mp4"
+                output.write_bytes(b"video")
+                return output
+
+            return asyncio.create_task(done())
+
+        async def ytdlp_extract_info(self, *_args, **_kwargs):
+            return VideoInfo(
+                title="兼容层视频",
+                uploader="作者",
+                duration=12,
+                thumbnail="https://img.example.com/ytdlp.jpg",
+                description="视频正文",
+            )
+
+    async def run():
+        downloader = FakeDownloader()
+        kuaishou = KuaiShouParser({"cache_dir": str(tmp_path)}, downloader)
+        kuaishou_result = kuaishou._build_result_from_photo(
+            Photo(
+                caption="快手视频",
+                timestamp=1_700_000_000_000,
+                user_name="作者",
+                cover_urls=[
+                    CdnUrl(cdn="img.example.com", url="https://img.example.com/k.jpg")
+                ],
+                main_mv_urls=[
+                    CdnUrl(
+                        cdn="video.example.com",
+                        url="https://video.example.com/k.mp4",
+                    )
+                ],
+            ),
+            "https://www.kuaishou.com/short-video/demo",
+        )
+
+        douyin = DouyinParser(
+            {
+                "cache_dir": str(tmp_path),
+                "cookies": {},
+                "comments": {"douyin": False},
+            },
+            downloader,
+        )
+        douyin_result = douyin._build_result_from_aweme(
+            {
+                "aweme_id": "123",
+                "desc": "抖音视频",
+                "create_time": 1_700_000_000,
+                "author": {"nickname": "作者"},
+                "video": {
+                    "play_addr": {"url_list": ["https://video.example.com/d.mp4"]},
+                    "cover": {"url_list": ["https://img.example.com/d.jpg"]},
+                    "duration": 12,
+                },
+            },
+            "123",
+        )
+
+        xhs = XiaoHongShuParser({"cache_dir": str(tmp_path)}, downloader)
+        xhs_result = xhs._process_explore_data(
+            {
+                "type": "video",
+                "title": "小红书视频",
+                "desc": "小红书正文",
+                "time": 1_700_000_000_000,
+                "user": {
+                    "nickname": "作者",
+                    "avatar": "https://img.example.com/avatar.jpg",
+                },
+                "imageList": [{"urlDefault": "https://img.example.com/x.jpg"}],
+                "video": {
+                    "media": {
+                        "stream": {"h264": [{"url": "https://video.example.com/x.mp4"}]}
+                    }
+                },
+            },
+            "https://www.xiaohongshu.com/explore/demo",
+        )
+
+        acfun = AcFunParser({"cache_dir": str(tmp_path)}, downloader)
+        keyword, searched = acfun.search_url("https://www.acfun.cn/v/ac123")
+        ytdlp_result = await acfun.parse(keyword, searched)
+
+        results = (kuaishou_result, douyin_result, xhs_result, ytdlp_result)
+        await asyncio.gather(
+            *(content.get_path() for result in results for content in result.contents)
+        )
+        await asyncio.gather(
+            douyin.close_session(),
+            kuaishou.close_session(),
+            xhs.close_session(),
+            acfun.close_session(),
+        )
+        return results
+
+    results = asyncio.run(run())
+    for result in results:
+        assert result.extra["render_text_card"] is True
+        assert result.extra["video_separate_from_card"] is True
+        assert "视频" in result.extra["card_kind"]
+
+
 def test_xiaoheihe_api_share_route_uses_redirect_metadata(tmp_path):
     share_url = "https://api.xiaoheihe.cn/v3/bbs/app/api/web/share?link_id=123456789"
 
@@ -496,6 +609,128 @@ def test_xiaoheihe_rich_text_extracts_html_body_and_inline_images():
         ("image", "https://img.example.com/a.jpg"),
         ("text", "后文"),
     ]
+
+
+def test_xiaoheihe_rich_text_ignores_android_cache_paths():
+    local_path = (
+        "/storage/emulated/0/Android/data/com.max.xiaoheihe/cache/"
+        "optimizer_output/298def8347f203c8599056f548bdd91116acba1a27a72b2313cc434ae9079599"
+        "@1280.0x1280.0.jpeg"
+    )
+    blocks = XiaoheiheParser.extract_rich_blocks(
+        [
+            {
+                "type": "text",
+                "text": "小黑盒学的，便宜了好多[cube_开心][cube_开心]",
+                "optimizer_output": local_path,
+            },
+            {"content": f"补充正文\n{local_path}", "local_path": local_path},
+            {"html": f"<p>HTML 正文</p><p>{local_path}</p>"},
+        ]
+    )
+
+    assert blocks == [
+        (
+            "text",
+            ("小黑盒学的，便宜了好多[cube_开心][cube_开心]\n\n补充正文\n\nHTML 正文"),
+        )
+    ]
+    assert local_path not in repr(blocks)
+
+
+def test_platform_emotes_render_in_cards_and_comment_rich_text():
+    xiaoheihe_map = build_xiaoheihe_emote_map(
+        {
+            "result": {
+                "emoji_groups": [
+                    {
+                        "group_code": "cube",
+                        "emojis": [
+                            {
+                                "code": "开心",
+                                "img": "https://imgheybox.max-c.com/heybox/emoji/cube_21.png",
+                            }
+                        ],
+                    }
+                ]
+            }
+        }
+    )
+    miyoushe_map = build_miyoushe_emote_map(
+        {
+            "data": {
+                "list": [
+                    {
+                        "list": [
+                            {
+                                "name": "米游姬-期待",
+                                "icon": "https://img.example.com/miyoushe.png",
+                            }
+                        ]
+                    }
+                ]
+            }
+        }
+    )
+
+    html = TextCardRenderer(HtmlRenderService()).build_html(
+        platform_key="xiaoheihe",
+        platform_name="小黑盒",
+        author_name="作者",
+        title="标题",
+        text="便宜了好多[cube_开心]",
+        emotes=xiaoheihe_map,
+    )
+    assert 'class="inline-emote"' in html
+    assert "cube_21.png" in html
+
+    xiaoheihe_parts = XiaoheiheCommentFeed._rich_text(
+        "评论[cube_开心]",
+        xiaoheihe_map,
+    )
+    assert any(part.kind == "emote" and part.url for part in xiaoheihe_parts)
+
+    miyoushe_parts = MiyousheCommentFeed._rich_text(
+        {
+            "content": "正文_(米游姬 期待)",
+            "struct_content": json.dumps(
+                [
+                    {"insert": "正文_(米游姬 期待)"},
+                    {
+                        "insert": {
+                            "backup_text": "[自定义表情]",
+                            "custom_emoticon": {
+                                "url": "https://img.example.com/custom.gif"
+                            },
+                        }
+                    },
+                ],
+                ensure_ascii=False,
+            ),
+        },
+        miyoushe_map,
+    )
+    emotes = [part for part in miyoushe_parts if part.kind == "emote"]
+    assert [part.url for part in emotes] == ["https://img.example.com/miyoushe.png"]
+    assert (
+        MiyousheCommentFeed._custom_sticker(
+            {
+                "struct_content": json.dumps(
+                    [
+                        {
+                            "insert": {
+                                "backup_text": "[自定义表情]",
+                                "custom_emoticon": {
+                                    "url": "https://img.example.com/custom.gif"
+                                },
+                            }
+                        }
+                    ]
+                )
+            }
+        )
+        == "https://img.example.com/custom.gif"
+    )
 
 
 def test_xiaoheihe_app_link_retries_official_share_endpoint(tmp_path):
@@ -601,7 +836,7 @@ def test_xiaoheihe_api_preserves_rich_body_order_and_native_delivery(tmp_path):
                                 {
                                     "type": "html",
                                     "text": (
-                                        "<p>正文内容</p>"
+                                        "<p>正文内容[普通括号][cube_开心]</p>"
                                         '<img src="https://img.example.com/body.jpg">'
                                     ),
                                 }
@@ -642,11 +877,12 @@ def test_xiaoheihe_api_preserves_rich_body_order_and_native_delivery(tmp_path):
         )
 
     result = asyncio.run(run())
-    assert result.text == "帖子简介\n\n正文内容"
+    assert result.text == "帖子简介\n\n正文内容[普通括号][cube_开心]"
     assert len(result.contents) == 2
     assert result.author is not None and result.author.name == "作者"
     assert result.extra["render_text_card"] is True
-    assert result.extra["text_card_text"] == "帖子简介"
+    assert result.extra["text_card_text"] == "帖子简介\n\n正文内容[普通括号][cube_开心]"
+    assert result.extra["card_emotes"]["[cube_开心]"].endswith("cube_21.png")
     assert result.delivery is not None
     assert len(result.delivery.batches) == 2
     overview, body = result.delivery.batches
@@ -654,8 +890,9 @@ def test_xiaoheihe_api_preserves_rich_body_order_and_native_delivery(tmp_path):
     assert isinstance(overview.parts[0], ImageContent)
     assert "帖子标题" in overview.parts[1]
     assert body.mode == "forward"
-    assert body.parts[0] == "正文内容"
+    assert body.parts[0] == "正文内容[普通括号]"
     assert isinstance(body.parts[1], ImageContent)
+    assert isinstance(body.parts[2], ImageContent)
     assert "comment_task_factory" not in result.extra
     assert callable(result.extra["comment_document_task_factory"])
 
@@ -2573,8 +2810,8 @@ def test_comment_layout_cache_versions_invalidate_pre_fix_images():
     assert BiliCommentFeed.CACHE_VERSION == "bili_comment_v10_unified_minimal"
     assert DouyinCommentFeed.CACHE_VERSION == "douyin_comment_v9_unified_minimal"
     assert WeiboCommentFeed.CACHE_VERSION == "weibo_comment_v9_unified_minimal"
-    assert XiaoheiheCommentFeed.CACHE_VERSION == "xiaoheihe_comment_v2_unified_minimal"
-    assert MiyousheCommentFeed.CACHE_VERSION == "miyoushe_comment_v2_unified_minimal"
+    assert XiaoheiheCommentFeed.CACHE_VERSION == "xiaoheihe_comment_v3_platform_emotes"
+    assert MiyousheCommentFeed.CACHE_VERSION == "miyoushe_comment_v3_platform_emotes"
 
 
 def test_manifest_has_a_reviewable_upstream_baseline():
@@ -2924,8 +3161,10 @@ def test_delivery_card_stays_separate_from_rich_text_images_and_video(
     assert len(event.sent[1]) == 1
     assert isinstance(event.sent[1][0], MessageImage)
     assert isinstance(event.sent[2][0], Nodes)
+    assert len(event.sent[2][0].nodes) == 2
+    assert all(len(node.content) == 1 for node in event.sent[2][0].nodes)
     assert isinstance(event.sent[2][0].nodes[0].content[0], Plain)
-    assert isinstance(event.sent[2][0].nodes[0].content[1], MessageImage)
+    assert isinstance(event.sent[2][0].nodes[1].content[0], MessageImage)
     assert isinstance(event.sent[3][0], MessageVideo)
 
 
@@ -3663,11 +3902,10 @@ def test_multi_image_card_replies_before_source_image_forward(tmp_path):
     assert isinstance(event.sent[0][0], Reply)
     assert isinstance(event.sent[0][1], MessageImage)
     assert isinstance(event.sent[1][0], Nodes)
-    assert len(event.sent[1][0].nodes) == 1
-    assert len(event.sent[1][0].nodes[0].content) == 2
+    assert len(event.sent[1][0].nodes) == 2
+    assert all(len(node.content) == 1 for node in event.sent[1][0].nodes)
     assert all(
-        isinstance(segment, MessageImage)
-        for segment in event.sent[1][0].nodes[0].content
+        isinstance(node.content[0], MessageImage) for node in event.sent[1][0].nodes
     )
 
 

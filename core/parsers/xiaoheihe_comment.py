@@ -14,12 +14,17 @@ from ..comment_canvas import (
 )
 from ..constants import COMMENT_FOOTER_BRAND
 from ..data import ImageContent
+from ..platform_emotes import (
+    fallback_emote_map,
+    iter_emote_matches,
+    load_platform_emotes,
+)
 from ..utils import normalize_image_url
 from .social_comment_feed import SocialCommentFeedBase
 
 
 class XiaoheiheCommentFeed(SocialCommentFeedBase):
-    CACHE_VERSION = "xiaoheihe_comment_v2_unified_minimal"
+    CACHE_VERSION = "xiaoheihe_comment_v3_platform_emotes"
     PLATFORM_SLUG = "xiaoheihe"
     AVATAR_REFERER = "https://www.xiaoheihe.cn/"
 
@@ -40,23 +45,41 @@ class XiaoheiheCommentFeed(SocialCommentFeedBase):
         return unescape(text).strip()
 
     @classmethod
-    def _rich_text(cls, value: object) -> list[CommentRichPart]:
+    def _rich_text(
+        cls,
+        value: object,
+        emote_map: dict[str, str] | None = None,
+    ) -> list[CommentRichPart]:
         text = cls._plain(value)
         if not text:
             return []
         output: list[CommentRichPart] = []
-        for part in re.split(r"(\[[^\[\]\n]{1,32}\])", text):
-            if not part:
-                continue
-            if part.startswith("[") and part.endswith("]"):
-                output.append(CommentRichPart("emoji-text", text=part))
-            else:
-                chunks = part.split("\n")
-                for index, chunk in enumerate(chunks):
-                    if index:
-                        output.append(CommentRichPart("line-break"))
-                    if chunk:
-                        output.append(CommentRichPart("text", text=chunk))
+
+        def append_text(value_part: str) -> None:
+            chunks = value_part.split("\n")
+            for index, chunk in enumerate(chunks):
+                if index:
+                    output.append(CommentRichPart("line-break"))
+                if chunk:
+                    output.append(CommentRichPart("text", text=chunk))
+
+        catalog = emote_map or fallback_emote_map("xiaoheihe")
+        last = 0
+        for start, end, token, url in iter_emote_matches(
+            text,
+            "xiaoheihe",
+            catalog,
+        ):
+            append_text(text[last:start])
+            output.append(
+                CommentRichPart(
+                    "emote" if url else "emoji-text",
+                    text=token,
+                    url=url,
+                )
+            )
+            last = end
+        append_text(text[last:])
         return output
 
     @staticmethod
@@ -107,8 +130,9 @@ class XiaoheiheCommentFeed(SocialCommentFeedBase):
         owner_id: str,
         *,
         nested: bool = False,
+        emote_map: dict[str, str] | None = None,
     ) -> CommentEntry | None:
-        content = self._rich_text(item.get("text"))
+        content = self._rich_text(item.get("text"), emote_map)
         images = self._images(item)
         if not content and not images:
             return None
@@ -148,6 +172,7 @@ class XiaoheiheCommentFeed(SocialCommentFeedBase):
         cover: str | None,
         owner_id: str | int | None,
         total: int | None = None,
+        emote_map: dict[str, str] | None = None,
     ) -> CommentDocument | None:
         def floor_number(thread: dict) -> int:
             comments = thread.get("comment")
@@ -174,11 +199,20 @@ class XiaoheiheCommentFeed(SocialCommentFeedBase):
             raw_count += len(comments)
             if not comments:
                 continue
-            entry = self.adapt_comment(comments[0], owner_text)
+            entry = self.adapt_comment(
+                comments[0],
+                owner_text,
+                emote_map=emote_map,
+            )
             if entry is None:
                 continue
             for reply in comments[1:]:
-                nested = self.adapt_comment(reply, owner_text, nested=True)
+                nested = self.adapt_comment(
+                    reply,
+                    owner_text,
+                    nested=True,
+                    emote_map=emote_map,
+                )
                 if nested is not None:
                     entry.first_reply = nested
                     break
@@ -214,6 +248,7 @@ class XiaoheiheCommentFeed(SocialCommentFeedBase):
         owner_id: str | int | None,
         total: int | None = None,
     ) -> CommentDocument | None:
+        emote_map = await load_platform_emotes(self.parser, "xiaoheihe")
         document = self._build_document(
             link_id,
             threads,
@@ -221,6 +256,7 @@ class XiaoheiheCommentFeed(SocialCommentFeedBase):
             cover=cover,
             owner_id=owner_id,
             total=total,
+            emote_map=emote_map,
         )
         if document is not None:
             await self._embed_avatars(document.entries)
@@ -243,6 +279,7 @@ class XiaoheiheCommentFeed(SocialCommentFeedBase):
             cover=cover,
             owner_id=owner_id,
             total=total,
+            emote_map=fallback_emote_map("xiaoheihe"),
         )
         if document is None:
             return []

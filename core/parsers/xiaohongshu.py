@@ -419,34 +419,43 @@ class XiaoHongShuParser(BaseParser):
 
         contents = []
         note_image_urls = note_detail.image_urls
+        card_media_url = ""
 
         if video_url := note_detail.video_url:
             cover_url = note_image_urls[0] if note_image_urls else None
+            card_media_url = cover_url or ""
             contents.append(self.create_video_content(video_url, cover_url))
 
         elif image_urls := note_image_urls:
+            card_media_url = image_urls[0]
             contents.extend(self.create_image_contents(image_urls))
 
         author = self.create_author(note_detail.nickname, note_detail.avatar_url)
         extra = {}
-        if contents and not note_detail.video_url:
+        if contents:
             extra.update(
                 {
                     "render_text_card": True,
-                    "text_card_media": note_image_urls[0] if note_image_urls else "",
-                    "card_kind": "笔记 · 图文",
+                    "text_card_media": card_media_url,
+                    "card_kind": (
+                        "笔记 · 视频" if note_detail.video_url else "笔记 · 图文"
+                    ),
                     "card_author_badge": "作者",
                     "card_metrics": self._interaction_metrics(note_data),
                     "card_info": [
                         "正文完整保留",
                         *(
-                            [f"图片 {len(note_image_urls)} 张"]
+                            ["视频文件独立发送"]
+                            if note_detail.video_url
+                            else [f"图片 {len(note_image_urls)} 张"]
                             if note_image_urls
                             else []
                         ),
                     ],
                 }
             )
+            if note_detail.video_url:
+                extra["video_separate_from_card"] = True
             if note_detail.avatar_url:
                 extra["text_card_avatar"] = note_detail.avatar_url
 
@@ -519,6 +528,7 @@ class XiaoHongShuParser(BaseParser):
         note_data_obj = convert(note_data, type=NoteData)
 
         contents = []
+        card_media_url = ""
 
         if video_url := note_data_obj.video_url:
             if preload_data:
@@ -526,6 +536,7 @@ class XiaoHongShuParser(BaseParser):
                 img_urls = preload_obj.image_urls
             else:
                 img_urls = note_data_obj.image_urls
+            card_media_url = img_urls[0] if img_urls else ""
 
             contents.append(
                 self.create_video_content(
@@ -535,29 +546,34 @@ class XiaoHongShuParser(BaseParser):
             )
 
         elif img_urls := note_data_obj.image_urls:
+            card_media_url = img_urls[0]
             contents.extend(self.create_image_contents(img_urls))
 
         extra = {}
-        if contents and not note_data_obj.video_url:
+        if contents:
             extra.update(
                 {
                     "render_text_card": True,
-                    "text_card_media": note_data_obj.image_urls[0]
-                    if note_data_obj.image_urls
-                    else "",
-                    "card_kind": "笔记 · 图文",
+                    "text_card_media": card_media_url,
+                    "card_kind": (
+                        "笔记 · 视频" if note_data_obj.video_url else "笔记 · 图文"
+                    ),
                     "card_author_badge": "作者",
                     "card_metrics": self._interaction_metrics(note_data),
                     "card_info": [
                         "正文完整保留",
                         *(
-                            [f"图片 {len(note_data_obj.image_urls)} 张"]
+                            ["视频文件独立发送"]
+                            if note_data_obj.video_url
+                            else [f"图片 {len(note_data_obj.image_urls)} 张"]
                             if note_data_obj.image_urls
                             else []
                         ),
                     ],
                 }
             )
+            if note_data_obj.video_url:
+                extra["video_separate_from_card"] = True
             if note_data_obj.user.avatar:
                 extra["text_card_avatar"] = note_data_obj.user.avatar
 

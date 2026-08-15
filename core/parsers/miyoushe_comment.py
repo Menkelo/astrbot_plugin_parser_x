@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+import asyncio
 import json
-import re
 from dataclasses import dataclass
 
 from astrbot.api import logger
@@ -17,6 +17,11 @@ from ..comment_canvas import (
 )
 from ..constants import COMMENT_FOOTER_BRAND
 from ..data import ImageContent
+from ..platform_emotes import (
+    fallback_emote_map,
+    iter_emote_matches,
+    load_platform_emotes,
+)
 from ..utils import normalize_image_url
 from .social_comment_feed import SocialCommentFeedBase
 
@@ -30,7 +35,7 @@ class _RawMiyousheFeed:
 
 class MiyousheCommentFeed(SocialCommentFeedBase):
     COMMENT_URL = "https://bbs-api.miyoushe.com/post/wapi/getPostReplies"
-    CACHE_VERSION = "miyoushe_comment_v2_unified_minimal"
+    CACHE_VERSION = "miyoushe_comment_v3_platform_emotes"
     PLATFORM_SLUG = "miyoushe"
     AVATAR_REFERER = "https://www.miyoushe.com/"
 
@@ -100,24 +105,91 @@ class MiyousheCommentFeed(SocialCommentFeedBase):
         return "".join(parts).strip()
 
     @classmethod
-    def _rich_text(cls, reply: dict) -> list[CommentRichPart]:
-        text = cls._plain_content(reply)
-        if not text:
-            return []
+    def _rich_text(
+        cls,
+        reply: dict,
+        emote_map: dict[str, str] | None = None,
+    ) -> list[CommentRichPart]:
         output: list[CommentRichPart] = []
-        for part in re.split(r"(_\([^()\n]{1,48}\))", text):
-            if not part:
-                continue
-            if part.startswith("_(") and part.endswith(")"):
-                output.append(CommentRichPart("emoji-text", text=part))
-                continue
-            chunks = part.split("\n")
+
+        def append_text(value: str) -> None:
+            last = 0
+            for start, end, token, url in iter_emote_matches(
+                value,
+                "miyoushe",
+                catalog,
+            ):
+                append_plain(value[last:start])
+                output.append(
+                    CommentRichPart(
+                        "emote" if url else "emoji-text",
+                        text=token,
+                        url=url,
+                    )
+                )
+                last = end
+            append_plain(value[last:])
+
+        def append_plain(value: str) -> None:
+            chunks = value.split("\n")
             for index, chunk in enumerate(chunks):
                 if index:
                     output.append(CommentRichPart("line-break"))
                 if chunk:
                     output.append(CommentRichPart("text", text=chunk))
+
+        catalog = emote_map or fallback_emote_map("miyoushe")
+        raw = str(reply.get("struct_content") or "").strip()
+        if raw:
+            try:
+                structured = json.loads(raw)
+            except (TypeError, ValueError):
+                structured = None
+            if isinstance(structured, list):
+                handled = False
+                for item in structured:
+                    if not isinstance(item, dict):
+                        continue
+                    insert = item.get("insert")
+                    if isinstance(insert, str):
+                        append_text(insert)
+                        handled = True
+                        continue
+                    if not isinstance(insert, dict):
+                        continue
+                    custom = insert.get("custom_emoticon")
+                    if not isinstance(custom, dict):
+                        continue
+                    alt = str(insert.get("backup_text") or "[自定义表情]")
+                    url = normalize_image_url(custom.get("url")) or ""
+                    if not url:
+                        output.append(CommentRichPart("emoji-text", text=alt))
+                    handled = True
+                if handled:
+                    return output
+
+        text = cls._plain_content(reply)
+        if text:
+            append_text(text)
         return output
+
+    @staticmethod
+    def _custom_sticker(reply: dict) -> str:
+        raw = str(reply.get("struct_content") or "").strip()
+        if not raw:
+            return ""
+        try:
+            structured = json.loads(raw)
+        except (TypeError, ValueError):
+            return ""
+        for item in structured if isinstance(structured, list) else []:
+            insert = item.get("insert") if isinstance(item, dict) else None
+            custom = insert.get("custom_emoticon") if isinstance(insert, dict) else None
+            if not isinstance(custom, dict):
+                continue
+            if url := normalize_image_url(custom.get("url")):
+                return url
+        return ""
 
     @staticmethod
     def _author(item: dict, owner_id: str) -> CommentAuthor:
@@ -174,11 +246,13 @@ class MiyousheCommentFeed(SocialCommentFeedBase):
         owner_id: str,
         *,
         nested: bool = False,
+        emote_map: dict[str, str] | None = None,
     ) -> CommentEntry | None:
         reply = item.get("reply") or {}
-        content = self._rich_text(reply)
+        content = self._rich_text(reply, emote_map)
         images = self._images(item)
-        if not content and not images:
+        sticker = self._custom_sticker(reply)
+        if not content and not images and not sticker:
             return None
 
         reply_user = item.get("r_user") or {}
@@ -199,6 +273,7 @@ class MiyousheCommentFeed(SocialCommentFeedBase):
             author=self._author(item, owner_id),
             content=content,
             images=images,
+            sticker_image=sticker,
             time_text=self.time_text(
                 reply.get("updated_at") or reply.get("created_at")
             ),
@@ -218,20 +293,28 @@ class MiyousheCommentFeed(SocialCommentFeedBase):
         cover: str | None,
         owner_id: str | int | None,
     ) -> CommentDocument | None:
-        raw_feed = await self.fetch(post_id)
+        raw_feed, emote_map = await asyncio.gather(
+            self.fetch(post_id),
+            load_platform_emotes(self.parser, "miyoushe"),
+        )
         if not raw_feed.items:
             return None
 
         owner_text = str(owner_id or "")
         entries = []
         for item in raw_feed.items:
-            entry = self.adapt_comment(item, owner_text)
+            entry = self.adapt_comment(item, owner_text, emote_map=emote_map)
             if entry is None:
                 continue
             for reply in item.get("sub_replies") or []:
                 if not isinstance(reply, dict):
                     continue
-                nested = self.adapt_comment(reply, owner_text, nested=True)
+                nested = self.adapt_comment(
+                    reply,
+                    owner_text,
+                    nested=True,
+                    emote_map=emote_map,
+                )
                 if nested is not None:
                     entry.first_reply = nested
                     break

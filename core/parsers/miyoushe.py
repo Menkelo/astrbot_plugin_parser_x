@@ -22,6 +22,11 @@ from ..data import (
 )
 from ..exception import ParseException
 from ..html_renderer import HtmlRenderService
+from ..platform_emotes import (
+    contains_platform_emotes,
+    load_platform_emotes,
+    select_text_emotes,
+)
 from ..utils import normalize_image_url
 from .base import BaseParser, handle
 from .miyoushe_comment import MiyousheCommentFeed
@@ -290,6 +295,14 @@ class MiyousheParser(BaseParser):
             cover=cover_url,
             owner_id=owner_id,
         )
+        card_emotes = {}
+        if contains_platform_emotes(text, "miyoushe"):
+            emote_catalog = await load_platform_emotes(
+                self,
+                "miyoushe",
+                gids=post.get("game_id") or post.get("gids") or 2,
+            )
+            card_emotes = select_text_emotes(text, "miyoushe", emote_catalog)
         extra.update(
             {
                 "render_text_card": True,
@@ -297,6 +310,7 @@ class MiyousheParser(BaseParser):
                 "text_card_media": str(
                     cover_url or (post_image_urls[0] if post_image_urls else "")
                 ),
+                "card_emotes": card_emotes,
                 "card_kind": (
                     "文章 · 视频"
                     if video_contents

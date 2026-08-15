@@ -79,6 +79,18 @@ class YtDlpParser(BaseParser, ABC):
             contents = [VideoContent(task, duration=info.duration or 0)]
 
         logger.info(f"Parser X 使用 yt-dlp 适配 {self.platform.display_name}: {url}")
+        extra = {"adapter": "yt-dlp"}
+        if self.media_kind == "video":
+            extra.update(
+                {
+                    "render_text_card": True,
+                    "text_card_media": info.thumbnail or "",
+                    "card_kind": "视频",
+                    "card_author_badge": "作者",
+                    "card_info": ["视频文件独立发送"],
+                    "video_separate_from_card": True,
+                }
+            )
         return self.result(
             title=info.title,
             text=description or None,
@@ -86,7 +98,7 @@ class YtDlpParser(BaseParser, ABC):
             timestamp=info.timestamp,
             url=url,
             contents=contents,
-            extra={"adapter": "yt-dlp"},
+            extra=extra,
         )
 
 

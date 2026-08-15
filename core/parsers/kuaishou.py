@@ -155,6 +155,13 @@ class KuaiShouParser(BaseParser):
                 author=self.create_author(author),
                 contents=contents,
                 url=real_url,
+                extra={
+                    "render_text_card": True,
+                    "card_kind": "视频作品",
+                    "card_author_badge": "作者",
+                    "card_info": ["视频文件独立发送"],
+                    "video_separate_from_card": True,
+                },
             )
 
         raise ParseException("快手解析失败: 未找到视频信息")
@@ -162,6 +169,7 @@ class KuaiShouParser(BaseParser):
     def _build_result_from_photo(self, photo, url: str | None = None):
         contents = []
         video_url = photo.video_url
+        cover_url = photo.cover_url
         photo_image_urls = photo.img_urls
         single_image_url = photo.single_image_url
         if video_url:
@@ -169,7 +177,7 @@ class KuaiShouParser(BaseParser):
                 # BaseParser 已修改，create_video_content 会自动忽略传入的 cover
                 self.create_video_content(
                     video_url,
-                    photo.cover_url,
+                    cover_url,
                     photo.duration,
                     ext_headers=self.ios_headers,
                 )
@@ -189,20 +197,28 @@ class KuaiShouParser(BaseParser):
             photo.name, photo.head_url, ext_headers=self.ios_headers
         )
         extra = {}
-        if contents and not video_url:
+        if contents:
             extra.update(
                 {
                     "render_text_card": True,
                     "text_card_media": (
-                        photo_image_urls[0]
+                        cover_url
+                        if video_url
+                        else photo_image_urls[0]
                         if photo_image_urls
                         else single_image_url or ""
                     ),
-                    "card_kind": "图文作品",
+                    "card_kind": "视频作品" if video_url else "图文作品",
                     "card_author_badge": "作者",
-                    "card_info": [f"图片 {len(contents)} 张"],
+                    "card_info": (
+                        ["视频文件独立发送"]
+                        if video_url
+                        else [f"图片 {len(contents)} 张"]
+                    ),
                 }
             )
+            if video_url:
+                extra["video_separate_from_card"] = True
             if photo.head_url:
                 extra["text_card_avatar"] = photo.head_url
 

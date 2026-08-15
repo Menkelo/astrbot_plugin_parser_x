@@ -378,12 +378,13 @@ class ParserXPlugin(Star):
                     content_kind or "",
                     repr(result.extra.get("card_metrics")),
                     repr(result.extra.get("card_info")),
+                    repr(result.extra.get("card_emotes")),
                     author_badge or "",
                     comment_signature,
                     accent_color,
                     accent_soft,
                     accent_source,
-                    "text_card_v10_dynamic_header",
+                    "text_card_v11_platform_emotes",
                 ]
             ).encode("utf-8")
         ).hexdigest()[:12]
@@ -416,6 +417,7 @@ class ParserXPlugin(Star):
                 accent_color=accent_color,
                 accent_soft=accent_soft,
                 accent_source=accent_source,
+                emotes=result.extra.get("card_emotes"),
             )
 
         return ImageContent(out_path)
@@ -700,7 +702,12 @@ class ParserXPlugin(Star):
             if batch.mode == "forward":
                 for offset in range(0, len(segments), 20):
                     group = segments[offset : offset + 20]
-                    nodes = Nodes([Node(uin=node_uin, name=node_name, content=group)])
+                    nodes = Nodes(
+                        [
+                            Node(uin=node_uin, name=node_name, content=[segment])
+                            for segment in group
+                        ]
+                    )
                     try:
                         await event.send(event.chain_result([nodes]))
                     except Exception as exc:
@@ -956,28 +963,24 @@ class ParserXPlugin(Star):
                 # 先尝试合并转发；若 send_group_forward_msg 超时/失败（NapCat 上传多图
                 # 时较常见的 WebSocket API call timeout），降级为逐条发送，避免整条消息
                 # 因合并转发失败而完全发不出（此前图文/图集分支无兜底，超时即静默丢失）。
-                try:
+                for offset in range(0, len(segs), 20):
+                    group = segs[offset : offset + 20]
                     nodes = Nodes(
                         [
-                            Node(
-                                uin=node_uin,
-                                name=node_name,
-                                content=segs[offset : offset + 20],
-                            )
-                            for offset in range(0, len(segs), 20)
+                            Node(uin=node_uin, name=node_name, content=[segment])
+                            for segment in group
                         ]
                     )
-                    if nodes.nodes:
-                        await event.send(event.chain_result([nodes]))
-                    return
-                except Exception as e:
-                    logger.warning(f"合并转发发送失败，降级逐条发送: {e}")
-
-                for seg in segs:
                     try:
-                        await event.send(event.chain_result([seg]))
+                        await event.send(event.chain_result([nodes]))
                     except Exception as e:
-                        logger.warning(f"图片逐条发送失败: {e}")
+                        logger.warning(f"合并转发发送失败，降级逐条发送: {e}")
+                        for segment in group:
+                            try:
+                                await event.send(event.chain_result([segment]))
+                            except Exception as segment_exc:
+                                logger.warning(f"图片逐条发送失败: {segment_exc}")
+                return
 
         await process_main_content()
 

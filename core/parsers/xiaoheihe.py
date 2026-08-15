@@ -23,6 +23,12 @@ from ..data import (
 )
 from ..exception import ParseException
 from ..html_renderer import HtmlRenderService
+from ..platform_emotes import (
+    contains_platform_emotes,
+    iter_emote_matches,
+    load_platform_emotes,
+    select_text_emotes,
+)
 from ..utils import normalize_image_url
 from .base import BaseParser, handle
 from .metadata import parse_open_graph
@@ -232,6 +238,40 @@ class XiaoheiheParser(BaseParser):
             or any(host in low for host in ("heybox", "xiaoheihe", "img."))
         )
 
+    @staticmethod
+    def _is_local_media_reference(value: str) -> bool:
+        stripped = str(value or "").strip()
+        low_value = stripped.lower()
+        return bool(
+            low_value.startswith(
+                (
+                    "file://",
+                    "content://",
+                    "/storage/emulated/",
+                    "/sdcard/",
+                    "/data/user/",
+                    "/data/data/",
+                )
+            )
+            or re.match(r"^[a-z]:[\\/]", stripped, flags=re.IGNORECASE)
+            or (
+                stripped.startswith(("/", "\\"))
+                and re.search(
+                    r"\.(?:avif|gif|jpe?g|png|webp|bmp|mp4|mov|webm)$",
+                    stripped,
+                    flags=re.IGNORECASE,
+                )
+            )
+        )
+
+    @classmethod
+    def _without_local_media_lines(cls, value: object) -> str:
+        return "\n".join(
+            line
+            for line in str(value or "").splitlines()
+            if not cls._is_local_media_reference(line)
+        ).strip()
+
     @classmethod
     def _extract_html_content(cls, value: str) -> tuple[str, list[str]]:
         images: list[str] = []
@@ -370,6 +410,8 @@ class XiaoheiheParser(BaseParser):
 
         def append(kind: str, item: str) -> None:
             item = str(item or "").strip()
+            if kind == "text":
+                item = cls._without_local_media_lines(item)
             if not item:
                 return
             if kind == "image":
@@ -390,6 +432,8 @@ class XiaoheiheParser(BaseParser):
                 stripped = item.strip()
                 if not stripped:
                     return
+                if cls._is_local_media_reference(stripped):
+                    return
                 if stripped.startswith(("{", "[")):
                     try:
                         walk(json.loads(stripped))
@@ -403,7 +447,9 @@ class XiaoheiheParser(BaseParser):
                 if cls._is_image_url(stripped):
                     append("image", stripped)
                 else:
-                    append("text", stripped)
+                    cleaned = cls._without_local_media_lines(stripped)
+                    if cleaned:
+                        append("text", cleaned)
                 return
 
             if isinstance(item, list):
@@ -436,7 +482,18 @@ class XiaoheiheParser(BaseParser):
                     "size",
                 }:
                     continue
-                if isinstance(child, (str, dict, list)):
+                if isinstance(child, str) and low_key in {
+                    "text",
+                    "content",
+                    "description",
+                    "desc",
+                    "html",
+                    "caption",
+                    "value",
+                }:
+                    walk(child)
+                    continue
+                if isinstance(child, (dict, list)):
                     walk(child)
 
         walk(value)
@@ -531,7 +588,7 @@ class XiaoheiheParser(BaseParser):
                     if block not in rich_blocks:
                         rich_blocks.append(block)
 
-            description = str(link.get("description") or "").strip()
+            description = self._without_local_media_lines(link.get("description"))
             tags = []
             for item in link.get("hashtags") or link.get("content_tags") or []:
                 if not isinstance(item, dict):
@@ -560,6 +617,9 @@ class XiaoheiheParser(BaseParser):
             text = "\n\n".join(dict.fromkeys(text_parts)).strip()
             if len(text) > 6000:
                 text = f"{text[:5997]}..."
+            emote_catalog = {}
+            if contains_platform_emotes(text, "xiaoheihe"):
+                emote_catalog = await load_platform_emotes(self, "xiaoheihe")
 
             cover_url = normalize_image_url(
                 link.get("thumb") or link.get("video_thumb")
@@ -575,11 +635,38 @@ class XiaoheiheParser(BaseParser):
 
             body_parts: list[str | ImageContent] = []
             image_contents: list[ImageContent] = []
+            emote_contents: dict[str, ImageContent] = {}
             image_count = 0
             card_media_url = cover_url or ""
+
+            def append_body_text(value: str) -> None:
+                last = 0
+                for start, end, token, emote_url in iter_emote_matches(
+                    value,
+                    "xiaoheihe",
+                    emote_catalog,
+                ):
+                    if not emote_url:
+                        continue
+                    if prefix := value[last:start].strip():
+                        body_parts.append(prefix)
+                    content = emote_contents.get(emote_url)
+                    if content is None:
+                        content = ImageContent(
+                            self.downloader.download_img(
+                                emote_url,
+                                ext_headers=self.headers,
+                            )
+                        )
+                        emote_contents[emote_url] = content
+                    body_parts.append(content)
+                    last = end
+                if suffix := value[last:].strip():
+                    body_parts.append(suffix)
+
             for block_type, value in rich_blocks:
                 if block_type == "text":
-                    body_parts.append(value)
+                    append_body_text(value)
                     continue
                 normalized = normalize_image_url(value)
                 if not normalized or normalized == cover_url or image_count >= 20:
@@ -657,14 +744,22 @@ class XiaoheiheParser(BaseParser):
                 owner_id=owner_id,
                 total=total,
             )
-            card_text = description or text
+            card_text = text or description
             if len(card_text) > 1200:
                 card_text = f"{card_text[:1197]}..."
+            card_emotes = {}
+            if contains_platform_emotes(card_text, "xiaoheihe"):
+                card_emotes = select_text_emotes(
+                    card_text,
+                    "xiaoheihe",
+                    emote_catalog,
+                )
             extra.update(
                 {
                     "render_text_card": True,
                     "text_card_avatar": avatar or "",
                     "text_card_text": card_text,
+                    "card_emotes": card_emotes,
                     "text_card_media": card_media_url,
                     "card_kind": (
                         "帖子 · 视频"

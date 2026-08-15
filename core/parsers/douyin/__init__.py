@@ -632,14 +632,15 @@ class DouyinParser(BaseParser):
             cover=comment_cover,
             owner=aweme.get("author") if isinstance(aweme, dict) else None,
         )
-        if contents and all(isinstance(item, ImageContent) for item in contents):
+        if contents:
             statistics = aweme.get("statistics") or {}
+            image_work = all(isinstance(item, ImageContent) for item in contents)
             extra.update(
                 {
                     "render_text_card": True,
                     "text_card_avatar": meta.avatar_url or "",
                     "text_card_media": comment_cover or "",
-                    "card_kind": "图文作品",
+                    "card_kind": "图文作品" if image_work else "视频作品",
                     "card_author_badge": "作者",
                     "card_metrics": [
                         ("评论", statistics.get("comment_count")),
@@ -649,10 +650,16 @@ class DouyinParser(BaseParser):
                     ],
                     "card_info": [
                         "正文完整保留",
-                        f"图片 {len(contents)} 张",
+                        *(
+                            [f"图片 {len(contents)} 张"]
+                            if image_work
+                            else ["视频文件独立发送"]
+                        ),
                     ],
                 }
             )
+            if not image_work:
+                extra["video_separate_from_card"] = True
         return self.result(
             title=meta.desc,
             author=author,
@@ -804,6 +811,23 @@ class DouyinParser(BaseParser):
         title = info.title or "抖音视频"
         author_name = info.uploader or "抖音用户"
         author = self.create_author(author_name)
+        extra = self._comment_extra(
+            vid,
+            title=title,
+            cover=info.thumbnail,
+            owner={"nickname": author_name},
+        )
+        if contents:
+            extra.update(
+                {
+                    "render_text_card": True,
+                    "text_card_media": info.thumbnail or "",
+                    "card_kind": "视频作品",
+                    "card_author_badge": "作者",
+                    "card_info": ["正文完整保留", "视频文件独立发送"],
+                    "video_separate_from_card": True,
+                }
+            )
         return self.result(
             title=title,
             text=info.description or "",
@@ -811,10 +835,5 @@ class DouyinParser(BaseParser):
             contents=contents,
             timestamp=info.timestamp,
             url=url,
-            extra=self._comment_extra(
-                vid,
-                title=title,
-                cover=info.thumbnail,
-                owner={"nickname": author_name},
-            ),
+            extra=extra,
         )

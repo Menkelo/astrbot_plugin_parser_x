@@ -8,6 +8,7 @@ from .card_theme import resolve_card_theme
 from .color_utils import mix_hex_color, normalise_hex_color
 from .constants import COMMENT_FOOTER_BRAND
 from .html_renderer import HtmlRenderService
+from .platform_emotes import iter_emote_matches
 
 RICH_TEXT_RE = re.compile(
     r"(?P<topic>#[^#\s\r\n][^#\r\n]{0,60}?#)"
@@ -34,7 +35,7 @@ class TextCardRenderer:
         return cls._escape_jinja(escape(str(value or ""), quote=True))
 
     @classmethod
-    def _render_text_html(cls, text: str) -> str:
+    def _render_basic_text_html(cls, text: str) -> str:
         parts: list[str] = []
         last = 0
 
@@ -46,6 +47,35 @@ class TextCardRenderer:
             last = match.end()
 
         parts.append(cls._safe_text(text[last:]))
+        return "".join(parts)
+
+    @classmethod
+    def _render_text_html(
+        cls,
+        text: str,
+        *,
+        platform_key: str | None = None,
+        emotes: object = None,
+    ) -> str:
+        catalog = emotes if isinstance(emotes, dict) else {}
+        parts: list[str] = []
+        last = 0
+        for start, end, token, url in iter_emote_matches(
+            text or "",
+            platform_key or "",
+            catalog,
+        ):
+            parts.append(cls._render_basic_text_html(text[last:start]))
+            if url:
+                parts.append(
+                    f'<img class="inline-emote" src="{cls._safe_url(url)}" '
+                    f'alt="{cls._safe_url(token)}" '
+                    'onerror="this.replaceWith(document.createTextNode(this.alt))">'
+                )
+            else:
+                parts.append(cls._safe_text(token))
+            last = end
+        parts.append(cls._render_basic_text_html(text[last:]))
         return "".join(parts)
 
     @staticmethod
@@ -174,6 +204,7 @@ class TextCardRenderer:
         accent_color: str | None = None,
         accent_soft: str | None = None,
         accent_source: str = "platform",
+        emotes: object = None,
     ):
         theme = resolve_card_theme(platform_key, platform_name)
         resolved_accent = normalise_hex_color(accent_color, theme.accent)
@@ -221,7 +252,11 @@ class TextCardRenderer:
         if not meta_parts:
             meta_parts.append(display_name)
         meta_text = " · ".join(meta_parts)
-        text_html = self._render_text_html(text)
+        text_html = self._render_text_html(
+            text,
+            platform_key=platform_key,
+            emotes=emotes,
+        )
         text_block = (
             f'<section class="copy-block"><div class="text">{text_html}</div></section>'
             if text
@@ -281,7 +316,7 @@ body{{padding:18px 22px 20px;overflow-x:hidden;font-family:-apple-system,BlinkMa
 .metrics,.info-chips{{display:flex;align-items:center;gap:7px;flex-wrap:wrap}}.metric,.info-chip{{display:inline-flex;align-items:center;gap:5px;padding:5px 9px;border-radius:999px;background:{theme.subtle};color:{theme.muted};font-size:13px;line-height:1.45}}.metric strong{{color:{theme.text};font-size:14px}}
 .profile-block,.copy-block,.info-block,.comments-block,.footer{{border-top:1px solid {theme.border}}}.profile-block{{padding:15px 20px}}.profile{{display:flex;align-items:center;gap:10px}}.profile-avatar{{position:relative;display:grid;width:40px;height:40px;place-items:center;flex:0 0 40px;overflow:hidden;border:1px solid {theme.border};border-radius:50%;background:{theme.accent_soft};color:{theme.accent};font-size:14px;font-weight:800}}
 .profile-avatar img{{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}}.profile-copy{{display:grid;min-width:0;gap:2px}}.profile-name{{display:flex;min-width:0;align-items:center;gap:7px;flex-wrap:wrap}}.author{{max-width:440px;overflow:hidden;color:{theme.text};font-size:16px;font-weight:650;text-overflow:ellipsis;white-space:nowrap}}.profile-badge{{padding:1px 7px;border-radius:999px;background:{theme.accent_soft};color:{theme.accent};font-size:11px;font-weight:700;line-height:18px}}.profile-meta{{color:{theme.muted};font-size:12px}}
-.copy-block{{padding:17px 20px 18px}}.text{{color:{theme.text};font-size:18px;line-height:1.72;white-space:pre-wrap;word-break:break-word}}.text-link{{color:{theme.accent};font-weight:650}}
+.copy-block{{padding:17px 20px 18px}}.text{{color:{theme.text};font-size:18px;line-height:1.72;white-space:pre-wrap;word-break:break-word}}.text-link{{color:{theme.accent};font-weight:650}}.inline-emote{{display:inline-block;width:30px;height:30px;margin:0 2px;object-fit:contain;vertical-align:-8px}}
 .info-block,.comments-block{{padding:17px 20px}}.section-head{{display:flex;align-items:center;justify-content:space-between;gap:10px}}.section-head h2{{margin:0;color:{theme.text};font-size:19px;line-height:1.45}}.section-head>span{{color:{theme.muted};font-size:12px}}.info-chips{{margin-top:11px}}.info-chip{{border:1px solid {theme.border}}}
 .comment-list{{margin-top:4px}}.comment-card{{position:relative;display:grid;grid-template-columns:42px 1fr;gap:11px;padding:15px 0;border-top:1px solid {theme.border}}}.avatar-shell{{position:relative;display:grid;place-items:center;overflow:hidden;border-radius:50%;background:{theme.accent_soft};color:{theme.accent};font-weight:800}}.avatar-shell img{{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}}.avatar{{width:42px;height:42px;font-size:16px}}.reply-avatar{{width:28px;height:28px;font-size:12px}}.comment-body,.reply-body{{min-width:0}}.comment-head{{display:flex;min-height:22px;justify-content:space-between;gap:10px}}
 .author-row{{display:flex;min-height:21px;min-width:0;align-items:center;gap:5px;flex-wrap:wrap}}.nickname,.reply-name{{max-width:310px;overflow:hidden;color:{theme.text};font-size:16px;font-weight:650;text-overflow:ellipsis;white-space:nowrap}}.reply-name{{max-width:250px;font-size:14px}}.author-badge,.up-badge{{display:inline-flex;align-items:center;padding:1px 6px;border:1px solid transparent;border-radius:999px;background:{theme.accent_soft};color:{theme.accent};font-size:11px;font-weight:700;line-height:16px}}
@@ -320,6 +355,7 @@ body{{padding:18px 22px 20px;overflow-x:hidden;font-family:-apple-system,BlinkMa
         accent_color: str | None = None,
         accent_soft: str | None = None,
         accent_source: str = "platform",
+        emotes: object = None,
     ):
         html = self.build_html(
             platform_name=platform_name,
@@ -340,6 +376,7 @@ body{{padding:18px 22px 20px;overflow-x:hidden;font-family:-apple-system,BlinkMa
             accent_color=accent_color,
             accent_soft=accent_soft,
             accent_source=accent_source,
+            emotes=emotes,
         )
         return await self.render_service.render(
             out_path,
