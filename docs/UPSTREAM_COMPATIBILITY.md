@@ -11,11 +11,11 @@
 
 | 上游模块 | Parser X 状态 | 实现位置 | 说明 |
 | --- | --- | --- | --- |
-| Bilibili | 原生 | `core/parsers/bilibili/` | 视频、多图/文字动态使用统一纵向长卡；单图动态引用原消息并附带完整正文和原图，转发动态补回原动态正文/图片，视频文件独立发送；直播使用封面、关键帧与文字原生消息链；视频评论可嵌入长卡，等级、粉丝牌和 UP 标识完整保留 |
-| 抖音 | 原生 | `core/parsers/douyin/` | 视频、图文、图集、Cookie 与 yt-dlp 兜底；视频和图文使用统一长卡，视频文件独立发送；`comment_feed.py` 适配 Cookie 评论接口、A-Bogus、表情、图片、贴纸、作者标识与楼中楼，评论优先嵌入长卡 |
+| Bilibili | 原生 | `core/parsers/bilibili/` | 视频、多图/文字动态使用统一纵向长卡；单图动态引用原消息并附带完整正文和原图，转发动态补回原动态正文/图片，视频文件独立发送；正文支持公共、已购和动态富文本自带表情；直播使用封面、关键帧与文字原生消息链；视频评论可嵌入长卡，等级、粉丝牌和 UP 标识完整保留 |
+| 抖音 | 原生 | `core/parsers/douyin/` | 视频、图文、图集、Cookie 与 yt-dlp 兜底；视频和图文使用统一长卡，视频文件独立发送；作品元数据表情可进入长卡，`comment_feed.py` 适配 Cookie 评论接口、A-Bogus、表情、图片、贴纸、作者标识与楼中楼，评论优先嵌入长卡 |
 | 快手 | 原生 | `core/parsers/kuaishou.py` | 视频、图片、图文均使用统一长卡，视频文件独立发送 |
-| 微博 | 原生 | `core/parsers/weibo.py`、`core/parsers/weibo_comment.py` | 完整正文使用统一长卡，长卡单独引用原消息，原图和视频按各自批次随后发送；公开 `m.weibo.cn/comments/hotflow` 评论嵌入正文卡，支持认证/VIP、微博表情、原博与楼中楼 |
-| 小红书 | 原生 | `core/parsers/xiaohongshu.py` | 视频、图片、图文均使用统一长卡，视频文件独立发送，时间戳兼容秒和毫秒 |
+| 微博 | 原生 | `core/parsers/weibo.py`、`core/parsers/weibo_comment.py` | 完整正文使用统一长卡，正文 HTML 表情按图片渲染，长卡单独引用原消息，原图和视频按各自批次随后发送；公开 `m.weibo.cn/comments/hotflow` 评论嵌入正文卡，支持认证/VIP、微博表情、原博与楼中楼 |
+| 小红书 | 原生 | `core/parsers/xiaohongshu.py` | 视频、图片、图文均使用统一长卡，视频文件独立发送，时间戳兼容秒和毫秒，清理源数据的 `[话题]` 内部标记 |
 | AcFun | 兼容层 | `core/parsers/ytdlp.py` | 单视频，统一长卡与视频文件分开发送 |
 | 西瓜视频 | 兼容层 | `core/parsers/ytdlp.py` | 单视频，统一长卡与视频文件分开发送 |
 | 皮皮虾 | 兼容层 | `core/parsers/ytdlp.py` | 取决于 yt-dlp extractor 可用性；成功时发送统一长卡与独立视频文件 |

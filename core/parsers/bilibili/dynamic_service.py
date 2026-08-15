@@ -9,6 +9,11 @@ from bilibili_api.dynamic import Dynamic
 from bilibili_api.exceptions import ResponseCodeException
 
 from ...data import MediaContent
+from ...platform_emotes import (
+    contains_platform_emotes,
+    load_platform_emotes,
+    select_text_emotes,
+)
 from ...utils import cached_image_to_data_uri, normalize_image_url
 from ..base import ParseException
 
@@ -267,6 +272,52 @@ class BiliDynamicService:
                 parts.append(text)
 
         return "".join(parts).strip()
+
+    @classmethod
+    def extract_dynamic_emotes(cls, value: Any) -> dict[str, str]:
+        """Collect paid/custom dynamic emotes carried directly by rich nodes."""
+
+        output: dict[str, str] = {}
+
+        def register(node: dict, emote: dict) -> None:
+            token = cls._first_str(
+                node.get("orig_text"),
+                node.get("text"),
+                emote.get("text"),
+                emote.get("name"),
+            )
+            url = normalize_image_url(
+                cls._first_str(
+                    emote.get("icon_url"),
+                    emote.get("url"),
+                    emote.get("gif_url"),
+                    emote.get("webp_url"),
+                )
+            )
+            if token and url:
+                token = token if token.startswith("[") else f"[{token}]"
+                output[token] = url
+
+        def walk(item: Any) -> None:
+            if isinstance(item, list):
+                for child in item:
+                    walk(child)
+                return
+            if not isinstance(item, dict):
+                return
+
+            emote = item.get("emoji") or item.get("emote")
+            if isinstance(emote, dict):
+                register(item, emote)
+            elif item.get("type") == "RICH_TEXT_NODE_TYPE_EMOJI":
+                register(item, item)
+
+            for child in item.values():
+                if isinstance(child, (dict, list)):
+                    walk(child)
+
+        walk(value)
+        return output
 
     @classmethod
     def extract_link_card_text(cls, link_card: Any) -> str:
@@ -786,6 +837,7 @@ class BiliDynamicService:
 
         full_text = self.extract_dynamic_text(item, modules)
         image_urls = self.extract_dynamic_image_urls(item, modules)
+        emote_sources = [item]
 
         if not full_text or full_text == "（无正文）":
             page_raw = await self._fetch_opus_page_raw(dynamic_id)
@@ -802,8 +854,22 @@ class BiliDynamicService:
                     *self.extract_dynamic_image_urls(page_item, page_modules),
                 ]
             )
+            emote_sources.append(page_item)
 
         full_text = self.neutralize_at_text(full_text or "（无正文）")
+        emote_text = "\n".join(
+            value for value in (dynamic_title or "", full_text) if value
+        )
+        card_emotes: dict[str, str] = {}
+        if contains_platform_emotes(emote_text, "bilibili"):
+            emote_catalog = await load_platform_emotes(self.parser, "bilibili")
+            for source in emote_sources:
+                emote_catalog.update(self.extract_dynamic_emotes(source))
+            card_emotes = select_text_emotes(
+                emote_text,
+                "bilibili",
+                emote_catalog,
+            )
 
         media_headers = self.parser.headers.copy()
         media_headers["Referer"] = f"https://www.bilibili.com/opus/{dynamic_id}"
@@ -848,6 +914,7 @@ class BiliDynamicService:
                     "card_kind": "动态 · 图文" if full_images else "动态",
                     "card_author_badge": "UP主",
                     "card_info": card_info,
+                    "card_emotes": card_emotes,
                 }
             )
 

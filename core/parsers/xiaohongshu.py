@@ -112,6 +112,17 @@ class XiaoHongShuParser(BaseParser):
         return timestamp
 
     @staticmethod
+    def _normalize_note_text(value: object) -> str:
+        text = str(value or "").strip()
+        if not text:
+            return ""
+        return re.sub(
+            r"#([^#\r\n]*?)\[话题\]#",
+            lambda matched: f"#{matched.group(1).rstrip()}#",
+            text,
+        )
+
+    @staticmethod
     def _interaction_metrics(note_data: dict) -> list[tuple[str, object]]:
         info = note_data.get("interactInfo") or note_data.get("interact_info") or {}
         if not isinstance(info, dict):
@@ -416,6 +427,8 @@ class XiaoHongShuParser(BaseParser):
                 return self.video.video_url
 
         note_detail = convert(note_data, type=NoteDetail)
+        note_title = self._normalize_note_text(note_detail.title)
+        note_text = self._normalize_note_text(note_detail.desc)
 
         contents = []
         note_image_urls = note_detail.image_urls
@@ -460,8 +473,8 @@ class XiaoHongShuParser(BaseParser):
                 extra["text_card_avatar"] = note_detail.avatar_url
 
         return self.result(
-            title=note_detail.title,
-            text=note_detail.desc,
+            title=note_title,
+            text=note_text,
             author=author,
             contents=contents,
             timestamp=self._normalize_timestamp(note_detail.time),
@@ -526,6 +539,8 @@ class XiaoHongShuParser(BaseParser):
                 return XiaoHongShuParser._uniq_urls(urls)
 
         note_data_obj = convert(note_data, type=NoteData)
+        note_title = self._normalize_note_text(note_data_obj.title)
+        note_text = self._normalize_note_text(note_data_obj.desc)
 
         contents = []
         card_media_url = ""
@@ -578,12 +593,12 @@ class XiaoHongShuParser(BaseParser):
                 extra["text_card_avatar"] = note_data_obj.user.avatar
 
         return self.result(
-            title=note_data_obj.title,
+            title=note_title,
             author=self.create_author(
                 note_data_obj.user.nickName, note_data_obj.user.avatar
             ),
             contents=contents,
-            text=note_data_obj.desc,
+            text=note_text,
             timestamp=self._normalize_timestamp(note_data_obj.time),
             url=final_url,
             extra=extra,

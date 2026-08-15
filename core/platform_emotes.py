@@ -7,11 +7,14 @@ from typing import Any
 
 from astrbot.api import logger
 
+BILIBILI_EMOTE_URL = "https://api.bilibili.com/x/emote/package"
+BILIBILI_EMOTE_PANEL_URL = "https://api.bilibili.com/x/emote/user/panel/web"
 MIYOUSHE_EMOTE_URL = "https://bbs-api.miyoushe.com/misc/api/emoticon_set"
 XIAOHEIHE_EMOTE_URL = "https://api.xiaoheihe.cn/bbs/app/api/emojis/list"
 
 _MIYOUSHE_TOKEN_RE = re.compile(r"_\([^()\n]{1,64}\)")
-_XIAOHEIHE_TOKEN_RE = re.compile(r"\[[^\[\]\n]{1,48}\]")
+_SQUARE_TOKEN_RE = re.compile(r"\[[^\[\]\n]{1,64}\]")
+_SQUARE_TOKEN_PLATFORMS = {"bilibili", "douyin", "weibo", "xiaoheihe"}
 
 # The official catalog APIs are the primary source. These small fallbacks keep the
 # most common expressions usable during a transient API failure.
@@ -27,6 +30,24 @@ _MIYOUSHE_FALLBACK = {
     "米游兔-加油": (
         "https://upload-bbs.miyoushe.com/upload/2023/01/18/"
         "5857b8a3d4023bd05954225b0d578845_8473504187038159665.png"
+    ),
+}
+
+_BILIBILI_FALLBACK = {
+    "[doge]": (
+        "https://i0.hdslb.com/bfs/emote/3087d273a78ccaff4bb1e9972e2ba2a7583c9f11.png"
+    ),
+    "[笑哭]": (
+        "https://i0.hdslb.com/bfs/emote/c3043ba94babf824dea03ce500d0e73763bf4f40.png"
+    ),
+    "[吃瓜]": (
+        "https://i0.hdslb.com/bfs/emote/4191ce3c44c2b3df8fd97c33f85d3ab15f4f3c84.png"
+    ),
+    "[滑稽]": (
+        "https://i0.hdslb.com/bfs/emote/d15121545a99ac46774f1f4465b895fe2d1411c3.png"
+    ),
+    "[点赞]": (
+        "https://i0.hdslb.com/bfs/emote/1a67265993913f4c35d15a6028a30724e83e7d35.png"
     ),
 }
 
@@ -51,7 +72,7 @@ def clean_emote_token(platform_key: str, token: str) -> str:
         if value.startswith("_(") and value.endswith(")"):
             value = value[2:-1]
         return _normalise_miyoushe_name(value)
-    if platform_key == "xiaoheihe":
+    if platform_key in _SQUARE_TOKEN_PLATFORMS:
         if value.startswith("[") and value.endswith("]"):
             value = value[1:-1]
         return value.strip()
@@ -59,6 +80,8 @@ def clean_emote_token(platform_key: str, token: str) -> str:
 
 
 def fallback_emote_map(platform_key: str) -> dict[str, str]:
+    if platform_key == "bilibili":
+        return dict(_BILIBILI_FALLBACK)
     if platform_key == "miyoushe":
         return dict(_MIYOUSHE_FALLBACK)
     if platform_key == "xiaoheihe":
@@ -103,6 +126,29 @@ def build_miyoushe_emote_map(payload: object) -> dict[str, str]:
             if not isinstance(item, dict):
                 continue
             _register(output, "miyoushe", item.get("name"), item.get("icon"))
+    return output
+
+
+def build_bilibili_emote_map(payload: object) -> dict[str, str]:
+    if not isinstance(payload, dict):
+        return {}
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        return {}
+
+    output: dict[str, str] = {}
+    for package in data.get("packages") or []:
+        if not isinstance(package, dict):
+            continue
+        for item in package.get("emote") or []:
+            if not isinstance(item, dict):
+                continue
+            _register(
+                output,
+                "bilibili",
+                item.get("text") or item.get("name"),
+                item.get("url") or item.get("gif_url"),
+            )
     return output
 
 
@@ -160,8 +206,8 @@ def iter_emote_matches(
     pattern = (
         _MIYOUSHE_TOKEN_RE
         if platform_key == "miyoushe"
-        else _XIAOHEIHE_TOKEN_RE
-        if platform_key == "xiaoheihe"
+        else _SQUARE_TOKEN_RE
+        if platform_key in _SQUARE_TOKEN_PLATFORMS
         else None
     )
     if pattern is None:
@@ -219,7 +265,56 @@ async def load_platform_emotes(
         return output
 
     try:
-        if platform_key == "miyoushe":
+        if platform_key == "bilibili":
+            request_headers = dict(getattr(parser, "headers", None) or {})
+            bili_cookie = str(getattr(parser, "bili_ck", "") or "").strip()
+            if bili_cookie:
+                request_headers["Cookie"] = bili_cookie
+            response = await http_get(
+                BILIBILI_EMOTE_URL,
+                params={"business": "reply", "ids": "1"},
+                headers=request_headers,
+                timeout=8,
+                retries=1,
+            )
+            parsed = build_bilibili_emote_map(response.json())
+            if bili_cookie:
+                try:
+                    panel_response = await http_get(
+                        BILIBILI_EMOTE_PANEL_URL,
+                        params={"business": "reply"},
+                        headers=request_headers,
+                        timeout=8,
+                        retries=1,
+                    )
+                    panel_payload = panel_response.json()
+                    parsed.update(build_bilibili_emote_map(panel_payload))
+                    packages = (
+                        (panel_payload.get("data") or {}).get("packages") or []
+                        if isinstance(panel_payload, dict)
+                        else []
+                    )
+                    package_ids = [
+                        str(package.get("id"))
+                        for package in packages
+                        if isinstance(package, dict)
+                        and package.get("id") not in (None, "", 1, "1")
+                    ]
+                    if package_ids:
+                        owned_response = await http_get(
+                            BILIBILI_EMOTE_URL,
+                            params={
+                                "business": "reply",
+                                "ids": ",".join(dict.fromkeys(package_ids)),
+                            },
+                            headers=request_headers,
+                            timeout=8,
+                            retries=1,
+                        )
+                        parsed.update(build_bilibili_emote_map(owned_response.json()))
+                except Exception as exc:
+                    logger.debug(f"[bilibili] 用户表情包读取失败，保留公共表情: {exc}")
+        elif platform_key == "miyoushe":
             response = await http_get(
                 MIYOUSHE_EMOTE_URL,
                 params={"gids": str(gids)},
@@ -258,6 +353,7 @@ async def load_platform_emotes(
 
 
 __all__ = [
+    "build_bilibili_emote_map",
     "build_miyoushe_emote_map",
     "build_xiaoheihe_emote_map",
     "clean_emote_token",

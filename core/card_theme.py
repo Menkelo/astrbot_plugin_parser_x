@@ -30,7 +30,7 @@ BILIBILI_CARD_THEME = PlatformCardTheme(
     key="bilibili",
     display_name="B站动态",
     glyph="B",
-    accent="#df4d82",
+    accent="#fb7299",
     accent_soft="#fff0f5",
 )
 
@@ -46,7 +46,7 @@ KUAISHOU_CARD_THEME = PlatformCardTheme(
     key="kuaishou",
     display_name="快手",
     glyph="快",
-    accent="#ff5a1f",
+    accent="#ff4906",
     accent_soft="#fff2ec",
 )
 
@@ -54,15 +54,15 @@ MIYOUSHE_CARD_THEME = PlatformCardTheme(
     key="miyoushe",
     display_name="米游社",
     glyph="米",
-    accent="#3e8dbe",
-    accent_soft="#edf8ff",
+    accent="#00b8e6",
+    accent_soft="#e9faff",
 )
 
 XIAOHEIHE_CARD_THEME = PlatformCardTheme(
     key="xiaoheihe",
     display_name="小黑盒",
     glyph="盒",
-    accent="#ef6b2e",
+    accent="#ff6a00",
     accent_soft="#fff3ec",
 )
 
@@ -70,7 +70,7 @@ XIAOHONGSHU_CARD_THEME = PlatformCardTheme(
     key="xiaohongshu",
     display_name="小红书",
     glyph="薯",
-    accent="#df3343",
+    accent="#ff2442",
     accent_soft="#fff0f1",
 )
 
@@ -78,8 +78,48 @@ WEIBO_CARD_THEME = PlatformCardTheme(
     key="weibo",
     display_name="微博",
     glyph="微",
-    accent="#e7a121",
+    accent="#ff8200",
     accent_soft="#fff7e7",
+)
+
+ACFUN_CARD_THEME = PlatformCardTheme(
+    key="acfun",
+    display_name="AcFun",
+    glyph="A",
+    accent="#fd4c5b",
+    accent_soft="#fff0f2",
+)
+
+XIGUA_CARD_THEME = PlatformCardTheme(
+    key="xigua",
+    display_name="西瓜视频",
+    glyph="西",
+    accent="#ff4a45",
+    accent_soft="#fff0ef",
+)
+
+PIPIXIA_CARD_THEME = PlatformCardTheme(
+    key="pipixia",
+    display_name="皮皮虾",
+    glyph="皮",
+    accent="#ff5a36",
+    accent_soft="#fff2ed",
+)
+
+WEISHI_CARD_THEME = PlatformCardTheme(
+    key="weishi",
+    display_name="微视",
+    glyph="视",
+    accent="#ff5a65",
+    accent_soft="#fff0f2",
+)
+
+NETEASE_MUSIC_CARD_THEME = PlatformCardTheme(
+    key="netease_music",
+    display_name="网易云音乐",
+    glyph="云",
+    accent="#e60026",
+    accent_soft="#fff0f2",
 )
 
 
@@ -105,6 +145,17 @@ _THEME_ALIASES = {
     "小红书": XIAOHONGSHU_CARD_THEME,
     "weibo": WEIBO_CARD_THEME,
     "微博": WEIBO_CARD_THEME,
+    "acfun": ACFUN_CARD_THEME,
+    "a站": ACFUN_CARD_THEME,
+    "xigua": XIGUA_CARD_THEME,
+    "西瓜视频": XIGUA_CARD_THEME,
+    "pipixia": PIPIXIA_CARD_THEME,
+    "皮皮虾": PIPIXIA_CARD_THEME,
+    "weishi": WEISHI_CARD_THEME,
+    "微视": WEISHI_CARD_THEME,
+    "netease_music": NETEASE_MUSIC_CARD_THEME,
+    "neteasemusic": NETEASE_MUSIC_CARD_THEME,
+    "网易云音乐": NETEASE_MUSIC_CARD_THEME,
 }
 
 
@@ -125,13 +176,18 @@ def resolve_card_theme(
 
 
 __all__ = [
+    "ACFUN_CARD_THEME",
     "BILIBILI_CARD_THEME",
     "DEFAULT_CARD_THEME",
     "DOUYIN_CARD_THEME",
     "KUAISHOU_CARD_THEME",
     "MIYOUSHE_CARD_THEME",
+    "NETEASE_MUSIC_CARD_THEME",
+    "PIPIXIA_CARD_THEME",
     "PlatformCardTheme",
     "WEIBO_CARD_THEME",
+    "WEISHI_CARD_THEME",
+    "XIGUA_CARD_THEME",
     "XIAOHEIHE_CARD_THEME",
     "XIAOHONGSHU_CARD_THEME",
     "resolve_card_theme",

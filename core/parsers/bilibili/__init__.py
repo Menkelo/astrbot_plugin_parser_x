@@ -16,6 +16,11 @@ from ...constants import BILIBILI_HEADER
 from ...data import Platform
 from ...exception import SizeLimitException
 from ...html_renderer import HtmlRenderService
+from ...platform_emotes import (
+    contains_platform_emotes,
+    load_platform_emotes,
+    select_text_emotes,
+)
 from ...utils import ck2dict
 from ..base import BaseParser, Downloader, ParseException, handle
 from .comment_canvas import BiliCommentCanvas
@@ -821,6 +826,16 @@ class BilibiliParser(BaseParser):
             "card_info": card_info,
             "video_separate_from_card": True,
         }
+        emote_text = "\n".join(
+            value for value in (page_info.title or "", text or "") if value
+        )
+        if contains_platform_emotes(emote_text, "bilibili"):
+            emote_catalog = await load_platform_emotes(self, "bilibili")
+            extra["card_emotes"] = select_text_emotes(
+                emote_text,
+                "bilibili",
+                emote_catalog,
+            )
         if comment_document_task_factory:
             extra.update(
                 {

@@ -57,8 +57,10 @@ from core.parsers.weibo_comment import WeiboCommentFeed
 from core.parsers.xiaoheihe_comment import XiaoheiheCommentFeed
 from core.parsers.ytdlp import AcFunParser
 from core.platform_emotes import (
+    build_bilibili_emote_map,
     build_miyoushe_emote_map,
     build_xiaoheihe_emote_map,
+    load_platform_emotes,
 )
 from core.rendered_image import save_rendered_image
 from core.text_renderer import TextCardRenderer
@@ -358,6 +360,15 @@ def test_xiaohongshu_timestamp_accepts_seconds_and_milliseconds(raw, expected):
     assert XiaoHongShuParser._normalize_timestamp(raw) == expected
 
 
+def test_xiaohongshu_removes_internal_topic_markers_only_inside_hashtags():
+    assert (
+        XiaoHongShuParser._normalize_note_text(
+            "#性能车[话题]# #机车跑山[话题]# 正文[话题]"
+        )
+        == "#性能车# #机车跑山# 正文[话题]"
+    )
+
+
 def test_image_post_parsers_use_shared_cards_and_keep_canonical_urls(tmp_path):
     from core.parsers.kuaishou import CdnUrl, Photo
 
@@ -408,7 +419,7 @@ def test_image_post_parsers_use_shared_cards_and_keep_canonical_urls(tmp_path):
             {
                 "type": "normal",
                 "title": "小红书标题",
-                "desc": "小红书正文",
+                "desc": "小红书正文 #性能车[话题]#",
                 "time": 1_700_000_000_000,
                 "user": {
                     "nickname": "作者",
@@ -435,6 +446,7 @@ def test_image_post_parsers_use_shared_cards_and_keep_canonical_urls(tmp_path):
     assert douyin_result.url == "https://www.douyin.com/video/123"
     assert xhs_result.url == "https://www.xiaohongshu.com/explore/demo"
     assert xhs_result.timestamp == 1_700_000_000
+    assert xhs_result.text == "小红书正文 #性能车#"
     for result in (kuaishou_result, douyin_result, xhs_result):
         assert result.contents
         assert result.extra["render_text_card"] is True
@@ -639,6 +651,22 @@ def test_xiaoheihe_rich_text_ignores_android_cache_paths():
 
 
 def test_platform_emotes_render_in_cards_and_comment_rich_text():
+    bilibili_map = build_bilibili_emote_map(
+        {
+            "data": {
+                "packages": [
+                    {
+                        "emote": [
+                            {
+                                "text": "[doge]",
+                                "url": "https://i0.hdslb.com/bfs/emote/doge.png",
+                            }
+                        ]
+                    }
+                ]
+            }
+        }
+    )
     xiaoheihe_map = build_xiaoheihe_emote_map(
         {
             "result": {
@@ -683,6 +711,17 @@ def test_platform_emotes_render_in_cards_and_comment_rich_text():
     )
     assert 'class="inline-emote"' in html
     assert "cube_21.png" in html
+
+    bilibili_html = TextCardRenderer(HtmlRenderService()).build_html(
+        platform_key="bilibili",
+        platform_name="B站动态",
+        author_name="UP主",
+        title="标题[doge]",
+        text="正文[doge]",
+        emotes=bilibili_map,
+    )
+    assert bilibili_html.count('class="inline-emote"') == 2
+    assert "bfs/emote/doge.png" in bilibili_html
 
     xiaoheihe_parts = XiaoheiheCommentFeed._rich_text(
         "评论[cube_开心]",
@@ -731,6 +770,51 @@ def test_platform_emotes_render_in_cards_and_comment_rich_text():
         )
         == "https://img.example.com/custom.gif"
     )
+
+
+def test_bilibili_emote_loader_merges_public_and_owned_packages():
+    calls = []
+
+    class FakeResponse:
+        status_code = 200
+
+        def __init__(self, payload):
+            self.payload = payload
+
+        def json(self):
+            return self.payload
+
+    class FakeParser:
+        headers = {"Referer": "https://www.bilibili.com/"}
+        bili_ck = "SESSDATA=test"
+
+        async def http_get(self, url, *, params, **_kwargs):
+            calls.append((url, params))
+            if "panel/web" in url:
+                return FakeResponse({"data": {"packages": [{"id": 2, "emote": []}]}})
+            token = "[doge]" if params["ids"] == "1" else "[已购表情]"
+            return FakeResponse(
+                {
+                    "data": {
+                        "packages": [
+                            {
+                                "emote": [
+                                    {
+                                        "text": token,
+                                        "url": f"https://i0.hdslb.com/{params['ids']}.png",
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                }
+            )
+
+    catalog = asyncio.run(load_platform_emotes(FakeParser(), "bilibili"))
+
+    assert catalog["[doge]"].endswith("/1.png")
+    assert catalog["[已购表情]"].endswith("/2.png")
+    assert [params.get("ids") for _url, params in calls] == ["1", None, "2"]
 
 
 def test_xiaoheihe_app_link_retries_official_share_endpoint(tmp_path):
@@ -1240,21 +1324,26 @@ def test_text_card_uses_html_render_service(tmp_path):
     assert all(options["timeout"] == 45_000 for _, _, _, options in calls)
     assert all(COMMENT_FOOTER_BRAND in template for template, *_ in calls)
     assert 'data-card-style="minimal-feed"' in calls[0][0]
-    assert "#e7a121" in calls[0][0]
+    assert "#ff8200" in calls[0][0]
     assert "platform-mark" not in calls[0][0]
-    assert "linear-gradient(135deg" in calls[0][0]
+    assert "backdrop-filter:blur(18px)" in calls[0][0]
+    assert "radial-gradient" in calls[0][0]
 
 
 @pytest.mark.parametrize(
     ("key", "name", "accent"),
     [
-        ("bilibili", "B站动态", "#df4d82"),
+        ("bilibili", "B站动态", "#fb7299"),
         ("douyin", "抖音", "#fe2c55"),
-        ("kuaishou", "快手", "#ff5a1f"),
-        ("miyoushe", "米游社", "#3e8dbe"),
-        ("xiaoheihe", "小黑盒", "#ef6b2e"),
-        ("xiaohongshu", "小红书", "#df3343"),
-        ("weibo", "微博", "#e7a121"),
+        ("kuaishou", "快手", "#ff4906"),
+        ("miyoushe", "米游社", "#00b8e6"),
+        ("xiaoheihe", "小黑盒", "#ff6a00"),
+        ("xiaohongshu", "小红书", "#ff2442"),
+        ("weibo", "微博", "#ff8200"),
+        ("acfun", "AcFun", "#fd4c5b"),
+        ("xigua", "西瓜视频", "#ff4a45"),
+        ("pipixia", "皮皮虾", "#ff5a36"),
+        ("weishi", "微视", "#ff5a65"),
     ],
 )
 def test_unified_content_card_keeps_only_platform_brand_identity(
@@ -1274,7 +1363,9 @@ def test_unified_content_card_keeps_only_platform_brand_identity(
     assert "platform-mark" not in html
     assert accent in html
     assert "border-radius:14px" in html
-    assert "box-shadow" not in html
+    assert "backdrop-filter:blur(18px)" in html
+    assert "box-shadow:inset" in html
+    assert "background-size:3px 3px" in html
 
 
 def test_unified_content_card_accepts_media_accent_without_monogram():
@@ -1290,12 +1381,13 @@ def test_unified_content_card_accepts_media_accent_without_monogram():
     )
 
     assert 'data-accent-source="media"' in html
-    assert "linear-gradient(135deg,#184f7a" in html
+    assert "#184f7a" in html
+    assert "backdrop-filter:blur(18px)" in html
     assert "platform-mark" not in html
     assert ">微<" not in html
 
 
-def test_card_palette_extracts_readable_media_color_and_falls_back(tmp_path):
+def test_card_palette_is_fixed_to_platform_identity(tmp_path):
     from astrbot_plugin_parser_x.core.data import (
         ImageContent as PluginImageContent,
     )
@@ -1321,10 +1413,8 @@ def test_card_palette_extracts_readable_media_color_and_falls_back(tmp_path):
     media_palette = asyncio.run(plugin._resolve_card_palette(media_result))
     fallback_palette = asyncio.run(plugin._resolve_card_palette(invalid_result))
 
-    assert media_palette[2] == "media"
-    assert media_palette[0] != "#e7a121"
-    assert _contrast_with_white(media_palette[0]) >= 4.5
-    assert fallback_palette == ("#e7a121", "#fff7e7", "platform")
+    assert media_palette == ("#ff8200", "#fff7e7", "platform")
+    assert fallback_palette == media_palette
 
 
 def test_unified_long_card_orders_body_media_metrics_and_comments():
@@ -1775,6 +1865,34 @@ def test_bilibili_dynamic_repost_recovers_original_body_and_images():
     ]
 
 
+def test_bilibili_dynamic_collects_custom_emote_urls_from_rich_nodes():
+    emotes = BiliDynamicService.extract_dynamic_emotes(
+        {
+            "modules": {
+                "module_dynamic": {
+                    "desc": {
+                        "rich_text_nodes": [
+                            {
+                                "type": "RICH_TEXT_NODE_TYPE_TEXT",
+                                "orig_text": "正文",
+                            },
+                            {
+                                "type": "RICH_TEXT_NODE_TYPE_EMOJI",
+                                "orig_text": "[UP主_好耶]",
+                                "emoji": {
+                                    "icon_url": "https://i0.hdslb.com/custom.png"
+                                },
+                            },
+                        ]
+                    }
+                }
+            }
+        }
+    )
+
+    assert emotes == {"[UP主_好耶]": "https://i0.hdslb.com/custom.png"}
+
+
 def test_bilibili_single_image_dynamic_marks_body_for_direct_reply(tmp_path):
     from astrbot_plugin_parser_x.core.data import (
         Author,
@@ -2014,7 +2132,7 @@ def test_douyin_comment_normalization_covers_rconsole_visible_fields(tmp_path):
             "image_list": [
                 {"origin_url": {"url_list": ["https://p3.douyinpic.com/pic"]}}
             ],
-            "sticker": {
+            "sticker_detail": {
                 "static_url": {"url_list": ["https://p3.douyinpic.com/sticker"]}
             },
             "digg_count": 10000,
@@ -2074,9 +2192,17 @@ def test_native_parsers_attach_comment_factories(tmp_path):
         result = douyin._build_result_from_aweme(
             {
                 "aweme_id": "7414051930047106342",
-                "desc": "作品",
+                "desc": "作品[比心]",
                 "create_time": 1700000000,
                 "author": {"uid": "42", "nickname": "作者"},
+                "text_extra": [
+                    {
+                        "text": "[比心]",
+                        "emoji_url": {
+                            "url_list": ["https://p3.douyinpic.com/bixin.png"]
+                        },
+                    }
+                ],
                 "images": [{"url_list": ["https://p3.douyinpic.com/image"]}],
             },
             "7414051930047106342",
@@ -2100,6 +2226,10 @@ def test_native_parsers_attach_comment_factories(tmp_path):
     assert "comment_task_factory" not in douyin_extra
     assert callable(douyin_extra["comment_document_task_factory"])
     assert douyin_extra["comment_timeout"] == 45
+    assert douyin_extra["card_emotes"] == {
+        "[比心]": "https://p3.douyinpic.com/bixin.png",
+        "比心": "https://p3.douyinpic.com/bixin.png",
+    }
     assert "comment_task_factory" not in weibo_extra
     assert callable(weibo_extra["comment_document_task_factory"])
     assert weibo_extra["comment_timeout"] == 45
@@ -2124,7 +2254,11 @@ def test_weibo_media_result_keeps_body_before_single_image_reply(tmp_path):
                     "id": "4461526582968019",
                     "mid": "4461526582968019",
                     "created_at": "Fri Jan 17 01:04:51 +0800 2020",
-                    "text": "<p>微博正文</p>",
+                    "text": (
+                        "<p>微博正文"
+                        '<img alt="[笑cry]" src="https://h5.sinaimg.cn/emote.png">'
+                        "</p>"
+                    ),
                     "user": {
                         "id": "1088413295",
                         "screen_name": "Easy",
@@ -2163,11 +2297,15 @@ def test_weibo_media_result_keeps_body_before_single_image_reply(tmp_path):
             await parser.close_session()
 
     result = asyncio.run(run())
-    assert result.text == "微博正文"
+    assert result.text == "微博正文[笑cry]"
+    assert result.extra["card_emotes"] == {
+        "[笑cry]": "https://h5.sinaimg.cn/emote.png",
+        "笑cry": "https://h5.sinaimg.cn/emote.png",
+    }
     assert len(result.contents) == 1
     assert result.delivery is not None
     assert len(result.delivery.batches) == 2
-    assert result.delivery.batches[0].parts == ["识别：微博\n微博正文"]
+    assert result.delivery.batches[0].parts == ["识别：微博\n微博正文[笑cry]"]
     assert result.delivery.batches[0].reply_original is False
     assert result.delivery.batches[1].parts == result.contents
     assert result.delivery.batches[1].reply_original is True

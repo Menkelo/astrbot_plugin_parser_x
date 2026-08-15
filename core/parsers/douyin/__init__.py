@@ -14,6 +14,7 @@ from ...comment_settings import CommentSettings
 from ...data import ImageContent
 from ...download import Downloader
 from ...html_renderer import HtmlRenderService
+from ...platform_emotes import contains_platform_emotes, select_text_emotes
 from ...utils import cookies_str_to_netscape
 from ..base import BaseParser, ParseException, Platform, SkipParseException, handle
 from .comment_feed import DouyinCommentFeed
@@ -635,6 +636,11 @@ class DouyinParser(BaseParser):
         if contents:
             statistics = aweme.get("statistics") or {}
             image_work = all(isinstance(item, ImageContent) for item in contents)
+            card_emotes = select_text_emotes(
+                meta.desc,
+                "douyin",
+                self.comment_feed._local_emoji_map(aweme, {}),
+            )
             extra.update(
                 {
                     "render_text_card": True,
@@ -656,6 +662,7 @@ class DouyinParser(BaseParser):
                             else ["视频文件独立发送"]
                         ),
                     ],
+                    "card_emotes": card_emotes,
                 }
             )
             if not image_work:
@@ -687,11 +694,17 @@ class DouyinParser(BaseParser):
 
         from .slides import SlidesInfo
 
-        info = msgspec.json.decode(resp.content, type=SlidesInfo)
+        raw_payload = msgspec.json.decode(resp.content)
+        info = msgspec.convert(raw_payload, type=SlidesInfo)
         if not info.aweme_details:
             raise ParseException("图集数据为空")
 
         slides = info.aweme_details[0]
+        raw_slide = {}
+        if isinstance(raw_payload, dict):
+            raw_slides = raw_payload.get("aweme_details") or []
+            if raw_slides and isinstance(raw_slides[0], dict):
+                raw_slide = raw_slides[0]
         contents = []
 
         def pick_best_image_url(urls: list[str]) -> str | None:
@@ -753,6 +766,11 @@ class DouyinParser(BaseParser):
             owner={"nickname": slides.name},
         )
         if contents:
+            card_emotes = select_text_emotes(
+                slides.desc,
+                "douyin",
+                self.comment_feed._local_emoji_map(raw_slide, {}),
+            )
             extra.update(
                 {
                     "render_text_card": True,
@@ -764,6 +782,7 @@ class DouyinParser(BaseParser):
                         "正文完整保留",
                         f"图片 {len(contents)} 张",
                     ],
+                    "card_emotes": card_emotes,
                 }
             )
         return self.result(
@@ -818,6 +837,17 @@ class DouyinParser(BaseParser):
             owner={"nickname": author_name},
         )
         if contents:
+            emote_text = "\n".join(
+                value for value in (title, info.description or "") if value
+            )
+            card_emotes = {}
+            if contains_platform_emotes(emote_text, "douyin"):
+                emoji_map = await self.comment_feed._load_emoji_map()
+                card_emotes = select_text_emotes(
+                    emote_text,
+                    "douyin",
+                    emoji_map,
+                )
             extra.update(
                 {
                     "render_text_card": True,
@@ -826,6 +856,7 @@ class DouyinParser(BaseParser):
                     "card_author_badge": "作者",
                     "card_info": ["正文完整保留", "视频文件独立发送"],
                     "video_separate_from_card": True,
+                    "card_emotes": card_emotes,
                 }
             )
         return self.result(

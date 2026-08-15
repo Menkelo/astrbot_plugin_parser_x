@@ -26,11 +26,6 @@ from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import (
 from .core.arbiter import EmojiLikeArbiter
 from .core.card_theme import resolve_card_theme
 from .core.clean import CacheCleaner
-from .core.color_utils import (
-    extract_dominant_color,
-    mix_hex_color,
-    normalise_hex_color,
-)
 from .core.comment_settings import parse_bool
 from .core.data import (
     AudioContent,
@@ -296,27 +291,6 @@ class ParserXPlugin(Star):
         result: ParseResult,
     ) -> tuple[str, str, str]:
         theme = resolve_card_theme(result.platform.name, result.platform.display_name)
-        explicit = result.extra.get("card_accent_color")
-        if isinstance(explicit, str) and explicit.strip():
-            accent = normalise_hex_color(explicit, theme.accent)
-            return accent, mix_hex_color(accent, "#ffffff", 0.90), "override"
-
-        for content in result.contents:
-            if not isinstance(content, (ImageContent, GraphicsContent)):
-                continue
-            try:
-                path = await content.get_path()
-                accent = await asyncio.to_thread(
-                    extract_dominant_color,
-                    path,
-                )
-            except Exception as exc:
-                logger.debug(f"作品主色提取失败，使用平台主色: {exc}")
-                continue
-            if accent is None:
-                continue
-            return accent, mix_hex_color(accent, "#ffffff", 0.90), "media"
-
         return theme.accent, theme.accent_soft, "platform"
 
     async def _build_text_card_content(
@@ -384,7 +358,7 @@ class ParserXPlugin(Star):
                     accent_color,
                     accent_soft,
                     accent_source,
-                    "text_card_v11_platform_emotes",
+                    "text_card_v12_fixed_brand_glass",
                 ]
             ).encode("utf-8")
         ).hexdigest()[:12]

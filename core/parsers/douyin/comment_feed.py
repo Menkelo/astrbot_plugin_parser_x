@@ -424,8 +424,17 @@ class DouyinCommentFeed:
         return output
 
     def _sticker(self, item: dict) -> str:
-        sticker = item.get("sticker")
-        return self._image_from_object(sticker) if isinstance(sticker, dict) else ""
+        for key in (
+            "sticker",
+            "sticker_detail",
+            "sticker_info",
+            "sticker_image",
+            "sticker_url",
+        ):
+            value = item.get(key)
+            if url := self._image_from_object(value):
+                return url
+        return ""
 
     @staticmethod
     def _identity(user: dict) -> tuple[str, ...]:

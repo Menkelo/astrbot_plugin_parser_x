@@ -20,6 +20,7 @@ from ..data import (
 )
 from ..download import Downloader
 from ..html_renderer import HtmlRenderService
+from ..platform_emotes import select_text_emotes
 from ..utils import normalize_image_url
 from .base import BaseParser, ParseException, handle
 from .weibo_comment import WeiboCommentFeed
@@ -155,6 +156,41 @@ class WeiboParser(BaseParser):
             if (text := cls._html_to_plain_text(candidate))
         ]
         return max(texts, key=len, default="")
+
+    @staticmethod
+    def _extract_body_emotes(data: object) -> dict[str, str]:
+        output: dict[str, str] = {}
+
+        def scan_html(value: str) -> None:
+            for tag in re.findall(r"<img\b[^>]*>", value, flags=re.I | re.S):
+                attrs = {
+                    key.lower(): unescape(attr_value)
+                    for key, _quote, attr_value in re.findall(
+                        r"\b(src|alt|title)\s*=\s*([\"'])(.*?)\2",
+                        tag,
+                        flags=re.I | re.S,
+                    )
+                }
+                token = str(attrs.get("alt") or attrs.get("title") or "").strip()
+                url = normalize_image_url(attrs.get("src")) or ""
+                if token and url:
+                    output[token] = url
+
+        def walk(value: object) -> None:
+            if isinstance(value, str):
+                if "<img" in value.lower():
+                    scan_html(value)
+                return
+            if isinstance(value, dict):
+                for child in value.values():
+                    walk(child)
+                return
+            if isinstance(value, list):
+                for child in value:
+                    walk(child)
+
+        walk(data)
+        return output
 
     @staticmethod
     def _looks_like_status_data(value: object) -> bool:
@@ -298,7 +334,10 @@ class WeiboParser(BaseParser):
                 return fallback
             extended_data = payload.get("data") or {}
             if isinstance(extended_data, dict):
-                return self._extract_body_text(extended_data) or fallback
+                extended_text = self._extract_body_text(extended_data)
+                if extended_text:
+                    data["_parser_x_extended_body"] = extended_data
+                    return extended_text
         except Exception as exc:
             logger.debug(f"[Weibo] 获取长微博正文失败，使用摘要正文: {exc}")
         return fallback
@@ -380,6 +419,18 @@ class WeiboParser(BaseParser):
         )
 
         text = await self._resolve_body_text(data, bid)
+        card_emotes = select_text_emotes(
+            "\n".join(
+                value
+                for value in (
+                    self._html_to_plain_text(data.get("status_title")),
+                    text,
+                )
+                if value
+            ),
+            "weibo",
+            self._extract_body_emotes(data),
+        )
 
         timestamp = None
         if created_at := data.get("created_at"):
@@ -475,6 +526,7 @@ class WeiboParser(BaseParser):
                     ),
                     *([f"媒体 {len(contents)} 项"] if len(contents) > 1 else []),
                 ],
+                "card_emotes": card_emotes,
             }
         )
 
