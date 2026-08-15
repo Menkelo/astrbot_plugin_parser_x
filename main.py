@@ -1369,6 +1369,8 @@ class ParserXPlugin(Star):
         node_uin: str,
         node_name: str,
         original_message_reply,
+        include_videos: bool = True,
+        include_non_videos: bool = True,
     ) -> None:
         """Send an explicit native delivery plan without rendering a body card."""
         plan = result.delivery
@@ -1417,8 +1419,17 @@ class ParserXPlugin(Star):
                     logger.warning(f"原生内容逐段发送失败: {exc}")
 
         async def send_batch(batch: DeliveryBatch) -> None:
+            parts = [
+                part
+                for part in batch.parts
+                if (
+                    include_videos
+                    if isinstance(part, (VideoContent, DynamicContent))
+                    else include_non_videos
+                )
+            ]
             media_parts = [
-                part for part in batch.parts if isinstance(part, MediaContent)
+                part for part in parts if isinstance(part, MediaContent)
             ]
             resolved_media = await asyncio.gather(
                 *(resolve_media(content) for content in media_parts)
@@ -1433,7 +1444,7 @@ class ParserXPlugin(Star):
             }
 
             segments: list[BaseMessageComponent] = []
-            for part in batch.parts:
+            for part in parts:
                 if isinstance(part, str):
                     text = part.strip()
                     if text:
@@ -1680,18 +1691,62 @@ class ParserXPlugin(Star):
             and result.delivery is not None
         )
         if native_delivery and result.delivery is not None:
-            concurrent_tasks: list[asyncio.Task[None]] = [
-                asyncio.create_task(
-                    self._send_delivery_plan(
-                        event,
-                        result,
-                        node_uin=node_uin,
-                        node_name=node_name,
-                        original_message_reply=original_message_reply,
-                    ),
-                    name="parser_x_native_delivery",
+            one_image_flow = bool(
+                result.extra.get("render_text_card")
+                and result.extra.get("delivery_text_card_consume_non_video")
+            )
+
+            async def send_one_image_or_native_fallback() -> None:
+                card_sent = await self._render_and_send_text_card(
+                    event,
+                    result,
+                    original_message_reply=original_message_reply,
                 )
-            ]
+                if card_sent:
+                    return
+                await self._send_delivery_plan(
+                    event,
+                    result,
+                    node_uin=node_uin,
+                    node_name=node_name,
+                    original_message_reply=original_message_reply,
+                    include_videos=False,
+                )
+
+            if one_image_flow:
+                concurrent_tasks: list[asyncio.Task[None]] = [
+                    asyncio.create_task(
+                        send_one_image_or_native_fallback(),
+                        name="parser_x_native_one_image_delivery",
+                    )
+                ]
+                if video_contents:
+                    concurrent_tasks.append(
+                        asyncio.create_task(
+                            self._send_delivery_plan(
+                                event,
+                                result,
+                                node_uin=node_uin,
+                                node_name=node_name,
+                                original_message_reply=original_message_reply,
+                                include_non_videos=False,
+                            ),
+                            name="parser_x_native_video_delivery",
+                        )
+                    )
+            else:
+                concurrent_tasks = [
+                    asyncio.create_task(
+                        self._send_delivery_plan(
+                            event,
+                            result,
+                            node_uin=node_uin,
+                            node_name=node_name,
+                            original_message_reply=original_message_reply,
+                        ),
+                        name="parser_x_native_delivery",
+                    )
+                ]
 
             comment_factory = result.extra.get("comment_image_task_factory")
             if video_contents and callable(comment_factory):

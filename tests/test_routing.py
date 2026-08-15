@@ -3389,9 +3389,97 @@ def test_obsolete_body_card_flags_do_not_replace_source_image(tmp_path):
     assert event.sent[0][1].file == str(source_path)
 
 
-def test_native_rich_delivery_keeps_text_images_and_video_without_body_card(
+@pytest.mark.parametrize(
+    ("platform_name", "display_name"),
+    [("miyoushe", "米游社"), ("xiaoheihe", "小黑盒")],
+)
+def test_native_graphic_posts_render_as_one_direct_image(
     tmp_path,
+    platform_name,
+    display_name,
 ):
+    from astrbot_plugin_parser_x.core.data import (
+        DeliveryBatch,
+        DeliveryPlan,
+        ParseResult,
+        Platform,
+    )
+    from astrbot_plugin_parser_x.core.data import (
+        ImageContent as PluginImageContent,
+    )
+    from astrbot_plugin_parser_x.main import ParserXPlugin
+
+    source_path = tmp_path / "body.png"
+    _save_render_fixture(source_path)
+    plugin = object.__new__(ParserXPlugin)
+    plugin.config = {"behavior": {"show_download_fail_tip": True}}
+    plugin.cache_dir = tmp_path
+
+    class FakeTextRenderer:
+        def __init__(self):
+            self.kwargs = None
+
+        async def render_text_card(self, out_path, **kwargs):
+            self.kwargs = kwargs
+            _save_render_fixture(out_path, size=(760, 420))
+
+    plugin.text_renderer = FakeTextRenderer()
+
+    class Event:
+        message_obj = SimpleNamespace(message_id=2806)
+
+        def __init__(self):
+            self.sent = []
+
+        @staticmethod
+        def get_sender_id():
+            return "42"
+
+        @staticmethod
+        def get_sender_name():
+            return "用户"
+
+        @staticmethod
+        def chain_result(chain):
+            return chain
+
+        @staticmethod
+        def plain_result(text):
+            return [Plain(text)]
+
+        async def send(self, result):
+            self.sent.append(result)
+
+    source = PluginImageContent(source_path)
+    result = ParseResult(
+        platform=Platform(name=platform_name, display_name=display_name),
+        title="图文标题",
+        text="图文正文",
+        contents=[source],
+        delivery=DeliveryPlan(
+            [DeliveryBatch(["图文正文", source], mode="forward")]
+        ),
+        extra={
+            "render_text_card": True,
+            "text_card_flow": [
+                {"type": "text", "text": "图文正文"},
+                {"type": "image", "url": "https://img.example.com/body.png"},
+            ],
+            "delivery_text_card_consume_non_video": True,
+        },
+    )
+    event = Event()
+    asyncio.run(plugin._send_parse_result(event, result))
+
+    assert plugin.text_renderer.kwargs is not None
+    assert len(event.sent) == 1
+    assert len(event.sent[0]) == 2
+    assert isinstance(event.sent[0][0], Reply)
+    assert isinstance(event.sent[0][1], MessageImage)
+    assert not any(isinstance(segment, Nodes) for segment in event.sent[0])
+
+
+def test_native_one_image_flow_keeps_video_separate(tmp_path):
     from astrbot_plugin_parser_x.core.data import (
         DeliveryBatch,
         DeliveryPlan,
@@ -3480,19 +3568,21 @@ def test_native_rich_delivery_keeps_text_images_and_video_without_body_card(
     event = Event()
     asyncio.run(plugin._send_parse_result(event, result))
 
-    assert plugin.text_renderer.kwargs is None
-    assert len(event.sent) == 3
-    assert isinstance(event.sent[0][0], MessageImage)
-    assert event.sent[0][0].file == str(cover_path)
-    assert isinstance(event.sent[0][1], Plain)
-    assert event.sent[0][1].text == "帖子概要"
-    assert isinstance(event.sent[1][0], Nodes)
-    assert [type(node.content[0]) for node in event.sent[1][0].nodes] == [
-        Plain,
-        MessageImage,
+    assert plugin.text_renderer.kwargs is not None
+    assert plugin.text_renderer.kwargs["content_blocks"] == [
+        {"type": "text", "text": "富文本正文"},
+        {"type": "image", "url": "https://img.example.com/body.png"},
     ]
-    assert event.sent[1][0].nodes[1].content[0].file == str(body_path)
-    assert isinstance(event.sent[2][0], MessageVideo)
+    assert len(event.sent) == 2
+    assert not any(isinstance(segment, Nodes) for chain in event.sent for segment in chain)
+    card_chain = next(
+        chain for chain in event.sent if any(isinstance(segment, Reply) for segment in chain)
+    )
+    assert len(card_chain) == 2
+    assert isinstance(card_chain[0], Reply)
+    assert isinstance(card_chain[1], MessageImage)
+    assert Path(card_chain[1].file).name.startswith("text_card_xiaoheihe_")
+    assert any(isinstance(chain[0], MessageVideo) for chain in event.sent)
 
 
 @pytest.mark.parametrize("image_count", [1, 2])
