@@ -449,7 +449,9 @@ class XiaoHongShuParser(BaseParser):
             extra.update(
                 {
                     "render_text_card": True,
-                    "text_card_media": card_media_url,
+                    "text_card_media": (
+                        card_media_url if note_detail.video_url else ""
+                    ),
                     "card_kind": (
                         "笔记 · 视频" if note_detail.video_url else "笔记 · 图文"
                     ),
@@ -469,6 +471,8 @@ class XiaoHongShuParser(BaseParser):
             )
             if note_detail.video_url:
                 extra["video_separate_from_card"] = True
+            else:
+                extra["image_post_card_in_forward"] = True
             if note_detail.avatar_url:
                 extra["text_card_avatar"] = note_detail.avatar_url
 
@@ -569,7 +573,9 @@ class XiaoHongShuParser(BaseParser):
             extra.update(
                 {
                     "render_text_card": True,
-                    "text_card_media": card_media_url,
+                    "text_card_media": (
+                        card_media_url if note_data_obj.video_url else ""
+                    ),
                     "card_kind": (
                         "笔记 · 视频" if note_data_obj.video_url else "笔记 · 图文"
                     ),
@@ -589,6 +595,8 @@ class XiaoHongShuParser(BaseParser):
             )
             if note_data_obj.video_url:
                 extra["video_separate_from_card"] = True
+            else:
+                extra["image_post_card_in_forward"] = True
             if note_data_obj.user.avatar:
                 extra["text_card_avatar"] = note_data_obj.user.avatar
 

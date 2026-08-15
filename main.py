@@ -317,9 +317,12 @@ class ParserXPlugin(Star):
         media_url = result.extra.get("text_card_media")
         if not isinstance(media_url, str) or not media_url.strip():
             media_url = None
-        if not text and not title and not media_url:
+        content_blocks = result.extra.get("text_card_flow")
+        if not isinstance(content_blocks, (list, tuple)):
+            content_blocks = None
+        if not text and not title and not media_url and not content_blocks:
             text = (result.url or "").strip()
-        if not text and not title and not media_url:
+        if not text and not title and not media_url and not content_blocks:
             return None
 
         author_name = result.author.name if result.author else None
@@ -371,12 +374,13 @@ class ParserXPlugin(Star):
                     repr(result.extra.get("card_metrics")),
                     repr(result.extra.get("card_info")),
                     repr(result.extra.get("card_emotes")),
+                    repr(content_blocks),
                     author_badge or "",
                     comment_signature,
                     accent_color,
                     accent_soft,
                     accent_source,
-                    "text_card_v13_single_image_inline_plain_header",
+                    "text_card_v14_ordered_content_flow",
                 ]
             ).encode("utf-8")
         ).hexdigest()[:12]
@@ -410,6 +414,7 @@ class ParserXPlugin(Star):
                 accent_soft=accent_soft,
                 accent_source=accent_source,
                 emotes=result.extra.get("card_emotes"),
+                content_blocks=content_blocks,
             )
 
         return ImageContent(out_path)
@@ -715,47 +720,67 @@ class ParserXPlugin(Star):
 
         card_sent = await card_task if card_task is not None else False
         if card_sent:
-            try:
-                batch_index = int(result.extra.get("delivery_text_card_batch", 0))
-            except (TypeError, ValueError):
-                batch_index = 0
-            if 0 <= batch_index < len(batches):
-                original = batches[batch_index]
-                replace_text = bool(
-                    result.extra.get(
-                        "delivery_text_card_replace_text",
-                        True,
-                    )
-                )
-                remaining = [
-                    part
-                    for part in original.parts
-                    if not replace_text or not isinstance(part, str)
-                ]
-                if remaining:
-                    batches[batch_index] = DeliveryBatch(
-                        remaining,
-                        mode=original.mode,
-                        reply_original=original.reply_original,
-                    )
-                else:
-                    batches.pop(batch_index)
-
-            embedded_image = (
-                result.contents[0] if self._card_embeds_single_image(result) else None
-            )
-            cleaned_batches: list[DeliveryBatch] = []
-            for batch in batches:
-                parts = [part for part in batch.parts if part is not embedded_image]
-                if parts:
-                    cleaned_batches.append(
-                        DeliveryBatch(
-                            parts,
-                            mode=batch.mode,
-                            reply_original=batch.reply_original,
+            if result.extra.get("delivery_text_card_consume_non_video"):
+                cleaned_batches: list[DeliveryBatch] = []
+                for batch in batches:
+                    parts = [
+                        part
+                        for part in batch.parts
+                        if isinstance(part, (VideoContent, DynamicContent))
+                    ]
+                    if parts:
+                        cleaned_batches.append(
+                            DeliveryBatch(
+                                parts,
+                                mode=batch.mode,
+                                reply_original=batch.reply_original,
+                            )
+                        )
+                batches = cleaned_batches
+            else:
+                try:
+                    batch_index = int(result.extra.get("delivery_text_card_batch", 0))
+                except (TypeError, ValueError):
+                    batch_index = 0
+                if 0 <= batch_index < len(batches):
+                    original = batches[batch_index]
+                    replace_text = bool(
+                        result.extra.get(
+                            "delivery_text_card_replace_text",
+                            True,
                         )
                     )
-            batches = cleaned_batches
+                    remaining = [
+                        part
+                        for part in original.parts
+                        if not replace_text or not isinstance(part, str)
+                    ]
+                    if remaining:
+                        batches[batch_index] = DeliveryBatch(
+                            remaining,
+                            mode=original.mode,
+                            reply_original=original.reply_original,
+                        )
+                    else:
+                        batches.pop(batch_index)
+
+                embedded_image = (
+                    result.contents[0]
+                    if self._card_embeds_single_image(result)
+                    else None
+                )
+                cleaned_batches = []
+                for batch in batches:
+                    parts = [part for part in batch.parts if part is not embedded_image]
+                    if parts:
+                        cleaned_batches.append(
+                            DeliveryBatch(
+                                parts,
+                                mode=batch.mode,
+                                reply_original=batch.reply_original,
+                            )
+                        )
+                batches = cleaned_batches
 
         concurrent_video_content_ids = {
             id(batch.parts[0]) for batch in concurrent_video_batches
@@ -802,9 +827,9 @@ class ParserXPlugin(Star):
                 name="parser_x_comment_image_build",
             )
 
-        async def process_comment_content() -> None:
+        async def prepare_comment_segments() -> list[BaseMessageComponent]:
             if comment_task is None or comment_started_at is None:
-                return
+                return []
 
             def remaining_timeout() -> float:
                 elapsed = asyncio.get_running_loop().time() - comment_started_at
@@ -817,19 +842,19 @@ class ParserXPlugin(Star):
                 )
             except asyncio.TimeoutError:
                 logger.warning("评论区生成超时，已跳过发送")
-                return
+                return []
             except Exception as exc:
                 logger.warning(f"评论区生成失败: {exc}")
-                return
+                return []
 
             if not isinstance(raw_contents, (list, tuple)):
                 logger.warning("评论区生成结果格式无效，已跳过发送")
-                return
+                return []
             comment_contents = [
                 content for content in raw_contents if isinstance(content, MediaContent)
             ]
             if not comment_contents:
-                return
+                return []
 
             try:
                 download_results = await asyncio.wait_for(
@@ -843,10 +868,10 @@ class ParserXPlugin(Star):
                 )
             except asyncio.TimeoutError:
                 logger.warning("评论区图片渲染超时，已跳过发送")
-                return
+                return []
             except Exception as exc:
                 logger.warning(f"评论区图片准备失败: {exc}")
-                return
+                return []
 
             segments: list[BaseMessageComponent] = []
             for content, path, error in download_results:
@@ -855,6 +880,10 @@ class ParserXPlugin(Star):
                     continue
                 if path and (segment := self._convert_to_seg(content, path)):
                     segments.append(segment)
+            return segments
+
+        async def process_comment_content() -> None:
+            segments = await prepare_comment_segments()
             if not segments:
                 return
 
@@ -890,7 +919,121 @@ class ParserXPlugin(Star):
                     except Exception as exc:
                         logger.warning(f"评论区图片逐张发送失败: {exc}")
 
+        async def prepare_body_card_segment() -> BaseMessageComponent | None:
+            try:
+                card = await self._build_text_card_content(result, None)
+            except Exception as exc:
+                logger.warning(f"附属正文卡渲染失败: {exc}")
+                return None
+            if card is None:
+                return None
+
+            _, path, error = await self._download_content(card)
+            if error or path is None:
+                if error:
+                    logger.warning(f"附属正文卡准备失败: {error}")
+                return None
+            return self._convert_to_seg(card, path)
+
+        async def send_forward_segments(
+            segments: list[BaseMessageComponent],
+            *,
+            failure_label: str,
+        ) -> None:
+            for offset in range(0, len(segments), 20):
+                group = segments[offset : offset + 20]
+                nodes = Nodes(
+                    [
+                        Node(uin=node_uin, name=node_name, content=[segment])
+                        for segment in group
+                    ]
+                )
+                try:
+                    await event.send(event.chain_result([nodes]))
+                    continue
+                except Exception as exc:
+                    logger.warning(f"{failure_label}，降级逐段发送: {exc}")
+
+                for segment in group:
+                    try:
+                        await event.send(event.chain_result([segment]))
+                    except Exception as exc:
+                        logger.warning(f"附属内容逐段发送失败: {exc}")
+
+        async def process_split_image_post() -> bool:
+            source_contents = [
+                content
+                for content in result.contents
+                if isinstance(content, (ImageContent, GraphicsContent))
+            ]
+            if not source_contents:
+                return False
+
+            card_segment_task = asyncio.create_task(
+                prepare_body_card_segment(),
+                name="parser_x_forward_body_card",
+            )
+            comment_segments_task = asyncio.create_task(
+                prepare_comment_segments(),
+                name="parser_x_forward_comments",
+            )
+            source_downloads = await asyncio.gather(
+                *(self._download_content(content) for content in source_contents)
+            )
+
+            source_segments: list[BaseMessageComponent] = []
+            source_errors: list[str] = []
+            for content, path, error in source_downloads:
+                if error:
+                    source_errors.append(error.strip())
+                    continue
+                if path and (segment := self._convert_to_seg(content, path)):
+                    source_segments.append(segment)
+
+            single_source = len(source_contents) == 1
+            if single_source and source_segments:
+                chain: list[BaseMessageComponent] = []
+                if (reply := original_message_reply()) is not None:
+                    chain.append(reply)
+                chain.append(source_segments[0])
+                try:
+                    await event.send(event.chain_result(chain))
+                except Exception as exc:
+                    logger.warning(f"单图引用发送失败，降级直接发送: {exc}")
+                    try:
+                        await event.send(event.chain_result([source_segments[0]]))
+                    except Exception as fallback_exc:
+                        logger.warning(f"单图直接发送仍失败: {fallback_exc}")
+
+            body_card, comment_segments = await asyncio.gather(
+                card_segment_task,
+                comment_segments_task,
+            )
+            detail_segments: list[BaseMessageComponent] = []
+            if not single_source:
+                detail_segments.extend(source_segments)
+            if body_card is not None:
+                detail_segments.append(body_card)
+            else:
+                fallback = self._format_media_summary(result)
+                if fallback:
+                    detail_segments.append(Plain(fallback))
+            detail_segments.extend(comment_segments)
+            if show_download_fail_tip:
+                detail_segments.extend(Plain(error) for error in source_errors if error)
+
+            if detail_segments:
+                await send_forward_segments(
+                    detail_segments,
+                    failure_label="图文附属合并转发失败",
+                )
+            return True
+
         async def process_main_content():
+            if result.extra.get("image_post_card_in_forward"):
+                if await process_split_image_post():
+                    return True
+
             parsed_contents = tuple(result.contents)
             if getattr(result, "delivery", None) is not None:
                 await self._send_delivery_plan(
@@ -1151,7 +1294,7 @@ class ParserXPlugin(Star):
                 return
 
         try:
-            await process_main_content()
+            comments_joined = await process_main_content()
         except BaseException:
             if comment_task is not None and not comment_task.done():
                 comment_task.cancel()
@@ -1159,7 +1302,8 @@ class ParserXPlugin(Star):
                 await asyncio.gather(comment_task, return_exceptions=True)
             raise
 
-        await process_comment_content()
+        if not comments_joined:
+            await process_comment_content()
 
     # endregion
 

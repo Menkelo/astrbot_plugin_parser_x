@@ -638,6 +638,24 @@ class XiaoheiheParser(BaseParser):
             emote_contents: dict[str, ImageContent] = {}
             image_count = 0
             card_media_url = cover_url or ""
+            card_flow: list[dict[str, str]] = []
+
+            def append_card_text(value: str) -> None:
+                value = str(value or "").strip()
+                if not value:
+                    return
+                if any(
+                    block.get("type") == "text" and block.get("text") == value
+                    for block in card_flow
+                ):
+                    return
+                if card_flow and card_flow[-1].get("type") == "text":
+                    previous = card_flow[-1].get("text", "")
+                    card_flow[-1]["text"] = f"{previous}\n\n{value}".strip()
+                    return
+                card_flow.append({"type": "text", "text": value})
+
+            append_card_text(description)
 
             def append_body_text(value: str) -> None:
                 last = 0
@@ -667,12 +685,11 @@ class XiaoheiheParser(BaseParser):
             for block_type, value in rich_blocks:
                 if block_type == "text":
                     append_body_text(value)
+                    append_card_text(value)
                     continue
                 normalized = normalize_image_url(value)
                 if not normalized or normalized == cover_url or image_count >= 20:
                     continue
-                if not card_media_url:
-                    card_media_url = normalized
                 content = ImageContent(
                     self.downloader.download_img(
                         normalized,
@@ -681,6 +698,7 @@ class XiaoheiheParser(BaseParser):
                 )
                 image_contents.append(content)
                 body_parts.append(content)
+                card_flow.append({"type": "image", "url": normalized})
                 image_count += 1
 
             video_contents: list[VideoContent] = []
@@ -748,9 +766,14 @@ class XiaoheiheParser(BaseParser):
             if len(card_text) > 1200:
                 card_text = f"{card_text[:1197]}..."
             card_emotes = {}
-            if contains_platform_emotes(card_text, "xiaoheihe"):
+            card_flow_text = "\n\n".join(
+                block.get("text", "")
+                for block in card_flow
+                if block.get("type") == "text"
+            )
+            if contains_platform_emotes(card_flow_text or card_text, "xiaoheihe"):
                 card_emotes = select_text_emotes(
-                    card_text,
+                    card_flow_text or card_text,
                     "xiaoheihe",
                     emote_catalog,
                 )
@@ -761,6 +784,8 @@ class XiaoheiheParser(BaseParser):
                     "text_card_text": card_text,
                     "card_emotes": card_emotes,
                     "text_card_media": card_media_url,
+                    "text_card_flow": card_flow,
+                    "delivery_text_card_consume_non_video": True,
                     "card_kind": (
                         "帖子 · 视频"
                         if video_contents

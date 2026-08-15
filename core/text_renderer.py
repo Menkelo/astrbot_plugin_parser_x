@@ -136,6 +136,62 @@ class TextCardRenderer:
         return output
 
     @staticmethod
+    def _normalise_content_blocks(blocks: object) -> list[tuple[str, str]]:
+        if not isinstance(blocks, (list, tuple)):
+            return []
+
+        output: list[tuple[str, str]] = []
+        for item in blocks:
+            kind: object = ""
+            value: object = ""
+            if isinstance(item, dict):
+                kind = item.get("type") or item.get("kind")
+                if kind == "text":
+                    value = item.get("text") or item.get("value")
+                elif kind == "image":
+                    value = item.get("url") or item.get("src") or item.get("value")
+            elif isinstance(item, (list, tuple)) and len(item) >= 2:
+                kind, value = item[0], item[1]
+
+            kind_text = str(kind or "").strip().lower()
+            value_text = str(value or "").strip()
+            if kind_text in {"text", "image"} and value_text:
+                output.append((kind_text, value_text))
+        return output
+
+    @classmethod
+    def _render_content_flow(
+        cls,
+        blocks: list[tuple[str, str]],
+        *,
+        platform_key: str | None,
+        emotes: object,
+    ) -> str:
+        if not blocks:
+            return ""
+
+        rendered: list[str] = []
+        for kind, value in blocks:
+            if kind == "text":
+                rendered.append(
+                    '<div class="flow-text">'
+                    + cls._render_text_html(
+                        value,
+                        platform_key=platform_key,
+                        emotes=emotes,
+                    )
+                    + "</div>"
+                )
+                continue
+            rendered.append(
+                '<figure class="flow-image-wrap">'
+                f'<img class="flow-image" src="{cls._safe_url(value)}" alt="" '
+                "onerror=\"this.parentElement.style.display='none'\">"
+                "</figure>"
+            )
+        return f'<section class="content-flow">{"".join(rendered)}</section>'
+
+    @staticmethod
     def supports_comment_document(document: object | None) -> bool:
         if document is None:
             return False
@@ -205,6 +261,7 @@ class TextCardRenderer:
         accent_soft: str | None = None,
         accent_source: str = "platform",
         emotes: object = None,
+        content_blocks: object = None,
     ):
         theme = resolve_card_theme(platform_key, platform_name)
         resolved_accent = normalise_hex_color(accent_color, theme.accent)
@@ -257,6 +314,12 @@ class TextCardRenderer:
         if not meta_parts:
             meta_parts.append(display_name)
         meta_text = " · ".join(meta_parts)
+        normalised_blocks = self._normalise_content_blocks(content_blocks)
+        flow_html = self._render_content_flow(
+            normalised_blocks,
+            platform_key=platform_key,
+            emotes=emotes,
+        )
         text_html = self._render_text_html(
             text,
             platform_key=platform_key,
@@ -264,7 +327,7 @@ class TextCardRenderer:
         )
         text_block = (
             f'<section class="copy-block"><div class="text">{text_html}</div></section>'
-            if text
+            if text and not normalised_blocks
             else ""
         )
 
@@ -319,9 +382,10 @@ body{{padding:18px 22px 20px;overflow-x:hidden;font-family:-apple-system,BlinkMa
 .hero{{width:100%;max-height:760px;overflow:hidden;border-bottom:1px solid {theme.border};background:{theme.subtle}}}.hero-image{{display:block;width:100%;min-height:240px;max-height:430px;object-fit:cover}}.hero-image.media-contain{{max-height:760px;object-fit:contain}}
 .primary-block{{display:grid;gap:10px;padding:19px 20px 17px}}.primary-block h1{{margin:0;overflow-wrap:anywhere;color:{theme.text};font-size:25px;font-weight:700;line-height:1.42}}.primary-block h1 .inline-emote{{width:32px;height:32px;vertical-align:-8px}}.meta{{color:{theme.muted};font-size:13px;line-height:1.45}}
 .metrics,.info-chips{{display:flex;align-items:center;gap:7px;flex-wrap:wrap}}.metric,.info-chip{{display:inline-flex;align-items:center;gap:5px;padding:5px 9px;border-radius:999px;background:{theme.subtle};color:{theme.muted};font-size:13px;line-height:1.45}}.metric strong{{color:{theme.text};font-size:14px}}
-.profile-block,.copy-block,.info-block,.comments-block,.footer{{border-top:1px solid {theme.border}}}.profile-block{{padding:15px 20px}}.profile{{display:flex;align-items:center;gap:10px}}.profile-avatar{{position:relative;display:grid;width:40px;height:40px;place-items:center;flex:0 0 40px;overflow:hidden;border:1px solid {theme.border};border-radius:50%;background:{theme.accent_soft};color:{theme.accent};font-size:14px;font-weight:800}}
+.profile-block,.copy-block,.content-flow,.info-block,.comments-block,.footer{{border-top:1px solid {theme.border}}}.profile-block{{padding:15px 20px}}.profile{{display:flex;align-items:center;gap:10px}}.profile-avatar{{position:relative;display:grid;width:40px;height:40px;place-items:center;flex:0 0 40px;overflow:hidden;border:1px solid {theme.border};border-radius:50%;background:{theme.accent_soft};color:{theme.accent};font-size:14px;font-weight:800}}
 .profile-avatar img{{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}}.profile-copy{{display:grid;min-width:0;gap:2px}}.profile-name{{display:flex;min-width:0;align-items:center;gap:7px;flex-wrap:wrap}}.author{{max-width:440px;overflow:hidden;color:{theme.text};font-size:16px;font-weight:650;text-overflow:ellipsis;white-space:nowrap}}.profile-badge{{padding:1px 7px;border-radius:999px;background:{theme.accent_soft};color:{theme.accent};font-size:11px;font-weight:700;line-height:18px}}.profile-meta{{color:{theme.muted};font-size:12px}}
 .copy-block{{padding:17px 20px 18px}}.text{{color:{theme.text};font-size:18px;line-height:1.72;white-space:pre-wrap;word-break:break-word}}.text-link{{color:{theme.accent};font-weight:650}}.inline-emote{{display:inline-block;width:30px;height:30px;margin:0 2px;object-fit:contain;vertical-align:-8px}}
+.content-flow{{display:grid;gap:15px;padding:17px 20px 18px}}.flow-text{{color:{theme.text};font-size:18px;line-height:1.72;white-space:pre-wrap;word-break:break-word}}.flow-image-wrap{{width:100%;margin:0;overflow:hidden;border:1px solid {theme.border};border-radius:10px;background:{theme.subtle}}}.flow-image{{display:block;width:100%;height:auto;object-fit:contain}}
 .info-block,.comments-block{{padding:17px 20px}}.section-head{{display:flex;align-items:center;justify-content:space-between;gap:10px}}.section-head h2{{margin:0;color:{theme.text};font-size:19px;line-height:1.45}}.section-head>span{{color:{theme.muted};font-size:12px}}.info-chips{{margin-top:11px}}.info-chip{{border:1px solid {theme.border}}}
 .comment-list{{margin-top:4px}}.comment-card{{position:relative;display:grid;grid-template-columns:42px 1fr;gap:11px;padding:15px 0;border-top:1px solid {theme.border}}}.avatar-shell{{position:relative;display:grid;place-items:center;overflow:hidden;border-radius:50%;background:{theme.accent_soft};color:{theme.accent};font-weight:800}}.avatar-shell img{{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}}.avatar{{width:42px;height:42px;font-size:16px}}.reply-avatar{{width:28px;height:28px;font-size:12px}}.comment-body,.reply-body{{min-width:0}}.comment-head{{display:flex;min-height:22px;justify-content:space-between;gap:10px}}
 .author-row{{display:flex;min-height:21px;min-width:0;align-items:center;gap:5px;flex-wrap:wrap}}.nickname,.reply-name{{max-width:310px;overflow:hidden;color:{theme.text};font-size:16px;font-weight:650;text-overflow:ellipsis;white-space:nowrap}}.reply-name{{max-width:250px;font-size:14px}}.author-badge,.up-badge{{display:inline-flex;align-items:center;padding:1px 6px;border:1px solid transparent;border-radius:999px;background:{theme.accent_soft};color:{theme.accent};font-size:11px;font-weight:700;line-height:16px}}
@@ -333,7 +397,7 @@ body{{padding:18px 22px 20px;overflow-x:hidden;font-family:-apple-system,BlinkMa
 </style></head><body><article class="card" data-card-style="minimal-feed" data-accent-source="{self._safe_url(accent_source)}">
 <header class="brand-bar"><div class="brand-copy"><div class="brand-name">{self._safe_text(display_name)}</div></div><div class="product-name">内容解析 · Parser X</div></header>
 {media_html}<section class="primary-block"><h1>{card_title_html}</h1><div class="meta">{self._safe_text(meta_text)}</div>{metric_html}</section>
-{profile_html}{text_block}{info_html}{comments_html}<footer class="footer"><span>Parser X · 跨平台内容解析</span><span class="footer-brand">{self._safe_text(COMMENT_FOOTER_BRAND)}</span></footer>
+{profile_html}{text_block}{flow_html}{info_html}{comments_html}<footer class="footer"><span>Parser X · 跨平台内容解析</span><span class="footer-brand">{self._safe_text(COMMENT_FOOTER_BRAND)}</span></footer>
 </article></body></html>"""
 
         return html
@@ -361,6 +425,7 @@ body{{padding:18px 22px 20px;overflow-x:hidden;font-family:-apple-system,BlinkMa
         accent_soft: str | None = None,
         accent_source: str = "platform",
         emotes: object = None,
+        content_blocks: object = None,
     ):
         html = self.build_html(
             platform_name=platform_name,
@@ -382,6 +447,7 @@ body{{padding:18px 22px 20px;overflow-x:hidden;font-family:-apple-system,BlinkMa
             accent_soft=accent_soft,
             accent_source=accent_source,
             emotes=emotes,
+            content_blocks=content_blocks,
         )
         return await self.render_service.render(
             out_path,

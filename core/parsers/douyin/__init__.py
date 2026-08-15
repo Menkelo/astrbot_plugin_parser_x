@@ -645,7 +645,7 @@ class DouyinParser(BaseParser):
                 {
                     "render_text_card": True,
                     "text_card_avatar": meta.avatar_url or "",
-                    "text_card_media": comment_cover or "",
+                    "text_card_media": "" if image_work else comment_cover or "",
                     "card_kind": "图文作品" if image_work else "视频作品",
                     "card_author_badge": "作者",
                     "card_metrics": [
@@ -665,7 +665,9 @@ class DouyinParser(BaseParser):
                     "card_emotes": card_emotes,
                 }
             )
-            if not image_work:
+            if image_work:
+                extra["image_post_card_in_forward"] = True
+            else:
                 extra["video_separate_from_card"] = True
         return self.result(
             title=meta.desc,
@@ -775,7 +777,8 @@ class DouyinParser(BaseParser):
                 {
                     "render_text_card": True,
                     "text_card_avatar": slides.avatar_url or "",
-                    "text_card_media": comment_cover or "",
+                    "text_card_media": "",
+                    "image_post_card_in_forward": True,
                     "card_kind": "图集",
                     "card_author_badge": "作者",
                     "card_info": [

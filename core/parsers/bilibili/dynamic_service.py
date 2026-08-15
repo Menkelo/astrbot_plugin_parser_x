@@ -892,24 +892,26 @@ class BiliDynamicService:
 
         logger.info(
             f"[Bilibili][诊断] 动态附加图片 {len(full_images)} 张; "
-            f"正文 {len(full_text or '')} 字; 单图入卡={single_image_work}"
+            f"正文 {len(full_text or '')} 字; 单图直引={single_image_work}"
         )
 
         card_info = ["正文完整保留"]
         if single_image_work:
-            card_info.append("单图已合并至卡片")
+            card_info.append("单图直接引用")
         elif full_images:
-            card_info.append(f"媒体 {len(full_images)} 项")
+            card_info.append(f"原图 {len(full_images)} 张")
         extra = {
             "render_text_card": True,
             "text_card_avatar": author_avatar_data_uri or author_avatar or "",
-            "text_card_media": image_urls[0] if image_urls else "",
+            "text_card_media": "",
             "card_platform_name": "B站动态",
             "card_kind": "动态 · 图文" if full_images else "动态",
             "card_author_badge": "UP主",
             "card_info": card_info,
             "card_emotes": card_emotes,
         }
+        if full_images:
+            extra["image_post_card_in_forward"] = True
 
         return self.parser.result(
             title=dynamic_title,
@@ -918,7 +920,6 @@ class BiliDynamicService:
             author=self.parser.create_author(author_name, author_avatar),
             timestamp=pub_ts,
             url=f"https://t.bilibili.com/{dynamic_id}",
-            # 所有动态都由插件发送阶段渲染统一长卡；单图仅在卡片主视觉
-            # 中出现一次，多图继续在卡片后按独立节点发送。
+            # 图文动态优先发送原图；无封面正文卡作为附属节点进入合并转发。
             extra=extra,
         )

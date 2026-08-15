@@ -498,7 +498,13 @@ class WeiboParser(BaseParser):
             {
                 "render_text_card": True,
                 "text_card_avatar": author_avatar,
-                "text_card_media": static_pic_urls[0] if static_pic_urls else "",
+                "text_card_media": (
+                    ""
+                    if image_contents and not video_contents
+                    else static_pic_urls[0]
+                    if static_pic_urls
+                    else ""
+                ),
                 "card_kind": (
                     "微博 · 图文"
                     if image_contents
@@ -529,6 +535,8 @@ class WeiboParser(BaseParser):
                 "card_emotes": card_emotes,
             }
         )
+        if image_contents and not video_contents:
+            extra["image_post_card_in_forward"] = True
 
         author = self.create_author(
             author_name, author_avatar, ext_headers=self.headers

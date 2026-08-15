@@ -221,7 +221,8 @@ class MiyousheParser(BaseParser):
             or "米游社用户"
         )
         author_avatar = user.get("avatar_url") or user.get("avatar")
-        text = self._plain_content(post.get("content"))
+        full_text = self._plain_content(post.get("content"))
+        text = full_text
         if len(text) > 4000:
             text = text[:3997] + "..."
 
@@ -235,11 +236,15 @@ class MiyousheParser(BaseParser):
                 )
             )
         post_image_urls = self._image_urls(post)
+        body_image_urls = [item for item in post_image_urls if item != cover_url]
         image_contents = [
             ImageContent(self.downloader.download_img(item, ext_headers=self.headers))
-            for item in post_image_urls
-            if item != cover_url
+            for item in body_image_urls
         ]
+        card_flow: list[dict[str, str]] = []
+        if full_text:
+            card_flow.append({"type": "text", "text": full_text})
+        card_flow.extend({"type": "image", "url": item} for item in body_image_urls)
         video_contents = []
         video_url, duration = self._video_url(post_container.get("vod_list"))
         if video_url:
@@ -296,20 +301,20 @@ class MiyousheParser(BaseParser):
             owner_id=owner_id,
         )
         card_emotes = {}
-        if contains_platform_emotes(text, "miyoushe"):
+        if contains_platform_emotes(full_text, "miyoushe"):
             emote_catalog = await load_platform_emotes(
                 self,
                 "miyoushe",
                 gids=post.get("game_id") or post.get("gids") or 2,
             )
-            card_emotes = select_text_emotes(text, "miyoushe", emote_catalog)
+            card_emotes = select_text_emotes(full_text, "miyoushe", emote_catalog)
         extra.update(
             {
                 "render_text_card": True,
                 "text_card_avatar": str(author_avatar or ""),
-                "text_card_media": str(
-                    cover_url or (post_image_urls[0] if post_image_urls else "")
-                ),
+                "text_card_media": str(cover_url or ""),
+                "text_card_flow": card_flow,
+                "delivery_text_card_consume_non_video": True,
                 "card_emotes": card_emotes,
                 "card_kind": (
                     "文章 · 视频"
