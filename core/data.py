@@ -168,7 +168,6 @@ class ParseResult:
     url: str | None = None
 
     contents: list[MediaContent] = field(default_factory=list)
-    comment_contents: list[MediaContent] = field(default_factory=list)
     delivery: DeliveryPlan | None = None
 
     extra: dict[str, Any] = field(default_factory=dict)
@@ -218,7 +217,6 @@ class ParseResult:
             f"url: {self.url}, "
             f"author: {self.author}, "
             f"contents: {self.contents}, "
-            f"comments: {self.comment_contents}, "
             f"extra: {self.extra}, "
             f"repost: <<<<<<<{self.repost}>>>>>>"
         )
@@ -228,7 +226,6 @@ class ParseResultKwargs(TypedDict, total=False):
     title: str | None
     text: str | None
     contents: list[MediaContent]
-    comment_contents: list[MediaContent]
     delivery: DeliveryPlan | None
     timestamp: int | None
     url: str | None

@@ -24,7 +24,13 @@ from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import (
 )
 
 from .core.arbiter import EmojiLikeArbiter
+from .core.card_theme import resolve_card_theme
 from .core.clean import CacheCleaner
+from .core.color_utils import (
+    extract_dominant_color,
+    mix_hex_color,
+    normalise_hex_color,
+)
 from .core.comment_settings import parse_bool
 from .core.data import (
     AudioContent,
@@ -120,7 +126,6 @@ class ParserXPlugin(Star):
         self.cleaner = CacheCleaner(self.context, self.config)
         self.render_service = HtmlRenderService.from_config(config, self.html_render)
         self.text_renderer = TextCardRenderer(self.render_service)
-        self._background_tasks: set[asyncio.Task] = set()
 
     # region 生命周期
 
@@ -128,12 +133,6 @@ class ParserXPlugin(Star):
         self._register_parser()
 
     async def terminate(self):
-        background_tasks = list(self._background_tasks)
-        for task in background_tasks:
-            task.cancel()
-        if background_tasks:
-            await asyncio.gather(*background_tasks, return_exceptions=True)
-        self._background_tasks.clear()
         await self.downloader.close()
         unique_parsers = set(self.parser_map.values())
         for parser in unique_parsers:
@@ -292,46 +291,33 @@ class ParserXPlugin(Star):
             number = default
         return max(1.0, min(number, maximum))
 
-    @staticmethod
-    def _coalesce_delivery_card_batches(
-        batches: list[DeliveryBatch],
-        card_batch_index: int,
-    ) -> None:
-        """Keep a rendered card and its following text/images in one message group."""
-        if not 0 <= card_batch_index < len(batches):
-            return
+    async def _resolve_card_palette(
+        self,
+        result: ParseResult,
+    ) -> tuple[str, str, str]:
+        theme = resolve_card_theme(result.platform.name, result.platform.display_name)
+        explicit = result.extra.get("card_accent_color")
+        if isinstance(explicit, str) and explicit.strip():
+            accent = normalise_hex_color(explicit, theme.accent)
+            return accent, mix_hex_color(accent, "#ffffff", 0.90), "override"
 
-        anchor = batches[card_batch_index]
-        merged_parts = list(anchor.parts)
-        merged_mode = anchor.mode
-        reply_original = anchor.reply_original
-        next_index = card_batch_index + 1
+        for content in result.contents:
+            if not isinstance(content, (ImageContent, GraphicsContent)):
+                continue
+            try:
+                path = await content.get_path()
+                accent = await asyncio.to_thread(
+                    extract_dominant_color,
+                    path,
+                )
+            except Exception as exc:
+                logger.debug(f"作品主色提取失败，使用平台主色: {exc}")
+                continue
+            if accent is None:
+                continue
+            return accent, mix_hex_color(accent, "#ffffff", 0.90), "media"
 
-        while next_index < len(batches):
-            candidate = batches[next_index]
-            if not candidate.parts or not all(
-                isinstance(part, (str, ImageContent, GraphicsContent))
-                for part in candidate.parts
-            ):
-                break
-
-            merged_parts.extend(candidate.parts)
-            if candidate.mode == "forward":
-                merged_mode = "forward"
-            reply_original = reply_original or candidate.reply_original
-            batches.pop(next_index)
-
-        image_count = sum(
-            isinstance(part, (ImageContent, GraphicsContent)) for part in merged_parts
-        )
-        if image_count > 9:
-            merged_mode = "forward"
-
-        batches[card_batch_index] = DeliveryBatch(
-            merged_parts,
-            mode=merged_mode,
-            reply_original=reply_original,
-        )
+        return theme.accent, theme.accent_soft, "platform"
 
     async def _build_text_card_content(
         self,
@@ -373,6 +359,9 @@ class ParserXPlugin(Star):
         comment_signature = (
             repr(comment_document) if comment_document is not None else ""
         )
+        accent_color, accent_soft, accent_source = await self._resolve_card_palette(
+            result
+        )
 
         digest = hashlib.md5(
             "\n".join(
@@ -391,7 +380,10 @@ class ParserXPlugin(Star):
                     repr(result.extra.get("card_info")),
                     author_badge or "",
                     comment_signature,
-                    "text_card_v9_unified_long_feed",
+                    accent_color,
+                    accent_soft,
+                    accent_source,
+                    "text_card_v10_dynamic_header",
                 ]
             ).encode("utf-8")
         ).hexdigest()[:12]
@@ -421,6 +413,9 @@ class ParserXPlugin(Star):
                 info_title=info_title,
                 author_badge=author_badge,
                 comment_document=comment_document,
+                accent_color=accent_color,
+                accent_soft=accent_soft,
+                accent_source=accent_source,
             )
 
         return ImageContent(out_path)
@@ -442,23 +437,6 @@ class ParserXPlugin(Star):
             card = await self._build_text_card_content(result, None)
             return card, False
         return card, bool(card is not None and can_embed_comments)
-
-    async def _ensure_text_only_content(
-        self,
-        result: ParseResult,
-        comment_document: object | None = None,
-    ) -> tuple[bool, bool]:
-        if result.contents:
-            return False, False
-
-        card, comments_embedded = await self._build_text_card_with_comment_fallback(
-            result,
-            comment_document,
-        )
-        if card is None:
-            return False, False
-        result.contents = [card]
-        return True, comments_embedded
 
     async def _transcode_to_h264(self, input_path: Path) -> Path:
         output_path = input_path.with_name(f"{input_path.stem}_h264.mp4")
@@ -492,6 +470,39 @@ class ParserXPlugin(Star):
         ]
         await exec_ffmpeg_cmd(cmd)
         return output_path
+
+    async def _send_card_reply(
+        self,
+        event: AstrMessageEvent,
+        card: ImageContent,
+        *,
+        original_message_reply,
+    ) -> bool:
+        """Send the unified long card as one dedicated reply message."""
+        _, path, error = await self._download_content(card)
+        if error:
+            logger.warning(f"统一长卡下载失败，保留原生正文链路: {error}")
+            return False
+        if path is None:
+            logger.warning("统一长卡没有可发送的本地文件，保留原生正文链路")
+            return False
+
+        segment = self._convert_to_seg(card, path)
+        if segment is None:
+            logger.warning("统一长卡无法转换为消息段，保留原生正文链路")
+            return False
+
+        reply = original_message_reply()
+        if reply is None:
+            logger.warning("原消息缺少 message_id，已跳过统一长卡并保留原生正文链路")
+            return False
+        chain: list[BaseMessageComponent] = [reply, segment]
+        try:
+            await event.send(event.chain_result(chain))
+        except Exception as exc:
+            logger.warning(f"统一长卡引用发送失败，保留原生正文链路: {exc}")
+            return False
+        return True
 
     async def _send_video_segment(
         self,
@@ -586,38 +597,43 @@ class ParserXPlugin(Star):
                 logger.warning(f"delivery text-card render failed: {exc}")
             else:
                 if card is not None:
-                    try:
-                        batch_index = int(
-                            result.extra.get("delivery_text_card_batch", 0)
-                        )
-                    except (TypeError, ValueError):
-                        batch_index = 0
-                    if 0 <= batch_index < len(batches):
-                        original = batches[batch_index]
-                        replace_text = bool(
-                            result.extra.get(
-                                "delivery_text_card_replace_text",
-                                True,
+                    card_sent = await self._send_card_reply(
+                        event,
+                        card,
+                        original_message_reply=original_message_reply,
+                    )
+                    if card_sent:
+                        try:
+                            batch_index = int(
+                                result.extra.get("delivery_text_card_batch", 0)
                             )
-                        )
-                        remaining = [
-                            part
-                            for part in original.parts
-                            if not replace_text or not isinstance(part, str)
+                        except (TypeError, ValueError):
+                            batch_index = 0
+                        if 0 <= batch_index < len(batches):
+                            original = batches[batch_index]
+                            replace_text = bool(
+                                result.extra.get(
+                                    "delivery_text_card_replace_text",
+                                    True,
+                                )
+                            )
+                            remaining = [
+                                part
+                                for part in original.parts
+                                if not replace_text or not isinstance(part, str)
+                            ]
+                            if remaining:
+                                batches[batch_index] = DeliveryBatch(
+                                    remaining,
+                                    mode=original.mode,
+                                )
+                            else:
+                                batches.pop(batch_index)
+
+                        batches = [
+                            DeliveryBatch(batch.parts, mode=batch.mode)
+                            for batch in batches
                         ]
-                        batches[batch_index] = DeliveryBatch(
-                            [card, *remaining],
-                            mode=original.mode,
-                            reply_original=original.reply_original,
-                        )
-                        if result.extra.get(
-                            "delivery_text_card_coalesce",
-                            True,
-                        ):
-                            self._coalesce_delivery_card_batches(
-                                batches,
-                                batch_index,
-                            )
                         comments_embedded = card_comments_embedded
 
         show_download_fail_tip = self._show_download_fail_tip()
@@ -725,7 +741,6 @@ class ParserXPlugin(Star):
 
         comment_document: object | None = None
         comment_document_attempted = False
-        comment_document_resolved = False
         comment_document_factory = result.extra.get("comment_document_task_factory")
         if result.extra.get("render_text_card") and callable(comment_document_factory):
             timeout = self._bounded_timeout(
@@ -751,8 +766,6 @@ class ParserXPlugin(Star):
                 logger.warning("评论区结构化抓取超时，正文卡将不含评论")
             except Exception as exc:
                 logger.warning(f"评论区结构化抓取失败，正文卡将不含评论: {exc}")
-            else:
-                comment_document_resolved = True
 
         comments_embedded = False
 
@@ -770,8 +783,17 @@ class ParserXPlugin(Star):
                 )
                 return
 
-            text_card_failed = False
-            if result.contents and result.extra.get("render_text_card"):
+            if not result.contents and result.extra.get("plain_text_only"):
+                text = (result.text or "").strip()
+                if text:
+                    await event.send(event.plain_result(text.replace("@", "@\u200b")))
+                return
+
+            card_requested = bool(result.extra.get("render_text_card")) or not bool(
+                result.contents
+            )
+            card_sent = False
+            if card_requested:
                 try:
                     (
                         card,
@@ -781,47 +803,30 @@ class ParserXPlugin(Star):
                         comment_document,
                     )
                     if card:
-                        result.contents.insert(0, card)
-                        comments_embedded = card_comments_embedded
+                        card_sent = await self._send_card_reply(
+                            event,
+                            card,
+                            original_message_reply=original_message_reply,
+                        )
+                        if card_sent:
+                            comments_embedded = card_comments_embedded
                 except Exception as e:
-                    text_card_failed = True
-                    logger.warning(f"media text-card render failed: {e}")
+                    logger.warning(f"unified text-card render failed: {e}")
 
             if not result.contents:
-                if result.extra.get("plain_text_only"):
-                    text = (result.text or "").strip()
-                    if text:
-                        await event.send(
-                            event.plain_result(text.replace("@", "@\u200b"))
-                        )
+                if card_sent:
                     return
-
-                try:
-                    (
-                        built,
-                        card_comments_embedded,
-                    ) = await self._ensure_text_only_content(
-                        result,
-                        comment_document,
-                    )
-                    if built:
-                        comments_embedded = card_comments_embedded
-                except Exception as e:
-                    logger.warning(f"text-only render failed: {e}")
-                    fallback = self._format_text_fallback(result)
-                    if fallback:
-                        await event.send(event.plain_result(fallback))
-                    return
-
-                if not result.contents:
-                    return
+                fallback = self._format_text_fallback(result)
+                if fallback:
+                    await event.send(event.plain_result(fallback))
+                return
 
             tasks = [self._download_content(c) for c in result.contents]
             download_results = await asyncio.gather(*tasks)
             path_map = {id(c): (p, err) for c, p, err in download_results}
 
             segs = []
-            if result.extra.get("send_text") or text_card_failed:
+            if result.extra.get("send_text") or (card_requested and not card_sent):
                 summary = self._format_media_summary(result)
                 if summary:
                     segs.append(Plain(summary))
@@ -920,7 +925,7 @@ class ParserXPlugin(Star):
                 source_is_single_image = len(parsed_contents) == 1 and isinstance(
                     parsed_contents[0], (ImageContent, GraphicsContent)
                 )
-                if (
+                if not card_sent and (
                     result.extra.get("reply_original_for_single_image")
                     or source_is_single_image
                 ):
@@ -935,7 +940,8 @@ class ParserXPlugin(Star):
                 if len(segs) == 1:
                     chain: list[BaseMessageComponent] = []
                     if (
-                        len(parsed_contents) == 1
+                        not card_sent
+                        and len(parsed_contents) == 1
                         and isinstance(
                             parsed_contents[0], (ImageContent, GraphicsContent)
                         )
@@ -973,113 +979,14 @@ class ParserXPlugin(Star):
                     except Exception as e:
                         logger.warning(f"图片逐条发送失败: {e}")
 
-        async def process_comment_content():
-            # 评论抓取和 Canvas 渲染延迟到发送阶段，避免阻塞主视频取流。
-            timeout = self._bounded_timeout(
-                result.extra.get("comment_timeout", 90),
-                90,
-                180,
-            )
-            started_at = asyncio.get_running_loop().time()
-            comment_task = result.extra.get("comment_task")
-            comment_task_factory = result.extra.get("comment_task_factory")
-            if comment_task is None and callable(comment_task_factory):
-                comment_task = asyncio.create_task(
-                    comment_task_factory(),
-                    name="parser_x_comment_build",
-                )
-            if comment_task is not None:
-                try:
-                    result.comment_contents = await asyncio.wait_for(
-                        comment_task, timeout=timeout
-                    )
-                except asyncio.TimeoutError:
-                    logger.warning("评论区生成超时，已跳过发送")
-                    return
-                except Exception as e:
-                    logger.warning(f"评论区生成失败: {e}")
-                    return
-
-            if not result.comment_contents:
-                return
-
-            remaining = max(
-                0.001,
-                timeout - (asyncio.get_running_loop().time() - started_at),
-            )
-            tasks = [self._download_content(c) for c in result.comment_contents]
-            try:
-                download_results = await asyncio.wait_for(
-                    asyncio.gather(*tasks),
-                    timeout=remaining,
-                )
-            except asyncio.TimeoutError:
-                logger.warning("评论区渲染超时，已取消并跳过发送")
-                return
-            path_map = {id(c): (p, err) for c, p, err in download_results}
-
-            segs = []
-            for cont in result.comment_contents:
-                path, _ = path_map.get(id(cont), (None, None))
-                if path:
-                    if seg := self._convert_to_seg(cont, path):
-                        segs.append(seg)
-
-            if not segs:
-                return
-
-            comment_label = f"{result.platform.display_name} 评论区↓"
-            nodes = Nodes([])
-            nodes.nodes.append(
-                Node(uin=node_uin, name=node_name, content=[Plain(comment_label)])
-            )
-            for seg in segs:
-                nodes.nodes.append(Node(uin=node_uin, name=node_name, content=[seg]))
-            try:
-                await event.send(event.chain_result([nodes]))
-                return
-            except Exception as e:
-                logger.warning(f"评论区合并转发失败，降级逐张发送: {e}")
-
-            try:
-                await event.send(event.chain_result([Plain(comment_label)]))
-            except Exception as e:
-                logger.debug(f"评论区标题发送失败: {e}")
-            for seg in segs:
-                try:
-                    await event.send(event.chain_result([seg]))
-                except Exception as e:
-                    logger.warning(f"评论区图片逐张发送失败: {e}")
-
-        # 合并评论只在正文长卡前限时等待；独立评论降级始终在主内容发送后启动，
-        # 避免评论异常阻断正文，也确保消息顺序稳定。
         await process_main_content()
 
-        if comment_document_resolved and (
-            comment_document is None or comments_embedded
-        ):
-            return
-
-        if comment_document_attempted:
-            logger.warning("统一长卡未能使用评论，降级为独立评论卡")
-
         if (
-            result.extra.get("comment_task") is not None
-            or result.extra.get("comment_task_factory") is not None
+            comment_document_attempted
+            and comment_document is not None
+            and not comments_embedded
         ):
-
-            async def run_comment_content():
-                try:
-                    await process_comment_content()
-                except Exception as e:
-                    logger.warning(f"评论区后台发送失败: {e}")
-
-            task = asyncio.create_task(
-                run_comment_content(),
-                name="parser_x_comment_send",
-            )
-            self._background_tasks.add(task)
-            task.add_done_callback(self._background_tasks.discard)
+            logger.warning("统一长卡未能嵌入评论，已省略评论且不再生成旧式独立评论图")
 
     # endregion
 

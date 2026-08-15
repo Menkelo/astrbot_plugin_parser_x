@@ -20,7 +20,6 @@ from ...utils import ck2dict
 from ..base import BaseParser, Downloader, ParseException, handle
 from .comment_canvas import BiliCommentCanvas
 from .comment_feed import BiliCommentFeed
-from .dynamic_renderer import BiliDynamicRenderer
 from .dynamic_service import BiliDynamicService
 from .live_service import BiliLiveService
 from .stream_selector import BiliStreamSelector
@@ -97,16 +96,13 @@ class BilibiliParser(BaseParser):
 
         self.stream_selector = BiliStreamSelector()
 
-        self.dynamic_renderer = BiliDynamicRenderer(self.render_service)
-
         self.live_service = BiliLiveService(self)
         self.dynamic_service = BiliDynamicService(self)
 
     def set_render_service(self, render_service: HtmlRenderService) -> None:
-        """Reuse the plugin-wide renderer for comments and dynamics."""
+        """Reuse the plugin-wide renderer for embedded comments."""
         self.render_service = render_service
         self.comment_canvas.render_service = render_service
-        self.dynamic_renderer.render_service = render_service
 
     # region 路由
 
@@ -675,20 +671,10 @@ class BilibiliParser(BaseParser):
         url += f"?p={page_info.index + 1}" if page_info.index > 0 else ""
 
         # === B站评论区总开关 ===
-        # 开启：优先把结构化评论嵌入视频长卡；合并失败时再走独立评论卡。
+        # 开启：把结构化评论嵌入视频长卡；失败时保留无评论正文卡。
         # 关闭：直接跳过，减少请求和渲染耗时。
-        comment_task_factory = None
         comment_document_task_factory = None
         if self.enable_comment_card:
-
-            async def build_comments():
-                return await self.comment_feed.build_images(
-                    video_info.aid,
-                    1,
-                    video_title=page_info.title,
-                    video_cover=self.norm_bili_img(page_info.cover),
-                    owner_mid=video_info.owner.mid,
-                )
 
             async def build_comment_document():
                 return await self.comment_feed.build_document(
@@ -699,7 +685,6 @@ class BilibiliParser(BaseParser):
                     owner_mid=video_info.owner.mid,
                 )
 
-            comment_task_factory = build_comments
             comment_document_task_factory = build_comment_document
 
         stream_task = self._get_stream_ladders_with_qn_fallback(
@@ -836,10 +821,9 @@ class BilibiliParser(BaseParser):
             "card_info": card_info,
             "video_separate_from_card": True,
         }
-        if comment_task_factory and comment_document_task_factory:
+        if comment_document_task_factory:
             extra.update(
                 {
-                    "comment_task_factory": comment_task_factory,
                     "comment_document_task_factory": comment_document_task_factory,
                     "comment_timeout": self.comment_timeout,
                 }

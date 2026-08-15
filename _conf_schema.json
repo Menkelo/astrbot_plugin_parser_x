@@ -20,7 +20,7 @@
   },
   "comments": {
     "description": "热门评论",
-    "hint": "有统一正文卡时优先把热门评论合并到同一张长卡；不适用或合并失败时生成独立评论长图。",
+    "hint": "热门评论只嵌入统一正文长卡；抓取、合并或渲染失败时省略评论，不再生成独立评论长图。",
     "type": "object",
     "items": {
       "bilibili": {"description": "B站评论区", "type": "bool", "default": true},
@@ -51,7 +51,7 @@
   },
   "rendering": {
     "description": "卡片渲染",
-    "hint": "正文长卡、动态内容和评论降级卡统一复用 AstrBot 官方 html_render（Canvas/T2I），插件不会启动本地 Chromium。",
+    "hint": "统一正文长卡与内嵌评论复用 AstrBot 官方 html_render（Canvas/T2I），插件不会启动本地 Chromium。",
     "obvious_hint": true,
     "type": "object",
     "items": {
@@ -61,13 +61,6 @@
         "type": "int",
         "slider": {"min": 10, "max": 180, "step": 5},
         "default": 45
-      },
-      "jpeg_quality": {
-        "description": "评论图 JPEG 质量",
-        "hint": "越高越清晰，但评论长图体积也会增大。正文与直播卡使用 PNG，不受此项影响。",
-        "type": "int",
-        "slider": {"min": 60, "max": 95, "step": 1},
-        "default": 84
       }
     }
   },

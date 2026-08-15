@@ -1,9 +1,11 @@
 import re
+from dataclasses import replace
 from html import escape
 from pathlib import Path
 from typing import Any
 
 from .card_theme import resolve_card_theme
+from .color_utils import mix_hex_color, normalise_hex_color
 from .constants import COMMENT_FOOTER_BRAND
 from .html_renderer import HtmlRenderService
 
@@ -169,8 +171,22 @@ class TextCardRenderer:
         info_title: str | None = None,
         author_badge: str | None = None,
         comment_document: object | None = None,
+        accent_color: str | None = None,
+        accent_soft: str | None = None,
+        accent_source: str = "platform",
     ):
         theme = resolve_card_theme(platform_key, platform_name)
+        resolved_accent = normalise_hex_color(accent_color, theme.accent)
+        resolved_soft = normalise_hex_color(
+            accent_soft,
+            mix_hex_color(resolved_accent, "#ffffff", 0.90),
+        )
+        theme = replace(
+            theme,
+            accent=resolved_accent,
+            accent_soft=resolved_soft,
+        )
+        accent_dark = mix_hex_color(theme.accent, "#000000", 0.18)
         display_name = str(platform_name or theme.display_name).strip()
         card_title = str(title or "").strip() or f"{display_name}内容"
 
@@ -258,9 +274,8 @@ class TextCardRenderer:
 *{{box-sizing:border-box}}html,body{{margin:0;width:760px;background:{theme.background};color:{theme.text}}}html{{overflow-x:hidden;scrollbar-width:none}}html::-webkit-scrollbar{{width:0;height:0}}
 body{{padding:18px 22px 20px;overflow-x:hidden;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}}
 .card{{width:716px;overflow:hidden;border:1px solid {theme.border};border-radius:14px;background:{theme.surface}}}
-.brand-bar{{display:flex;min-height:64px;align-items:center;justify-content:space-between;gap:12px;padding:14px 18px;background:{theme.accent};color:#fff}}
-.brand-copy{{display:flex;min-width:0;align-items:center;gap:9px}}.platform-mark{{display:grid;width:34px;height:34px;place-items:center;flex:0 0 34px;border:1px solid rgba(255,255,255,.55);border-radius:10px;color:#fff;font-size:16px;font-weight:800}}
-.brand-name{{overflow:hidden;font-size:18px;font-weight:700;text-overflow:ellipsis;white-space:nowrap}}.product-name{{font-size:13px;opacity:.9;white-space:nowrap}}
+.brand-bar{{display:flex;min-height:58px;align-items:center;justify-content:space-between;gap:16px;padding:14px 20px;background:linear-gradient(135deg,{theme.accent} 0%,{accent_dark} 100%);color:#fff}}
+.brand-copy{{display:flex;min-width:0;align-items:center}}.brand-name{{overflow:hidden;font-size:19px;font-weight:700;letter-spacing:.02em;text-overflow:ellipsis;white-space:nowrap}}.product-name{{font-size:13px;opacity:.86;white-space:nowrap}}
 .hero{{width:100%;max-height:430px;overflow:hidden;border-bottom:1px solid {theme.border};background:{theme.subtle}}}.hero-image{{display:block;width:100%;min-height:240px;max-height:430px;object-fit:cover}}.hero-image.media-contain{{object-fit:contain}}
 .primary-block{{display:grid;gap:10px;padding:19px 20px 17px}}.primary-block h1{{margin:0;overflow-wrap:anywhere;color:{theme.text};font-size:25px;font-weight:700;line-height:1.42}}.meta{{color:{theme.muted};font-size:13px;line-height:1.45}}
 .metrics,.info-chips{{display:flex;align-items:center;gap:7px;flex-wrap:wrap}}.metric,.info-chip{{display:inline-flex;align-items:center;gap:5px;padding:5px 9px;border-radius:999px;background:{theme.subtle};color:{theme.muted};font-size:13px;line-height:1.45}}.metric strong{{color:{theme.text};font-size:14px}}
@@ -275,8 +290,8 @@ body{{padding:18px 22px 20px;overflow-x:hidden;font-family:-apple-system,BlinkMa
 .actions{{display:flex;align-items:center;gap:14px;margin-top:7px;color:{theme.muted};font-size:13px;line-height:20px;flex-wrap:wrap}}.action{{display:inline-flex;align-items:center;gap:4px}}.action-icon{{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}}.action-meta{{margin-right:auto}}.creator-liked,.up-liked{{display:inline-block;padding:1px 6px;border-radius:5px;background:{theme.accent_soft};color:{theme.accent};font-size:12px}}.reply-card{{display:grid;grid-template-columns:28px 1fr;gap:9px;max-width:590px;margin-top:11px;padding:4px 0 4px 12px;border-left:2px solid {theme.border}}}.reply-card .actions{{gap:12px}}
 .level{{height:17px;padding:0 4px;border-radius:3px;background:#c9ccd0;color:#fff;font-size:11px;font-weight:700;line-height:17px}}.level-2{{background:#8cd49c}}.level-3{{background:#7cccec}}.level-4{{background:#fbbc8c}}.level-5{{background:#ec642c}}.level-6{{background:#f34c4c}}.senior-flash{{font-size:10px}}.fan-medal{{display:inline-flex;height:18px;max-width:120px;overflow:hidden;border:1px solid var(--medal-border,#ff6699);border-radius:3px;font-size:11px;line-height:16px}}.fan-name{{max-width:88px;overflow:hidden;padding:0 4px;background:var(--medal-bg,#ff6699);color:var(--medal-fg,#fff);text-overflow:ellipsis;white-space:nowrap}}.fan-level{{min-width:18px;padding:0 3px;background:var(--medal-level-bg,#fff);color:var(--medal-level-fg,#ff6699);text-align:center}}.decor{{display:flex;max-width:115px;align-items:center;gap:3px;color:{theme.accent};font-size:10px;font-weight:700}}.decor-image{{width:34px;height:28px;overflow:hidden}}.decor-image img{{width:auto;height:38px;transform:translate(-55%,-5px)}}
 .footer{{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:13px 20px 15px;color:{theme.muted};font-size:12px;line-height:1.45;flex-wrap:wrap}}.footer-brand{{color:{theme.accent};overflow-wrap:anywhere;word-break:break-all}}
-</style></head><body><article class="card" data-card-style="minimal-feed">
-<header class="brand-bar"><div class="brand-copy"><div class="platform-mark">{self._safe_text(theme.glyph)}</div><div class="brand-name">{self._safe_text(display_name)}</div></div><div class="product-name">Parser X · 统一长卡</div></header>
+</style></head><body><article class="card" data-card-style="minimal-feed" data-accent-source="{self._safe_url(accent_source)}">
+<header class="brand-bar"><div class="brand-copy"><div class="brand-name">{self._safe_text(display_name)}</div></div><div class="product-name">内容解析 · Parser X</div></header>
 {media_html}<section class="primary-block"><h1>{self._safe_text(card_title)}</h1><div class="meta">{self._safe_text(meta_text)}</div>{metric_html}</section>
 {profile_html}{text_block}{info_html}{comments_html}<footer class="footer"><span>Parser X · 跨平台内容解析</span><span class="footer-brand">{self._safe_text(COMMENT_FOOTER_BRAND)}</span></footer>
 </article></body></html>"""
@@ -302,6 +317,9 @@ body{{padding:18px 22px 20px;overflow-x:hidden;font-family:-apple-system,BlinkMa
         info_title: str | None = None,
         author_badge: str | None = None,
         comment_document: object | None = None,
+        accent_color: str | None = None,
+        accent_soft: str | None = None,
+        accent_source: str = "platform",
     ):
         html = self.build_html(
             platform_name=platform_name,
@@ -319,6 +337,9 @@ body{{padding:18px 22px 20px;overflow-x:hidden;font-family:-apple-system,BlinkMa
             info_title=info_title,
             author_badge=author_badge,
             comment_document=comment_document,
+            accent_color=accent_color,
+            accent_soft=accent_soft,
+            accent_source=accent_source,
         )
         return await self.render_service.render(
             out_path,

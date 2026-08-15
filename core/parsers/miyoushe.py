@@ -70,14 +70,6 @@ class MiyousheParser(BaseParser):
         if not self.enable_comment_card or not post_id:
             return {}
 
-        async def build_comments():
-            return await self.comment_feed.build_images(
-                post_id,
-                work_title=title,
-                cover=cover,
-                owner_id=owner_id,
-            )
-
         async def build_comment_document():
             return await self.comment_feed.build_document(
                 post_id,
@@ -87,7 +79,6 @@ class MiyousheParser(BaseParser):
             )
 
         return {
-            "comment_task_factory": build_comments,
             "comment_document_task_factory": build_comment_document,
             "comment_timeout": self.comment_timeout,
         }

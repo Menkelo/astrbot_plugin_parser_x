@@ -78,16 +78,6 @@ class XiaoheiheParser(BaseParser):
         if not self.enable_comment_card or not link_id or not threads:
             return {}
 
-        async def build_comments():
-            return self.comment_feed.build_images(
-                link_id,
-                threads,
-                work_title=title,
-                cover=cover,
-                owner_id=owner_id,
-                total=total,
-            )
-
         async def build_comment_document():
             return await self.comment_feed.build_document(
                 link_id,
@@ -99,7 +89,6 @@ class XiaoheiheParser(BaseParser):
             )
 
         return {
-            "comment_task_factory": build_comments,
             "comment_document_task_factory": build_comment_document,
             "comment_timeout": self.comment_timeout,
         }

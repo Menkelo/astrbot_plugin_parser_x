@@ -78,14 +78,6 @@ class WeiboParser(BaseParser):
         if not self.enable_comment_card or not mid:
             return {}
 
-        async def build_comments():
-            return await self.comment_feed.build_images(
-                mid,
-                work_title=title,
-                cover=cover,
-                owner_id=owner_id,
-            )
-
         async def build_comment_document():
             return await self.comment_feed.build_document(
                 mid,
@@ -95,7 +87,6 @@ class WeiboParser(BaseParser):
             )
 
         return {
-            "comment_task_factory": build_comments,
             "comment_document_task_factory": build_comment_document,
             "comment_timeout": self.comment_timeout,
         }
