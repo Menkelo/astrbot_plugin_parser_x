@@ -282,9 +282,20 @@ class ParserXPlugin(Star):
             parts.append(extra_info)
         return "\n\n".join(parts)
 
+    @staticmethod
+    def _bounded_timeout(value: object, default: float, maximum: float) -> float:
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            number = default
+        if number != number:
+            number = default
+        return max(1.0, min(number, maximum))
+
     async def _build_text_card_content(
         self,
         result: ParseResult,
+        comment_document: object | None = None,
     ) -> ImageContent | None:
         text = self._text_card_body(result)
         title = (result.title or "").strip() or None
@@ -297,8 +308,30 @@ class ParserXPlugin(Star):
         author_avatar = result.extra.get("text_card_avatar")
         if not isinstance(author_avatar, str) or not author_avatar.strip():
             author_avatar = None
-        platform_name = result.platform.display_name or result.platform.name
+        platform_name = str(
+            result.extra.get("card_platform_name")
+            or result.platform.display_name
+            or result.platform.name
+        )
         timestamp_text = result.formatted_datetime
+        media_url = result.extra.get("text_card_media")
+        if not isinstance(media_url, str) or not media_url.strip():
+            media_url = None
+        media_fit = str(result.extra.get("text_card_media_fit") or "cover")
+        if media_fit not in {"cover", "contain"}:
+            media_fit = "cover"
+        content_kind = result.extra.get("card_kind")
+        if not isinstance(content_kind, str):
+            content_kind = None
+        author_badge = result.extra.get("card_author_badge")
+        if not isinstance(author_badge, str):
+            author_badge = None
+        info_title = result.extra.get("card_info_title")
+        if not isinstance(info_title, str):
+            info_title = None
+        comment_signature = (
+            repr(comment_document) if comment_document is not None else ""
+        )
 
         digest = hashlib.md5(
             "\n".join(
@@ -310,7 +343,14 @@ class ParserXPlugin(Star):
                     timestamp_text or "",
                     result.url or "",
                     text,
-                    "text_card_v8_minimal_brand",
+                    media_url or "",
+                    media_fit,
+                    content_kind or "",
+                    repr(result.extra.get("card_metrics")),
+                    repr(result.extra.get("card_info")),
+                    author_badge or "",
+                    comment_signature,
+                    "text_card_v9_unified_long_feed",
                 ]
             ).encode("utf-8")
         ).hexdigest()[:12]
@@ -332,19 +372,52 @@ class ParserXPlugin(Star):
                 title=title,
                 timestamp_text=timestamp_text,
                 platform_key=result.platform.name,
+                media_url=media_url,
+                media_fit=media_fit,
+                content_kind=content_kind,
+                metrics=result.extra.get("card_metrics"),
+                info_items=result.extra.get("card_info"),
+                info_title=info_title,
+                author_badge=author_badge,
+                comment_document=comment_document,
             )
 
         return ImageContent(out_path)
 
-    async def _ensure_text_only_content(self, result: ParseResult) -> bool:
-        if result.contents:
-            return False
+    async def _build_text_card_with_comment_fallback(
+        self,
+        result: ParseResult,
+        comment_document: object | None,
+    ) -> tuple[ImageContent | None, bool]:
+        can_embed_comments = TextCardRenderer.supports_comment_document(
+            comment_document
+        )
+        try:
+            card = await self._build_text_card_content(result, comment_document)
+        except Exception:
+            if not can_embed_comments:
+                raise
+            logger.warning("评论合并渲染失败，重试生成无评论正文卡")
+            card = await self._build_text_card_content(result, None)
+            return card, False
+        return card, bool(card is not None and can_embed_comments)
 
-        card = await self._build_text_card_content(result)
+    async def _ensure_text_only_content(
+        self,
+        result: ParseResult,
+        comment_document: object | None = None,
+    ) -> tuple[bool, bool]:
+        if result.contents:
+            return False, False
+
+        card, comments_embedded = await self._build_text_card_with_comment_fallback(
+            result,
+            comment_document,
+        )
         if card is None:
-            return False
+            return False, False
         result.contents = [card]
-        return True
+        return True, comments_embedded
 
     async def _transcode_to_h264(self, input_path: Path) -> Path:
         output_path = input_path.with_name(f"{input_path.stem}_h264.mp4")
@@ -421,12 +494,14 @@ class ParserXPlugin(Star):
         node_uin: str,
         node_name: str,
         original_message_reply,
-    ) -> None:
+        comment_document: object | None = None,
+    ) -> bool:
         plan = result.delivery
         if plan is None:
-            return
+            return False
 
         batches = list(plan.batches)
+        comments_embedded = False
         body = (result.text or "").strip()
         if result.platform.name == "weibo" and body:
             planned_text = "\n".join(
@@ -459,7 +534,13 @@ class ParserXPlugin(Star):
 
         if result.extra.get("render_text_card"):
             try:
-                card = await self._build_text_card_content(result)
+                (
+                    card,
+                    card_comments_embedded,
+                ) = await self._build_text_card_with_comment_fallback(
+                    result,
+                    comment_document,
+                )
             except Exception as exc:
                 logger.warning(f"delivery text-card render failed: {exc}")
             else:
@@ -488,6 +569,7 @@ class ParserXPlugin(Star):
                             mode=original.mode,
                             reply_original=original.reply_original,
                         )
+                        comments_embedded = card_comments_embedded
 
         show_download_fail_tip = self._show_download_fail_tip()
         path_map: dict[int, tuple[Path | None, str | None]] = {}
@@ -578,6 +660,8 @@ class ParserXPlugin(Star):
                     reply_first=batch.reply_original,
                 )
 
+        return comments_embedded
+
     async def _send_parse_result(self, event: AstrMessageEvent, result: ParseResult):
         show_download_fail_tip = self._show_download_fail_tip()
 
@@ -590,23 +674,66 @@ class ParserXPlugin(Star):
                 return None
             return Reply(id=message_id)
 
+        comment_document: object | None = None
+        comment_document_attempted = False
+        comment_document_resolved = False
+        comment_document_factory = result.extra.get("comment_document_task_factory")
+        if result.extra.get("render_text_card") and callable(comment_document_factory):
+            timeout = self._bounded_timeout(
+                result.extra.get("comment_timeout", 90),
+                90,
+                180,
+            )
+            merge_timeout = min(
+                timeout,
+                self._bounded_timeout(
+                    result.extra.get("comment_merge_timeout", 15),
+                    15,
+                    15,
+                ),
+            )
+            comment_document_attempted = True
+            try:
+                comment_document = await asyncio.wait_for(
+                    comment_document_factory(),
+                    timeout=merge_timeout,
+                )
+            except asyncio.TimeoutError:
+                logger.warning("评论区结构化抓取超时，正文卡将不含评论")
+            except Exception as exc:
+                logger.warning(f"评论区结构化抓取失败，正文卡将不含评论: {exc}")
+            else:
+                comment_document_resolved = True
+
+        comments_embedded = False
+
         async def process_main_content():
+            nonlocal comments_embedded
             parsed_contents = tuple(result.contents)
             if getattr(result, "delivery", None) is not None:
-                await self._send_delivery_plan(
+                comments_embedded = await self._send_delivery_plan(
                     event,
                     result,
                     node_uin=node_uin,
                     node_name=node_name,
                     original_message_reply=original_message_reply,
+                    comment_document=comment_document,
                 )
                 return
 
             text_card_failed = False
             if result.contents and result.extra.get("render_text_card"):
                 try:
-                    if card := await self._build_text_card_content(result):
+                    (
+                        card,
+                        card_comments_embedded,
+                    ) = await self._build_text_card_with_comment_fallback(
+                        result,
+                        comment_document,
+                    )
+                    if card:
                         result.contents.insert(0, card)
+                        comments_embedded = card_comments_embedded
                 except Exception as e:
                     text_card_failed = True
                     logger.warning(f"media text-card render failed: {e}")
@@ -621,7 +748,15 @@ class ParserXPlugin(Star):
                     return
 
                 try:
-                    await self._ensure_text_only_content(result)
+                    (
+                        built,
+                        card_comments_embedded,
+                    ) = await self._ensure_text_only_content(
+                        result,
+                        comment_document,
+                    )
+                    if built:
+                        comments_embedded = card_comments_embedded
                 except Exception as e:
                     logger.warning(f"text-only render failed: {e}")
                     fallback = self._format_text_fallback(result)
@@ -671,6 +806,17 @@ class ParserXPlugin(Star):
             )
 
             if has_video:
+                if result.extra.get("video_separate_from_card"):
+                    for seg in segs:
+                        if isinstance(seg, Video):
+                            await self._send_video_segment(event, result, seg)
+                            continue
+                        try:
+                            await event.send(event.chain_result([seg]))
+                        except Exception as exc:
+                            logger.warning(f"视频附属卡片发送失败: {exc}")
+                    return
+
                 media_count = sum(
                     1 for s in segs if isinstance(s, (Video, Image, File, Record))
                 )
@@ -775,7 +921,11 @@ class ParserXPlugin(Star):
 
         async def process_comment_content():
             # 评论抓取和 Canvas 渲染延迟到发送阶段，避免阻塞主视频取流。
-            timeout = max(1.0, float(result.extra.get("comment_timeout", 90)))
+            timeout = self._bounded_timeout(
+                result.extra.get("comment_timeout", 90),
+                90,
+                180,
+            )
             started_at = asyncio.get_running_loop().time()
             comment_task = result.extra.get("comment_task")
             comment_task_factory = result.extra.get("comment_task_factory")
@@ -847,9 +997,17 @@ class ParserXPlugin(Star):
                 except Exception as e:
                     logger.warning(f"评论区图片逐张发送失败: {e}")
 
-        # 主内容优先。评论抓取和 Canvas 渲染在主内容完成后才启动，
-        # 避免与视频下载/上传争抢连接和 CPU，也确保消息顺序稳定。
+        # 合并评论只在正文长卡前限时等待；独立评论降级始终在主内容发送后启动，
+        # 避免评论异常阻断正文，也确保消息顺序稳定。
         await process_main_content()
+
+        if comment_document_resolved and (
+            comment_document is None or comments_embedded
+        ):
+            return
+
+        if comment_document_attempted:
+            logger.warning("统一长卡未能使用评论，降级为独立评论卡")
 
         if (
             result.extra.get("comment_task") is not None

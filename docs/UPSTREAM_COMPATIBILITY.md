@@ -11,18 +11,18 @@
 
 | 上游模块 | Parser X 状态 | 实现位置 | 说明 |
 | --- | --- | --- | --- |
-| Bilibili | 原生 | `core/parsers/bilibili/` | 视频、分P、动态；多图/文字动态使用统一概览卡，单图动态直接引用原消息；直播使用封面、关键帧与文字原生消息链；`comment_feed.py`/`comment_canvas.py` 保留等级、粉丝牌和 UP 标识，并使用统一评论骨架生成单张自适应长图 |
-| 抖音 | 原生 | `core/parsers/douyin/` | 视频、图文、图集、Cookie 与 yt-dlp 兜底；`comment_feed.py` 对照上游 `utils/douyin-comment.js` 适配 Cookie 评论接口、A-Bogus、表情、图片、贴纸、作者标识与楼中楼 |
-| 快手 | 原生 | `core/parsers/kuaishou.py` | 视频、图片、图文 |
-| 微博 | 原生 | `core/parsers/weibo.py`、`core/parsers/weibo_comment.py` | 正文概览卡、图片、视频按原生消息批次分开发送，单图引用原消息；使用公开 `m.weibo.cn/comments/hotflow` 生成统一热门评论 Canvas 卡片，支持认证/VIP、微博表情、原博与楼中楼 |
-| 小红书 | 原生 | `core/parsers/xiaohongshu.py` | 视频、图片、图文；图文正文使用统一概览卡 |
+| Bilibili | 原生 | `core/parsers/bilibili/` | 视频、多图/文字动态使用统一纵向长卡，单图动态直接引用原消息，视频文件独立发送；直播使用封面、关键帧与文字原生消息链；视频评论可嵌入长卡，等级、粉丝牌和 UP 标识完整保留 |
+| 抖音 | 原生 | `core/parsers/douyin/` | 视频、图文、图集、Cookie 与 yt-dlp 兜底；图文使用统一长卡；`comment_feed.py` 适配 Cookie 评论接口、A-Bogus、表情、图片、贴纸、作者标识与楼中楼，评论优先嵌入图文长卡 |
+| 快手 | 原生 | `core/parsers/kuaishou.py` | 视频、图片、图文；图文使用统一长卡，视频原生发送 |
+| 微博 | 原生 | `core/parsers/weibo.py`、`core/parsers/weibo_comment.py` | 完整正文使用统一长卡，图片、视频按原生消息批次分开发送，单图引用原消息；公开 `m.weibo.cn/comments/hotflow` 评论优先嵌入正文卡，支持认证/VIP、微博表情、原博与楼中楼 |
+| 小红书 | 原生 | `core/parsers/xiaohongshu.py` | 视频、图片、图文；图文使用统一长卡，时间戳兼容秒和毫秒 |
 | AcFun | 兼容层 | `core/parsers/ytdlp.py` | 单视频 |
 | 西瓜视频 | 兼容层 | `core/parsers/ytdlp.py` | 单视频 |
 | 皮皮虾 | 兼容层 | `core/parsers/ytdlp.py` | 取决于 yt-dlp extractor 可用性 |
 | 微视 | 兼容层 | `core/parsers/ytdlp.py` | 取决于 yt-dlp extractor 可用性 |
 | 网易云音乐 | 兼容层 | `core/parsers/ytdlp.py` | 发送音频文件 |
-| 米游社 | 原生 | `core/parsers/miyoushe.py`、`core/parsers/miyoushe_comment.py` | 文章概览使用统一内容卡，图片和视频按原生消息批次发送；公开 `getPostReplies` 热门评论区支持认证、等级、配图与楼中楼 |
-| 小黑盒 | 原生 | `core/parsers/xiaoheihe.py`、`core/parsers/xiaoheihe_comment.py` | 帖子/游戏概览使用统一内容卡，帖子富文本按图文顺序转发，游戏详情与截图分层发送，视频独立发送；无 Cookie 也先尝试签名接口并读取帖子评论 |
+| 米游社 | 原生 | `core/parsers/miyoushe.py`、`core/parsers/miyoushe_comment.py` | 文章使用统一长卡，图片和视频按原生消息批次发送；公开 `getPostReplies` 评论支持认证、等级、配图与楼中楼并优先嵌入长卡 |
+| 小黑盒 | 原生 | `core/parsers/xiaoheihe.py`、`core/parsers/xiaoheihe_comment.py` | 帖子/游戏使用统一长卡，帖子富文本按图文顺序转发，游戏详情与截图分层发送，视频独立发送；无 Cookie 也先尝试签名接口，失败后回退公开接口/分享页，帖子评论优先嵌入长卡 |
 | 贴吧、微信视频号、QQ音乐、酷狗音乐、汽水音乐、通用网页 AI 总结 | 已移除 | - | 不注册路由、配置项或命令；贴吧官方页面不稳定且正文依赖非官方服务，因此不保留虚假可用入口 |
 | 点歌、云盘上传、扫码登录 | 不适用 | - | 强依赖 Yunzai 群文件、Redis 与管理员模型 |
 | 插件自更新 | 不适用 | - | 由 AstrBot 插件管理器负责 |
@@ -33,8 +33,8 @@
 - 已适配：B站视频、抖音作品（需要 `douyin_ck`）、微博、小黑盒帖子、米游社文章。
 - 暂不加入：快手、小红书等平台的评论接口依赖频繁变化的私有签名和完整登录态；当前没有
   足够稳定、可真实验证的公开接口，因此不使用易碎网页抓取充数。
-- 五个平台共享评论数量与超时配置；选中的全部评论始终合并为一张自适应高度 Canvas 长图，
-  不按条数或预估内容高度拆图。
+- 五个平台共享评论数量与超时配置；有统一正文卡时优先把结构化评论嵌入同一张纵向长卡，
+  否则或合并失败时生成一张自适应高度独立评论长图，不按条数或预估高度拆图。
 
 ## Fork 审计（2026-08-15）
 

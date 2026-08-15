@@ -139,7 +139,7 @@ class XiaoheiheCommentFeed(SocialCommentFeedBase):
             pinned=not nested and bool(item.get("is_top")),
         )
 
-    def build_images(
+    def _build_document(
         self,
         link_id: str,
         threads: list[dict],
@@ -148,7 +148,7 @@ class XiaoheiheCommentFeed(SocialCommentFeedBase):
         cover: str | None,
         owner_id: str | int | None,
         total: int | None = None,
-    ) -> list[ImageContent]:
+    ) -> CommentDocument | None:
         def floor_number(thread: dict) -> int:
             comments = thread.get("comment")
             if not isinstance(comments, list) or not comments:
@@ -187,7 +187,7 @@ class XiaoheiheCommentFeed(SocialCommentFeedBase):
                 break
 
         if not entries:
-            return []
+            return None
         total_value = max(int(total or 0), raw_count, len(entries))
         partial = total_value > len(entries)
         document = CommentDocument(
@@ -202,6 +202,50 @@ class XiaoheiheCommentFeed(SocialCommentFeedBase):
                 else f"{COMMENT_FOOTER_BRAND} · 小黑盒评论区"
             ),
         )
+        return document
+
+    async def build_document(
+        self,
+        link_id: str,
+        threads: list[dict],
+        *,
+        work_title: str,
+        cover: str | None,
+        owner_id: str | int | None,
+        total: int | None = None,
+    ) -> CommentDocument | None:
+        document = self._build_document(
+            link_id,
+            threads,
+            work_title=work_title,
+            cover=cover,
+            owner_id=owner_id,
+            total=total,
+        )
+        if document is not None:
+            await self._embed_avatars(document.entries)
+        return document
+
+    def build_images(
+        self,
+        link_id: str,
+        threads: list[dict],
+        *,
+        work_title: str,
+        cover: str | None,
+        owner_id: str | int | None,
+        total: int | None = None,
+    ) -> list[ImageContent]:
+        document = self._build_document(
+            link_id,
+            threads,
+            work_title=work_title,
+            cover=cover,
+            owner_id=owner_id,
+            total=total,
+        )
+        if document is None:
+            return []
         return self.render_document(link_id, document)
 
 

@@ -16,6 +16,7 @@ from msgspec import json as msgjson
 
 from ...constants import COMMENT_FOOTER_BRAND
 from ...data import ImageContent
+from ...utils import cached_image_to_data_uri
 from .comment_canvas import (
     BiliAuthorBadge,
     BiliCommentCanvas,
@@ -119,6 +120,7 @@ class BiliCommentFeed:
         self._mixin_key = ""
         self._mixin_key_deadline = 0.0
         self._mixin_key_lock = asyncio.Lock()
+        self._avatar_data_uri_cache: dict[str, str | None] = {}
 
     @property
     def cache_dir(self) -> Path:
@@ -660,7 +662,50 @@ class BiliCommentFeed:
             first_reply=first_reply,
         )
 
-    async def build_images(
+    @staticmethod
+    def _walk_entries(entries: list[BiliCommentEntry]) -> list[BiliCommentEntry]:
+        output = []
+        pending = list(entries)
+        while pending:
+            entry = pending.pop(0)
+            output.append(entry)
+            if entry.first_reply is not None:
+                pending.append(entry.first_reply)
+        return output
+
+    async def _avatar_to_data_uri(self, avatar: str) -> str | None:
+        return await cached_image_to_data_uri(
+            self._avatar_data_uri_cache,
+            self.parser.http_get,
+            avatar,
+            headers=self._headers("https://www.bilibili.com/"),
+            referer="https://www.bilibili.com/",
+            max_bytes=2 * 1024 * 1024,
+            timeout=8,
+            debug_label="[Bilibili] comment avatar",
+        )
+
+    async def _embed_avatars(self, entries: list[BiliCommentEntry]) -> None:
+        all_entries = self._walk_entries(entries)
+        avatar_urls = list(
+            dict.fromkeys(
+                entry.author.avatar
+                for entry in all_entries
+                if entry.author.avatar and not entry.author.avatar.startswith("data:")
+            )
+        )
+        if not avatar_urls:
+            return
+
+        data_uris = await asyncio.gather(
+            *(self._avatar_to_data_uri(url) for url in avatar_urls)
+        )
+        resolved = dict(zip(avatar_urls, data_uris, strict=True))
+        for entry in all_entries:
+            if data_uri := resolved.get(entry.author.avatar):
+                entry.author.avatar = data_uri
+
+    async def build_document(
         self,
         oid: int,
         type_: int,
@@ -668,7 +713,7 @@ class BiliCommentFeed:
         video_title: str,
         video_cover: str | None,
         owner_mid: str | int | None = None,
-    ) -> list[ImageContent]:
+    ) -> BiliCommentDocument | None:
         raw_feed = await self.fetch(oid, type_)
         effective_owner_mid = owner_mid or raw_feed.owner_mid
         entries = []
@@ -679,7 +724,7 @@ class BiliCommentFeed:
             if len(entries) >= self.limit:
                 break
         if not entries:
-            return []
+            return None
 
         partial = raw_feed.total > len(entries) or len(raw_feed.items) > len(entries)
         document = BiliCommentDocument(
@@ -693,6 +738,27 @@ class BiliCommentFeed:
                 else f"{COMMENT_FOOTER_BRAND} · B站评论区"
             ),
         )
+        await self._embed_avatars(document.entries)
+        return document
+
+    async def build_images(
+        self,
+        oid: int,
+        type_: int,
+        *,
+        video_title: str,
+        video_cover: str | None,
+        owner_mid: str | int | None = None,
+    ) -> list[ImageContent]:
+        document = await self.build_document(
+            oid,
+            type_,
+            video_title=video_title,
+            video_cover=video_cover,
+            owner_mid=owner_mid,
+        )
+        if document is None:
+            return []
         serialised = json.dumps(
             asdict(document),
             ensure_ascii=False,

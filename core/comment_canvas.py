@@ -300,13 +300,21 @@ class SocialCommentCanvas:
             return "仅展示部分热门评论"
         return f"热门评论 {len(document.entries)} / {document.total_text}"
 
-    def build_html(self, document: CommentDocument) -> str:
-        theme = document.theme
-        fallback = theme.brand_text
-        entries = "".join(
+    def render_entries_fragment(self, document: CommentDocument) -> str:
+        """Render comment rows without the standalone comment-card shell."""
+        fallback = document.theme.brand_text
+        return "".join(
             self._render_entry(entry, nested=False, fallback=fallback)
             for entry in document.entries
         )
+
+    @classmethod
+    def footer_label(cls, document: CommentDocument) -> str:
+        return cls._footer_label(document)
+
+    def build_html(self, document: CommentDocument) -> str:
+        theme = document.theme
+        entries = self.render_entries_fragment(document)
         cover_class = " cover-portrait" if theme.portrait_cover else ""
         cover = (
             f'<img class="cover{cover_class}" src="{self._url(document.cover)}" '
@@ -314,13 +322,13 @@ class SocialCommentCanvas:
             if document.cover
             else ""
         )
-        footer_label = self._text(self._footer_label(document))
+        footer_label = self._text(self.footer_label(document))
         footer_brand = self._text(COMMENT_FOOTER_BRAND)
         return f"""<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <style id="parser-x-comment-styles">
-*{{box-sizing:border-box}}html,body{{margin:0;width:760px;background:{theme.background};color:{theme.text}}}
+*{{box-sizing:border-box}}html,body{{margin:0;width:760px;background:{theme.background};color:{theme.text}}}html{{overflow-x:hidden;scrollbar-width:none}}html::-webkit-scrollbar{{width:0;height:0}}
 body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}}
 .page{{width:760px;padding:18px 22px 20px;background:{theme.background}}}
 .shell{{overflow:hidden;border:1px solid {theme.border};border-radius:14px;background:{theme.surface}}}

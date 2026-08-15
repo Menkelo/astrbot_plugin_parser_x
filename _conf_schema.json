@@ -19,8 +19,8 @@
     }
   },
   "comments": {
-    "description": "评论区卡片",
-    "hint": "主内容发送后，再通过 AstrBot 官方 html_render 生成一张热门评论长图。",
+    "description": "热门评论",
+    "hint": "有统一正文卡时优先把热门评论合并到同一张长卡；不适用或合并失败时生成独立评论长图。",
     "type": "object",
     "items": {
       "bilibili": {"description": "B站评论区", "type": "bool", "default": true},
@@ -42,7 +42,7 @@
       },
       "timeout": {
         "description": "评论任务超时（秒）",
-        "hint": "包含评论抓取、头像处理、html_render 和缓存写入；超时后仅跳过评论，不影响主内容。",
+        "hint": "包含评论抓取、头像处理、长卡合并、html_render 和缓存写入；失败或超时不影响正文发送。",
         "type": "int",
         "slider": {"min": 15, "max": 180, "step": 5},
         "default": 90
@@ -51,7 +51,7 @@
   },
   "rendering": {
     "description": "卡片渲染",
-    "hint": "正文卡、动态卡、直播卡和评论卡统一复用 AstrBot 官方 html_render（Canvas/T2I），插件不会启动本地 Chromium。",
+    "hint": "正文长卡、动态内容和评论降级卡统一复用 AstrBot 官方 html_render（Canvas/T2I），插件不会启动本地 Chromium。",
     "obvious_hint": true,
     "type": "object",
     "items": {

@@ -78,8 +78,17 @@ class MiyousheParser(BaseParser):
                 owner_id=owner_id,
             )
 
+        async def build_comment_document():
+            return await self.comment_feed.build_document(
+                post_id,
+                work_title=title,
+                cover=cover,
+                owner_id=owner_id,
+            )
+
         return {
             "comment_task_factory": build_comments,
+            "comment_document_task_factory": build_comment_document,
             "comment_timeout": self.comment_timeout,
         }
 
@@ -229,9 +238,10 @@ class MiyousheParser(BaseParser):
                     ext_headers=self.headers,
                 )
             )
+        post_image_urls = self._image_urls(post)
         image_contents = [
             ImageContent(self.downloader.download_img(item, ext_headers=self.headers))
-            for item in self._image_urls(post)
+            for item in post_image_urls
             if item != cover_url
         ]
         video_contents = []
@@ -293,6 +303,47 @@ class MiyousheParser(BaseParser):
             {
                 "render_text_card": True,
                 "text_card_avatar": str(author_avatar or ""),
+                "text_card_media": str(
+                    cover_url or (post_image_urls[0] if post_image_urls else "")
+                ),
+                "card_kind": (
+                    "文章 · 视频"
+                    if video_contents
+                    else "文章 · 图文"
+                    if contents
+                    else "文章"
+                ),
+                "card_author_badge": "作者",
+                "card_metrics": [
+                    (
+                        "浏览",
+                        (post_container.get("stat") or post.get("stat") or {}).get(
+                            "view_num"
+                        ),
+                    ),
+                    (
+                        "评论",
+                        (post_container.get("stat") or post.get("stat") or {}).get(
+                            "reply_num"
+                        ),
+                    ),
+                    (
+                        "点赞",
+                        (post_container.get("stat") or post.get("stat") or {}).get(
+                            "like_num"
+                        ),
+                    ),
+                    (
+                        "收藏",
+                        (post_container.get("stat") or post.get("stat") or {}).get(
+                            "bookmark_num"
+                        ),
+                    ),
+                ],
+                "card_info": [
+                    "正文完整保留",
+                    *([f"媒体 {len(contents)} 项"] if contents else []),
+                ],
             }
         )
         return self.result(

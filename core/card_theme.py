@@ -42,6 +42,14 @@ DOUYIN_CARD_THEME = PlatformCardTheme(
     accent_soft="#fff0f3",
 )
 
+KUAISHOU_CARD_THEME = PlatformCardTheme(
+    key="kuaishou",
+    display_name="快手",
+    glyph="快",
+    accent="#ff5a1f",
+    accent_soft="#fff2ec",
+)
+
 MIYOUSHE_CARD_THEME = PlatformCardTheme(
     key="miyoushe",
     display_name="米游社",
@@ -83,6 +91,8 @@ _THEME_ALIASES = {
     "哔哩哔哩": BILIBILI_CARD_THEME,
     "douyin": DOUYIN_CARD_THEME,
     "抖音": DOUYIN_CARD_THEME,
+    "kuaishou": KUAISHOU_CARD_THEME,
+    "快手": KUAISHOU_CARD_THEME,
     "miyoushe": MIYOUSHE_CARD_THEME,
     "mihoyo": MIYOUSHE_CARD_THEME,
     "米游社": MIYOUSHE_CARD_THEME,
@@ -118,6 +128,7 @@ __all__ = [
     "BILIBILI_CARD_THEME",
     "DEFAULT_CARD_THEME",
     "DOUYIN_CARD_THEME",
+    "KUAISHOU_CARD_THEME",
     "MIYOUSHE_CARD_THEME",
     "PlatformCardTheme",
     "WEIBO_CARD_THEME",

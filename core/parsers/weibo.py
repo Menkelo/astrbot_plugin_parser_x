@@ -86,8 +86,17 @@ class WeiboParser(BaseParser):
                 owner_id=owner_id,
             )
 
+        async def build_comment_document():
+            return await self.comment_feed.build_document(
+                mid,
+                work_title=title,
+                cover=cover,
+                owner_id=owner_id,
+            )
+
         return {
             "comment_task_factory": build_comments,
+            "comment_document_task_factory": build_comment_document,
             "comment_timeout": self.comment_timeout,
         }
 
@@ -447,6 +456,34 @@ class WeiboParser(BaseParser):
             {
                 "render_text_card": True,
                 "text_card_avatar": author_avatar,
+                "text_card_media": static_pic_urls[0] if static_pic_urls else "",
+                "card_kind": (
+                    "微博 · 图文"
+                    if image_contents
+                    else "微博 · 视频"
+                    if video_contents
+                    else "微博"
+                ),
+                "card_author_badge": "认证" if user.get("verified") else "博主",
+                "card_metrics": [
+                    ("评论", data.get("comments_count")),
+                    ("点赞", data.get("attitudes_count")),
+                    ("转发", data.get("reposts_count")),
+                ],
+                "card_info": [
+                    "正文完整保留",
+                    *(
+                        ["含转发原文"]
+                        if isinstance(data.get("retweeted_status"), dict)
+                        else []
+                    ),
+                    *(
+                        ["单图引用原消息"]
+                        if len(image_contents) == 1 and not video_contents
+                        else []
+                    ),
+                    *([f"媒体 {len(contents)} 项"] if len(contents) > 1 else []),
+                ],
             }
         )
 

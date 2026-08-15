@@ -80,8 +80,17 @@ class DouyinParser(BaseParser):
                 owner=owner or {},
             )
 
+        async def build_comment_document():
+            return await self.comment_feed.build_document(
+                str(aweme_id),
+                work_title=title,
+                cover=cover,
+                owner=owner or {},
+            )
+
         return {
             "comment_task_factory": build_comments,
+            "comment_document_task_factory": build_comment_document,
             "comment_timeout": self.comment_timeout,
         }
 
@@ -633,7 +642,26 @@ class DouyinParser(BaseParser):
             owner=aweme.get("author") if isinstance(aweme, dict) else None,
         )
         if contents and all(isinstance(item, ImageContent) for item in contents):
-            extra["render_text_card"] = True
+            statistics = aweme.get("statistics") or {}
+            extra.update(
+                {
+                    "render_text_card": True,
+                    "text_card_avatar": meta.avatar_url or "",
+                    "text_card_media": comment_cover or "",
+                    "card_kind": "图文作品",
+                    "card_author_badge": "作者",
+                    "card_metrics": [
+                        ("评论", statistics.get("comment_count")),
+                        ("点赞", statistics.get("digg_count")),
+                        ("收藏", statistics.get("collect_count")),
+                        ("分享", statistics.get("share_count")),
+                    ],
+                    "card_info": [
+                        "正文完整保留",
+                        f"图片 {len(contents)} 张",
+                    ],
+                }
+            )
         return self.result(
             title=meta.desc,
             author=author,
@@ -727,7 +755,19 @@ class DouyinParser(BaseParser):
             owner={"nickname": slides.name},
         )
         if contents:
-            extra["render_text_card"] = True
+            extra.update(
+                {
+                    "render_text_card": True,
+                    "text_card_avatar": slides.avatar_url or "",
+                    "text_card_media": comment_cover or "",
+                    "card_kind": "图集",
+                    "card_author_badge": "作者",
+                    "card_info": [
+                        "正文完整保留",
+                        f"图片 {len(contents)} 张",
+                    ],
+                }
+            )
         return self.result(
             title=slides.desc,
             author=author,

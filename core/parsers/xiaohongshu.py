@@ -100,6 +100,37 @@ class XiaoHongShuParser(BaseParser):
         return out
 
     @staticmethod
+    def _normalize_timestamp(value: object) -> int | None:
+        try:
+            timestamp = int(value or 0)
+        except (TypeError, ValueError):
+            return None
+        if timestamp <= 0:
+            return None
+        if timestamp > 10_000_000_000:
+            timestamp //= 1000
+        return timestamp
+
+    @staticmethod
+    def _interaction_metrics(note_data: dict) -> list[tuple[str, object]]:
+        info = note_data.get("interactInfo") or note_data.get("interact_info") or {}
+        if not isinstance(info, dict):
+            return []
+
+        def first(*keys: str):
+            for key in keys:
+                if info.get(key) is not None:
+                    return info.get(key)
+            return None
+
+        return [
+            ("评论", first("commentCount", "comment_count")),
+            ("点赞", first("likedCount", "liked_count")),
+            ("收藏", first("collectedCount", "collected_count")),
+            ("分享", first("shareCount", "share_count")),
+        ]
+
+    @staticmethod
     def _is_live_url(url: str | None) -> bool:
         u = (url or "").lower()
         return "xiaohongshu.com/livestream" in u or "/livestream/" in u
@@ -387,18 +418,35 @@ class XiaoHongShuParser(BaseParser):
         note_detail = convert(note_data, type=NoteDetail)
 
         contents = []
+        note_image_urls = note_detail.image_urls
 
         if video_url := note_detail.video_url:
-            cover_url = note_detail.image_urls[0] if note_detail.image_urls else None
+            cover_url = note_image_urls[0] if note_image_urls else None
             contents.append(self.create_video_content(video_url, cover_url))
 
-        elif image_urls := note_detail.image_urls:
+        elif image_urls := note_image_urls:
             contents.extend(self.create_image_contents(image_urls))
 
         author = self.create_author(note_detail.nickname, note_detail.avatar_url)
         extra = {}
         if contents and not note_detail.video_url:
-            extra["render_text_card"] = True
+            extra.update(
+                {
+                    "render_text_card": True,
+                    "text_card_media": note_image_urls[0] if note_image_urls else "",
+                    "card_kind": "笔记 · 图文",
+                    "card_author_badge": "作者",
+                    "card_metrics": self._interaction_metrics(note_data),
+                    "card_info": [
+                        "正文完整保留",
+                        *(
+                            [f"图片 {len(note_image_urls)} 张"]
+                            if note_image_urls
+                            else []
+                        ),
+                    ],
+                }
+            )
             if note_detail.avatar_url:
                 extra["text_card_avatar"] = note_detail.avatar_url
 
@@ -407,7 +455,7 @@ class XiaoHongShuParser(BaseParser):
             text=note_detail.desc,
             author=author,
             contents=contents,
-            timestamp=note_detail.time // 1000 if note_detail.time else None,
+            timestamp=self._normalize_timestamp(note_detail.time),
             url=final_url,
             extra=extra,
         )
@@ -491,7 +539,25 @@ class XiaoHongShuParser(BaseParser):
 
         extra = {}
         if contents and not note_data_obj.video_url:
-            extra["render_text_card"] = True
+            extra.update(
+                {
+                    "render_text_card": True,
+                    "text_card_media": note_data_obj.image_urls[0]
+                    if note_data_obj.image_urls
+                    else "",
+                    "card_kind": "笔记 · 图文",
+                    "card_author_badge": "作者",
+                    "card_metrics": self._interaction_metrics(note_data),
+                    "card_info": [
+                        "正文完整保留",
+                        *(
+                            [f"图片 {len(note_data_obj.image_urls)} 张"]
+                            if note_data_obj.image_urls
+                            else []
+                        ),
+                    ],
+                }
+            )
             if note_data_obj.user.avatar:
                 extra["text_card_avatar"] = note_data_obj.user.avatar
 
@@ -502,7 +568,7 @@ class XiaoHongShuParser(BaseParser):
             ),
             contents=contents,
             text=note_data_obj.desc,
-            timestamp=note_data_obj.time // 1000 if note_data_obj.time else None,
+            timestamp=self._normalize_timestamp(note_data_obj.time),
             url=final_url,
             extra=extra,
         )

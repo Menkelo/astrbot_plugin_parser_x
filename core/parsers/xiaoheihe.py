@@ -88,8 +88,19 @@ class XiaoheiheParser(BaseParser):
                 total=total,
             )
 
+        async def build_comment_document():
+            return await self.comment_feed.build_document(
+                link_id,
+                threads,
+                work_title=title,
+                cover=cover,
+                owner_id=owner_id,
+                total=total,
+            )
+
         return {
             "comment_task_factory": build_comments,
+            "comment_document_task_factory": build_comment_document,
             "comment_timeout": self.comment_timeout,
         }
 
@@ -576,6 +587,7 @@ class XiaoheiheParser(BaseParser):
             body_parts: list[str | ImageContent] = []
             image_contents: list[ImageContent] = []
             image_count = 0
+            card_media_url = cover_url or ""
             for block_type, value in rich_blocks:
                 if block_type == "text":
                     body_parts.append(value)
@@ -583,6 +595,8 @@ class XiaoheiheParser(BaseParser):
                 normalized = normalize_image_url(value)
                 if not normalized or normalized == cover_url or image_count >= 20:
                     continue
+                if not card_media_url:
+                    card_media_url = normalized
                 content = ImageContent(
                     self.downloader.download_img(
                         normalized,
@@ -662,6 +676,28 @@ class XiaoheiheParser(BaseParser):
                     "render_text_card": True,
                     "text_card_avatar": avatar or "",
                     "text_card_text": card_text,
+                    "text_card_media": card_media_url,
+                    "card_kind": (
+                        "帖子 · 视频"
+                        if video_contents
+                        else "帖子 · 图文"
+                        if contents
+                        else "帖子"
+                    ),
+                    "card_author_badge": "作者",
+                    "card_metrics": [
+                        ("浏览", link.get("view_num") or link.get("view_count")),
+                        ("评论", total),
+                        ("点赞", link.get("up") or link.get("like_num")),
+                        (
+                            "收藏",
+                            link.get("favorite_num") or link.get("collect_num"),
+                        ),
+                    ],
+                    "card_info": [
+                        "富文本顺序保留",
+                        *([f"媒体 {len(contents)} 项"] if contents else []),
+                    ],
                 }
             )
             return self.result(
@@ -847,6 +883,30 @@ class XiaoheiheParser(BaseParser):
             extra={
                 "render_text_card": True,
                 "text_card_text": text[:1200] if text else "",
+                "text_card_media": cover_url or "",
+                "text_card_media_fit": "contain",
+                "card_kind": "游戏",
+                "card_metrics": [
+                    ("评分", result.get("score")),
+                    (
+                        "评价",
+                        (result.get("comment_stats") or {}).get("score_comment")
+                        if isinstance(result.get("comment_stats"), dict)
+                        else None,
+                    ),
+                ],
+                "card_info": [
+                    *(
+                        [f"当前价格 ¥{price['current']}"]
+                        if isinstance(price, dict) and price.get("current") is not None
+                        else []
+                    ),
+                    *(
+                        [f"截图 {len(screenshot_contents)} 张"]
+                        if screenshot_contents
+                        else []
+                    ),
+                ],
             },
         )
 
@@ -944,6 +1004,9 @@ class XiaoheiheParser(BaseParser):
                 "text_card_text": "\n\n".join(
                     item for item in (page_description, fallback_info) if item
                 ),
+                "text_card_media": normalized_image or "",
+                "card_kind": "帖子" if kind == "bbs" else "游戏",
+                "card_info": [fallback_info],
             },
         )
 

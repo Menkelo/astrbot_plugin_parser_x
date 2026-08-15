@@ -210,17 +210,17 @@ class MiyousheCommentFeed(SocialCommentFeedBase):
             pinned=not nested and bool(reply.get("is_top")),
         )
 
-    async def build_images(
+    async def build_document(
         self,
         post_id: str,
         *,
         work_title: str,
         cover: str | None,
         owner_id: str | int | None,
-    ) -> list[ImageContent]:
+    ) -> CommentDocument | None:
         raw_feed = await self.fetch(post_id)
         if not raw_feed.items:
-            return []
+            return None
 
         owner_text = str(owner_id or "")
         entries = []
@@ -239,7 +239,7 @@ class MiyousheCommentFeed(SocialCommentFeedBase):
             if len(entries) >= self.limit:
                 break
         if not entries:
-            return []
+            return None
 
         partial = raw_feed.total > len(entries) or raw_feed.has_more
         document = CommentDocument(
@@ -254,6 +254,25 @@ class MiyousheCommentFeed(SocialCommentFeedBase):
                 else f"{COMMENT_FOOTER_BRAND} · 米游社评论区"
             ),
         )
+        await self._embed_avatars(document.entries)
+        return document
+
+    async def build_images(
+        self,
+        post_id: str,
+        *,
+        work_title: str,
+        cover: str | None,
+        owner_id: str | int | None,
+    ) -> list[ImageContent]:
+        document = await self.build_document(
+            post_id,
+            work_title=work_title,
+            cover=cover,
+            owner_id=owner_id,
+        )
+        if document is None:
+            return []
         return self.render_document(post_id, document)
 
 

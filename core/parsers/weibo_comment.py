@@ -378,17 +378,17 @@ class WeiboCommentFeed:
             if data_uri := resolved.get(entry.author.avatar):
                 entry.author.avatar = data_uri
 
-    async def build_images(
+    async def build_document(
         self,
         mid: str,
         *,
         work_title: str,
         cover: str | None,
         owner_id: str | int | None,
-    ) -> list[ImageContent]:
+    ) -> CommentDocument | None:
         raw_feed = await self.fetch(str(mid))
         if not raw_feed.items:
-            return []
+            return None
         entries = []
         for item in raw_feed.items:
             entry = self.adapt_comment(item, str(owner_id or ""))
@@ -397,7 +397,7 @@ class WeiboCommentFeed:
             if len(entries) >= self.limit:
                 break
         if not entries:
-            return []
+            return None
 
         partial = raw_feed.total > len(entries) or raw_feed.has_more
         document = CommentDocument(
@@ -412,6 +412,25 @@ class WeiboCommentFeed:
                 else f"{COMMENT_FOOTER_BRAND} · 微博评论区"
             ),
         )
+        await self._embed_avatars(document.entries)
+        return document
+
+    async def build_images(
+        self,
+        mid: str,
+        *,
+        work_title: str,
+        cover: str | None,
+        owner_id: str | int | None,
+    ) -> list[ImageContent]:
+        document = await self.build_document(
+            mid,
+            work_title=work_title,
+            cover=cover,
+            owner_id=owner_id,
+        )
+        if document is None:
+            return []
         serialised = json.dumps(
             asdict(document),
             ensure_ascii=False,
@@ -426,7 +445,6 @@ class WeiboCommentFeed:
             return [ImageContent(out_path)]
 
         async def render() -> Path:
-            await self._embed_avatars(document.entries)
             await self.canvas.render(out_path, document)
             return out_path
 

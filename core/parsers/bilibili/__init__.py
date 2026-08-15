@@ -668,23 +668,39 @@ class BilibiliParser(BaseParser):
         page_info = video_info.extract_info_with_page(page_num)
 
         text = f"简介: {video_info.desc}" if video_info.desc else None
-        author = self.create_author(video_info.owner.name, avatar_url=None)
+        owner_avatar = self.norm_bili_img(video_info.owner.face)
+        author = self.create_author(video_info.owner.name, avatar_url=owner_avatar)
 
         url = f"https://bilibili.com/{video_info.bvid}"
         url += f"?p={page_info.index + 1}" if page_info.index > 0 else ""
 
         # === B站评论区总开关 ===
-        # 开启：主视频发送完成后再后台抓取并渲染评论区，不抢主视频解析/下载资源
-        # 关闭：直接跳过，减少请求和渲染耗时
+        # 开启：优先把结构化评论嵌入视频长卡；合并失败时再走独立评论卡。
+        # 关闭：直接跳过，减少请求和渲染耗时。
         comment_task_factory = None
+        comment_document_task_factory = None
         if self.enable_comment_card:
-            comment_task_factory = lambda: self.comment_feed.build_images(
-                video_info.aid,
-                1,
-                video_title=page_info.title,
-                video_cover=self.norm_bili_img(page_info.cover),
-                owner_mid=video_info.owner.mid,
-            )
+
+            async def build_comments():
+                return await self.comment_feed.build_images(
+                    video_info.aid,
+                    1,
+                    video_title=page_info.title,
+                    video_cover=self.norm_bili_img(page_info.cover),
+                    owner_mid=video_info.owner.mid,
+                )
+
+            async def build_comment_document():
+                return await self.comment_feed.build_document(
+                    video_info.aid,
+                    1,
+                    video_title=page_info.title,
+                    video_cover=self.norm_bili_img(page_info.cover),
+                    owner_mid=video_info.owner.mid,
+                )
+
+            comment_task_factory = build_comments
+            comment_document_task_factory = build_comment_document
 
         stream_task = self._get_stream_ladders_with_qn_fallback(
             video,
@@ -692,7 +708,7 @@ class BilibiliParser(BaseParser):
             f"{video_info.bvid}:{page_info.index}",
         )
 
-        # 评论区在发送阶段异步抓取并经 Canvas 渲染，此处只等待视频取流。
+        # 评论区在发送阶段抓取，此处只等待视频取流。
         video_ladders, a_candidates, play_url_data = await stream_task
 
         if not video_ladders:
@@ -792,6 +808,43 @@ class BilibiliParser(BaseParser):
         )
         video_content.is_file_upload = False
 
+        stats = raw_info.get("stat") or {}
+        metrics = [
+            ("播放", stats.get("view")),
+            ("评论", stats.get("reply")),
+            ("点赞", stats.get("like")),
+            ("收藏", stats.get("favorite")),
+            ("投币", stats.get("coin")),
+            ("分享", stats.get("share")),
+        ]
+        metrics = [item for item in metrics if item[1] is not None]
+        minutes, seconds = divmod(int(page_info.duration or 0), 60)
+        card_info = [f"时长 {minutes}:{seconds:02d}"]
+        if video_info.videos > 1:
+            card_info.append(f"分P {page_info.index + 1}/{video_info.videos}")
+        if video_info.tname:
+            card_info.append(video_info.tname)
+
+        extra = {
+            "render_text_card": True,
+            "text_card_media": self.norm_bili_img(page_info.cover) or "",
+            "text_card_avatar": owner_avatar or "",
+            "card_platform_name": "B站视频",
+            "card_kind": "视频",
+            "card_author_badge": "UP主",
+            "card_metrics": metrics,
+            "card_info": card_info,
+            "video_separate_from_card": True,
+        }
+        if comment_task_factory and comment_document_task_factory:
+            extra.update(
+                {
+                    "comment_task_factory": comment_task_factory,
+                    "comment_document_task_factory": comment_document_task_factory,
+                    "comment_timeout": self.comment_timeout,
+                }
+            )
+
         return self.result(
             url=url,
             title=page_info.title,
@@ -799,12 +852,7 @@ class BilibiliParser(BaseParser):
             text=text,
             author=author,
             contents=[video_content],
-            extra={
-                "comment_task_factory": comment_task_factory,
-                "comment_timeout": self.comment_timeout,
-            }
-            if comment_task_factory
-            else {},
+            extra=extra,
         )
 
     async def parse_dynamic(self, dynamic_id: int):

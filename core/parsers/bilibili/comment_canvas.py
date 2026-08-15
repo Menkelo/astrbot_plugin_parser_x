@@ -273,6 +273,16 @@ class BiliCommentCanvas:
             return "仅展示部分热门评论"
         return f"热门评论 {len(document.entries)} / {document.total_text}"
 
+    def render_entries_fragment(self, document: BiliCommentDocument) -> str:
+        """Render Bilibili comment rows without the standalone shell."""
+        return "".join(
+            self._render_entry(entry, nested=False) for entry in document.entries
+        )
+
+    @classmethod
+    def footer_label(cls, document: BiliCommentDocument) -> str:
+        return cls._footer_label(document)
+
     def build_html(self, document: BiliCommentDocument) -> str:
         theme = BILIBILI_CARD_THEME
         cover = (
@@ -281,10 +291,8 @@ class BiliCommentCanvas:
             if document.cover
             else ""
         )
-        entries = "".join(
-            self._render_entry(entry, nested=False) for entry in document.entries
-        )
-        footer_label = self._text(self._footer_label(document))
+        entries = self.render_entries_fragment(document)
+        footer_label = self._text(self.footer_label(document))
         footer_brand = self._text(COMMENT_FOOTER_BRAND)
         return f"""<!doctype html>
 <html lang="zh-CN">
@@ -292,7 +300,7 @@ class BiliCommentCanvas:
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <style id="parser-x-comment-styles">
-*{{box-sizing:border-box}}html,body{{margin:0;width:760px;background:{theme.background};color:{theme.text}}}
+*{{box-sizing:border-box}}html,body{{margin:0;width:760px;background:{theme.background};color:{theme.text}}}html{{overflow-x:hidden;scrollbar-width:none}}html::-webkit-scrollbar{{width:0;height:0}}
 body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}}
 .page{{width:760px;padding:18px 22px 20px;background:{theme.background}}}.shell{{overflow:hidden;border:1px solid {theme.border};border-radius:14px;background:{theme.surface}}}
 .header{{display:flex;min-height:82px;align-items:center;gap:12px;padding:15px 16px 11px}}

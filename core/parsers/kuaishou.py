@@ -162,6 +162,8 @@ class KuaiShouParser(BaseParser):
     def _build_result_from_photo(self, photo, url: str | None = None):
         contents = []
         video_url = photo.video_url
+        photo_image_urls = photo.img_urls
+        single_image_url = photo.single_image_url
         if video_url:
             contents.append(
                 # BaseParser 已修改，create_video_content 会自动忽略传入的 cover
@@ -172,11 +174,11 @@ class KuaiShouParser(BaseParser):
                     ext_headers=self.ios_headers,
                 )
             )
-        if img_urls := photo.img_urls:
+        if img_urls := photo_image_urls:
             contents.extend(
                 self.create_image_contents(img_urls, ext_headers=self.ios_headers)
             )
-        elif single_image_url := photo.single_image_url:
+        elif single_image_url:
             contents.extend(
                 self.create_image_contents(
                     [single_image_url], ext_headers=self.ios_headers
@@ -188,7 +190,19 @@ class KuaiShouParser(BaseParser):
         )
         extra = {}
         if contents and not video_url:
-            extra["render_text_card"] = True
+            extra.update(
+                {
+                    "render_text_card": True,
+                    "text_card_media": (
+                        photo_image_urls[0]
+                        if photo_image_urls
+                        else single_image_url or ""
+                    ),
+                    "card_kind": "图文作品",
+                    "card_author_badge": "作者",
+                    "card_info": [f"图片 {len(contents)} 张"],
+                }
+            )
             if photo.head_url:
                 extra["text_card_avatar"] = photo.head_url
 

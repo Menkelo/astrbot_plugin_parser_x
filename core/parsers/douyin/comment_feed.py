@@ -25,7 +25,7 @@ from ...comment_canvas import (
 )
 from ...constants import COMMENT_FOOTER_BRAND
 from ...data import ImageContent
-from ...utils import ck2dict
+from ...utils import cached_image_to_data_uri, ck2dict
 from .a_bogus import generate_a_bogus
 
 
@@ -56,6 +56,7 @@ class DouyinCommentFeed:
         self._emoji_map: dict[str, str] = {}
         self._emoji_deadline = 0.0
         self._emoji_lock = asyncio.Lock()
+        self._avatar_data_uri_cache: dict[str, str | None] = {}
 
     @property
     def cache_dir(self) -> Path:
@@ -108,6 +109,49 @@ class DouyinCommentFeed:
             }
         )
         return headers
+
+    @staticmethod
+    def _walk_entries(entries: list[CommentEntry]) -> list[CommentEntry]:
+        output = []
+        pending = list(entries)
+        while pending:
+            entry = pending.pop(0)
+            output.append(entry)
+            if entry.first_reply is not None:
+                pending.append(entry.first_reply)
+        return output
+
+    async def _avatar_to_data_uri(self, avatar: str) -> str | None:
+        return await cached_image_to_data_uri(
+            self._avatar_data_uri_cache,
+            self.parser.http_get,
+            avatar,
+            headers=self._headers(),
+            referer="https://www.douyin.com/",
+            max_bytes=2 * 1024 * 1024,
+            timeout=8,
+            debug_label="[Douyin] comment avatar",
+        )
+
+    async def _embed_avatars(self, entries: list[CommentEntry]) -> None:
+        all_entries = self._walk_entries(entries)
+        avatar_urls = list(
+            dict.fromkeys(
+                entry.author.avatar
+                for entry in all_entries
+                if entry.author.avatar and not entry.author.avatar.startswith("data:")
+            )
+        )
+        if not avatar_urls:
+            return
+
+        data_uris = await asyncio.gather(
+            *(self._avatar_to_data_uri(url) for url in avatar_urls)
+        )
+        resolved = dict(zip(avatar_urls, data_uris, strict=True))
+        for entry in all_entries:
+            if data_uri := resolved.get(entry.author.avatar):
+                entry.author.avatar = data_uri
 
     def _common_params(self) -> dict[str, object]:
         params: dict[str, object] = {
@@ -518,21 +562,21 @@ class DouyinCommentFeed:
             likes = 0
         return int(pinned), likes
 
-    async def build_images(
+    async def build_document(
         self,
         aweme_id: str,
         *,
         work_title: str,
         cover: str | None,
         owner: dict | None = None,
-    ) -> list[ImageContent]:
+    ) -> CommentDocument | None:
         if not self.parser.cookies:
             logger.debug("[Douyin] 未配置 douyin_ck，跳过评论区")
-            return []
+            return None
 
         raw_feed = await self.fetch(str(aweme_id))
         if not raw_feed.items:
-            return []
+            return None
         emoji_map = await self._load_emoji_map()
         ordered = sorted(raw_feed.items, key=self._sort_key, reverse=True)
         entries = []
@@ -543,7 +587,7 @@ class DouyinCommentFeed:
             if len(entries) >= self.limit:
                 break
         if not entries:
-            return []
+            return None
 
         partial = raw_feed.total > len(entries) or raw_feed.has_more
         document = CommentDocument(
@@ -558,6 +602,25 @@ class DouyinCommentFeed:
                 else f"{COMMENT_FOOTER_BRAND} · 抖音评论区"
             ),
         )
+        await self._embed_avatars(document.entries)
+        return document
+
+    async def build_images(
+        self,
+        aweme_id: str,
+        *,
+        work_title: str,
+        cover: str | None,
+        owner: dict | None = None,
+    ) -> list[ImageContent]:
+        document = await self.build_document(
+            aweme_id,
+            work_title=work_title,
+            cover=cover,
+            owner=owner,
+        )
+        if document is None:
+            return []
         serialised = json.dumps(
             asdict(document),
             ensure_ascii=False,
