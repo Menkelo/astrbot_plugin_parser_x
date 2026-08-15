@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import hashlib
 import re
 from pathlib import Path
@@ -19,6 +20,13 @@ from astrbot.api.message_components import (
     Video,
 )
 from astrbot.api.star import Context, Star, StarTools
+from astrbot.api.web import (
+    error_response,
+    file_response,
+    json_response,
+    request,
+    stream_response,
+)
 from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import (
     AiocqhttpMessageEvent,
 )
@@ -37,6 +45,13 @@ from .core.data import (
     MediaContent,
     ParseResult,
     VideoContent,
+)
+from .core.debug_page import (
+    DebugCaptureEvent,
+    DebugMediaRegistry,
+    DebugMessageSerializer,
+    DebugSessionManager,
+    serialize_parse_result,
 )
 from .core.download import Downloader
 from .core.exception import (
@@ -121,6 +136,9 @@ class ParserXPlugin(Star):
         self.cleaner = CacheCleaner(self.context, self.config)
         self.render_service = HtmlRenderService.from_config(config, self.html_render)
         self.text_renderer = TextCardRenderer(self.render_service)
+        self.debug_media = DebugMediaRegistry()
+        self.debug_sessions = DebugSessionManager()
+        self._register_debug_page_apis()
 
     # region 生命周期
 
@@ -128,6 +146,7 @@ class ParserXPlugin(Star):
         self._register_parser()
 
     async def terminate(self):
+        await self.debug_sessions.close()
         await self.downloader.close()
         unique_parsers = set(self.parser_map.values())
         for parser in unique_parsers:
@@ -192,6 +211,39 @@ class ParserXPlugin(Star):
             ),
             True,
         )
+
+    def _debug_mode_enabled(self) -> bool:
+        debug = self.config.get("debug", {})
+        if not isinstance(debug, dict):
+            return False
+        return parse_bool(debug.get("enabled", False), False)
+
+    def _register_debug_page_apis(self) -> None:
+        routes = (
+            ("debug/status", self.debug_page_status, ["GET"], "Debug Page status"),
+            ("debug/start", self.debug_page_start, ["POST"], "Start debug parse"),
+            ("debug/events", self.debug_page_events, ["GET"], "Debug parse events"),
+            ("debug/cancel", self.debug_page_cancel, ["POST"], "Cancel debug parse"),
+            (
+                "debug/media/<token>/preview",
+                self.debug_page_media_preview,
+                ["GET"],
+                "Preview debug media",
+            ),
+            (
+                "debug/media/<token>",
+                self.debug_page_media,
+                ["GET"],
+                "Download debug media",
+            ),
+        )
+        for route, handler, methods, description in routes:
+            self.context.register_web_api(
+                f"/{PLUGIN_NAME}/{route}",
+                handler,
+                methods,
+                description,
+            )
 
     # endregion
 
@@ -539,7 +591,7 @@ class ParserXPlugin(Star):
                 event.plain_result(f"⚠️ 媒体发送失败\n🔗 原链接: {result.url or '未知'}")
             )
 
-    async def _send_delivery_plan(
+    async def _send_delivery_plan_legacy(
         self,
         event: AstrMessageEvent,
         result: ParseResult,
@@ -800,7 +852,11 @@ class ParserXPlugin(Star):
                 if isinstance(error, BaseException):
                     logger.warning(f"投递计划视频并发发送失败: {error}")
 
-    async def _send_parse_result(self, event: AstrMessageEvent, result: ParseResult):
+    async def _send_parse_result_legacy(
+        self,
+        event: AstrMessageEvent,
+        result: ParseResult,
+    ):
         show_download_fail_tip = self._show_download_fail_tip()
 
         node_uin = str(event.get_sender_id())
@@ -1305,9 +1361,721 @@ class ParserXPlugin(Star):
         if not comments_joined:
             await process_comment_content()
 
+    async def _send_delivery_plan(
+        self,
+        event: AstrMessageEvent,
+        result: ParseResult,
+        *,
+        node_uin: str,
+        node_name: str,
+        original_message_reply,
+    ) -> None:
+        """Send an explicit native delivery plan without rendering a body card."""
+        plan = result.delivery
+        if plan is None:
+            return
+
+        show_download_fail_tip = self._show_download_fail_tip()
+        download_tasks: dict[
+            int,
+            asyncio.Task[tuple[MediaContent, Path | None, str | None]],
+        ] = {}
+
+        async def resolve_media(
+            content: MediaContent,
+        ) -> tuple[Path | None, str | None]:
+            task = download_tasks.get(id(content))
+            if task is None:
+                task = asyncio.create_task(
+                    self._download_content(content),
+                    name=f"parser_x_native_{type(content).__name__}",
+                )
+                download_tasks[id(content)] = task
+            _, path, error = await task
+            return path, error
+
+        async def send_individually(
+            segments: list[BaseMessageComponent],
+            *,
+            reply_first: bool = False,
+        ) -> None:
+            for index, segment in enumerate(segments):
+                if isinstance(segment, Video):
+                    await self._send_video_segment(event, result, segment)
+                    continue
+                chain: list[BaseMessageComponent] = []
+                if (
+                    reply_first
+                    and index == 0
+                    and (reply := original_message_reply()) is not None
+                ):
+                    chain.append(reply)
+                chain.append(segment)
+                try:
+                    await event.send(event.chain_result(chain))
+                except Exception as exc:
+                    logger.warning(f"原生内容逐段发送失败: {exc}")
+
+        async def send_batch(batch: DeliveryBatch) -> None:
+            media_parts = [
+                part for part in batch.parts if isinstance(part, MediaContent)
+            ]
+            resolved_media = await asyncio.gather(
+                *(resolve_media(content) for content in media_parts)
+            )
+            path_map = {
+                id(content): resolved
+                for content, resolved in zip(
+                    media_parts,
+                    resolved_media,
+                    strict=True,
+                )
+            }
+
+            segments: list[BaseMessageComponent] = []
+            for part in batch.parts:
+                if isinstance(part, str):
+                    text = part.strip()
+                    if text:
+                        segments.append(Plain(text.replace("@", "@\u200b")))
+                    continue
+
+                path, error = path_map.get(id(part), (None, None))
+                if error:
+                    if show_download_fail_tip:
+                        segments.append(Plain(error.strip()))
+                    continue
+                if path and (segment := self._convert_to_seg(part, path)):
+                    segments.append(segment)
+
+            if not segments:
+                return
+
+            if batch.mode == "forward":
+                for offset in range(0, len(segments), 20):
+                    group = segments[offset : offset + 20]
+                    nodes = Nodes(
+                        [
+                            Node(uin=node_uin, name=node_name, content=[segment])
+                            for segment in group
+                        ]
+                    )
+                    try:
+                        await event.send(event.chain_result([nodes]))
+                    except Exception as exc:
+                        logger.warning(f"原生合并转发发送失败，降级逐段发送: {exc}")
+                        await send_individually(group)
+                return
+
+            if len(segments) == 1 and isinstance(segments[0], Video):
+                await self._send_video_segment(event, result, segments[0])
+                return
+
+            chain: list[BaseMessageComponent] = []
+            if batch.reply_original and (reply := original_message_reply()) is not None:
+                chain.append(reply)
+            chain.extend(segments)
+            try:
+                await event.send(event.chain_result(chain))
+            except Exception as exc:
+                logger.warning(f"原生消息链发送失败，降级逐段发送: {exc}")
+                await send_individually(
+                    segments,
+                    reply_first=batch.reply_original,
+                )
+
+        for batch in plan.batches:
+            await send_batch(batch)
+
+    async def _send_parse_result(self, event: AstrMessageEvent, result: ParseResult):
+        """Deliver only source media, native rich posts, or plain text."""
+        show_download_fail_tip = self._show_download_fail_tip()
+        node_uin = str(event.get_sender_id())
+        node_name = event.get_sender_name() or "R-Parser"
+
+        def original_message_reply() -> Reply | None:
+            message_id = getattr(event.message_obj, "message_id", None)
+            if message_id in (None, ""):
+                return None
+            return Reply(id=message_id)
+
+        media_contents: list[MediaContent] = []
+        seen_media: set[int] = set()
+        planned_media = result.delivery.media_contents() if result.delivery else []
+        for content in [*result.contents, *planned_media]:
+            if id(content) in seen_media:
+                continue
+            seen_media.add(id(content))
+            media_contents.append(content)
+
+        video_contents = [
+            content
+            for content in media_contents
+            if isinstance(content, (VideoContent, DynamicContent))
+        ]
+        image_contents = [
+            content
+            for content in media_contents
+            if isinstance(content, (ImageContent, GraphicsContent))
+        ]
+        other_contents = [
+            content
+            for content in media_contents
+            if not isinstance(
+                content,
+                (VideoContent, DynamicContent, ImageContent, GraphicsContent),
+            )
+        ]
+
+        async def send_media_content(content: MediaContent) -> None:
+            _, path, error = await self._download_content(content)
+            if error:
+                if show_download_fail_tip:
+                    try:
+                        await event.send(event.plain_result(error.strip()))
+                    except Exception as exc:
+                        logger.warning(f"媒体下载错误提示发送失败: {exc}")
+                return
+            if path is None:
+                return
+            segment = self._convert_to_seg(content, path)
+            if segment is None:
+                return
+            if isinstance(segment, Video):
+                await self._send_video_segment(event, result, segment)
+                return
+            try:
+                await event.send(event.chain_result([segment]))
+            except Exception as exc:
+                logger.warning(f"媒体发送失败: {exc}")
+
+        async def send_forward_segments(
+            segments: list[BaseMessageComponent],
+            *,
+            failure_label: str,
+        ) -> None:
+            for offset in range(0, len(segments), 20):
+                group = segments[offset : offset + 20]
+                nodes = Nodes(
+                    [
+                        Node(uin=node_uin, name=node_name, content=[segment])
+                        for segment in group
+                    ]
+                )
+                try:
+                    await event.send(event.chain_result([nodes]))
+                    continue
+                except Exception as exc:
+                    logger.warning(f"{failure_label}，降级逐段发送: {exc}")
+
+                for segment in group:
+                    try:
+                        await event.send(event.chain_result([segment]))
+                    except Exception as exc:
+                        logger.warning(f"媒体逐段发送失败: {exc}")
+
+        async def prepare_comment_segments(
+            comment_task: asyncio.Task[object],
+            started_at: float,
+            timeout: float,
+        ) -> list[BaseMessageComponent]:
+            def remaining_timeout() -> float:
+                elapsed = asyncio.get_running_loop().time() - started_at
+                return max(0.001, timeout - elapsed)
+
+            try:
+                raw_contents = await asyncio.wait_for(
+                    comment_task,
+                    timeout=remaining_timeout(),
+                )
+            except asyncio.TimeoutError:
+                logger.warning("评论区生成超时，已跳过发送")
+                return []
+            except Exception as exc:
+                logger.warning(f"评论区生成失败: {exc}")
+                return []
+
+            if not isinstance(raw_contents, (list, tuple)):
+                logger.warning("评论区生成结果格式无效，已跳过发送")
+                return []
+            comment_contents = [
+                content for content in raw_contents if isinstance(content, MediaContent)
+            ]
+            if not comment_contents:
+                return []
+
+            try:
+                download_results = await asyncio.wait_for(
+                    asyncio.gather(
+                        *(
+                            self._download_content(content)
+                            for content in comment_contents
+                        )
+                    ),
+                    timeout=remaining_timeout(),
+                )
+            except asyncio.TimeoutError:
+                logger.warning("评论区图片准备超时，已跳过发送")
+                return []
+            except Exception as exc:
+                logger.warning(f"评论区图片准备失败: {exc}")
+                return []
+
+            segments: list[BaseMessageComponent] = []
+            for content, path, error in download_results:
+                if error:
+                    logger.warning(f"评论区图片下载失败: {error}")
+                    continue
+                if path and (segment := self._convert_to_seg(content, path)):
+                    segments.append(segment)
+            return segments
+
+        async def process_comment_content(
+            comment_task: asyncio.Task[object],
+            started_at: float,
+            timeout: float,
+        ) -> None:
+            segments = await prepare_comment_segments(
+                comment_task,
+                started_at,
+                timeout,
+            )
+            if not segments:
+                return
+
+            comment_label = f"{result.platform.display_name} · 热门评论"
+            for offset in range(0, len(segments), 19):
+                group = segments[offset : offset + 19]
+                nodes = Nodes(
+                    [
+                        Node(
+                            uin=node_uin,
+                            name=node_name,
+                            content=[Plain(comment_label)],
+                        ),
+                        *[
+                            Node(uin=node_uin, name=node_name, content=[segment])
+                            for segment in group
+                        ],
+                    ]
+                )
+                try:
+                    await event.send(event.chain_result([nodes]))
+                    continue
+                except Exception as exc:
+                    logger.warning(f"评论区合并转发失败，降级逐张发送: {exc}")
+
+                try:
+                    await event.send(event.chain_result([Plain(comment_label)]))
+                except Exception as exc:
+                    logger.debug(f"评论区标题发送失败: {exc}")
+                for segment in group:
+                    try:
+                        await event.send(event.chain_result([segment]))
+                    except Exception as exc:
+                        logger.warning(f"评论区图片逐张发送失败: {exc}")
+
+        native_delivery = bool(result.extra.get("native_delivery")) or (
+            result.platform.name in {"xiaoheihe", "miyoushe"}
+            and result.delivery is not None
+        )
+        if native_delivery and result.delivery is not None:
+            concurrent_tasks: list[asyncio.Task[None]] = [
+                asyncio.create_task(
+                    self._send_delivery_plan(
+                        event,
+                        result,
+                        node_uin=node_uin,
+                        node_name=node_name,
+                        original_message_reply=original_message_reply,
+                    ),
+                    name="parser_x_native_delivery",
+                )
+            ]
+
+            comment_factory = result.extra.get("comment_image_task_factory")
+            if video_contents and callable(comment_factory):
+                comment_timeout = self._bounded_timeout(
+                    result.extra.get("comment_timeout", 90),
+                    90,
+                    180,
+                )
+                comment_started_at = asyncio.get_running_loop().time()
+                comment_task = asyncio.create_task(
+                    comment_factory(),
+                    name="parser_x_comment_image_build",
+                )
+                concurrent_tasks.append(
+                    asyncio.create_task(
+                        process_comment_content(
+                            comment_task,
+                            comment_started_at,
+                            comment_timeout,
+                        ),
+                        name="parser_x_comment_send",
+                    )
+                )
+
+            results = await asyncio.gather(*concurrent_tasks, return_exceptions=True)
+            for error in results:
+                if isinstance(error, BaseException):
+                    logger.warning(f"原生投递或评论区并发发送失败: {error}")
+            return
+
+        if video_contents:
+            concurrent_tasks: list[asyncio.Task[None]] = [
+                asyncio.create_task(
+                    send_media_content(content),
+                    name=f"parser_x_video_send_{index}",
+                )
+                for index, content in enumerate(video_contents)
+            ]
+
+            comment_factory = result.extra.get("comment_image_task_factory")
+            if callable(comment_factory):
+                comment_timeout = self._bounded_timeout(
+                    result.extra.get("comment_timeout", 90),
+                    90,
+                    180,
+                )
+                comment_started_at = asyncio.get_running_loop().time()
+                comment_task = asyncio.create_task(
+                    comment_factory(),
+                    name="parser_x_comment_image_build",
+                )
+                concurrent_tasks.append(
+                    asyncio.create_task(
+                        process_comment_content(
+                            comment_task,
+                            comment_started_at,
+                            comment_timeout,
+                        ),
+                        name="parser_x_comment_send",
+                    )
+                )
+
+            results = await asyncio.gather(*concurrent_tasks, return_exceptions=True)
+            for error in results:
+                if isinstance(error, BaseException):
+                    logger.warning(f"视频或评论区并发发送失败: {error}")
+            return
+
+        if other_contents:
+            results = await asyncio.gather(
+                *(send_media_content(content) for content in other_contents),
+                return_exceptions=True,
+            )
+            for error in results:
+                if isinstance(error, BaseException):
+                    logger.warning(f"非图文媒体发送失败: {error}")
+            return
+
+        if image_contents:
+            download_results = await asyncio.gather(
+                *(self._download_content(content) for content in image_contents)
+            )
+            segments: list[BaseMessageComponent] = []
+            errors: list[str] = []
+            for content, path, error in download_results:
+                if error:
+                    errors.append(error.strip())
+                    continue
+                if path and (segment := self._convert_to_seg(content, path)):
+                    segments.append(segment)
+
+            if len(image_contents) == 1 and segments:
+                chain: list[BaseMessageComponent] = []
+                if (reply := original_message_reply()) is not None:
+                    chain.append(reply)
+                chain.append(segments[0])
+                try:
+                    await event.send(event.chain_result(chain))
+                except Exception as exc:
+                    logger.warning(f"单图引用发送失败，降级直接发送: {exc}")
+                    await event.send(event.chain_result([segments[0]]))
+            elif segments:
+                await send_forward_segments(
+                    segments,
+                    failure_label="多图合并转发发送失败",
+                )
+
+            if errors and show_download_fail_tip:
+                try:
+                    await event.send(event.plain_result("\n".join(errors)))
+                except Exception as exc:
+                    logger.warning(f"图片下载错误提示发送失败: {exc}")
+            return
+
+        text = str(result.text or result.title or result.extra_info or "").strip()
+        if text:
+            await event.send(event.plain_result(text.replace("@", "@\u200b")))
+
     # endregion
 
     # region 事件监听
+
+    # region Canvas debug Page
+
+    @staticmethod
+    def _debug_page_owner() -> str | None:
+        username = request.username
+        plugin_name = request.plugin_name
+        if plugin_name != PLUGIN_NAME or not isinstance(username, str):
+            return None
+        username = username.strip()
+        return username or None
+
+    async def debug_page_status(self):
+        owner = self._debug_page_owner()
+        if owner is None:
+            return error_response("请通过 AstrBot 插件 Page 访问调试台", status_code=403)
+
+        comments = self.config.get("comments", {})
+        if not isinstance(comments, dict):
+            comments = {}
+        platforms = sorted(
+            {parser.platform.display_name for parser in self.parser_map.values()}
+        )
+        enabled = self._debug_mode_enabled()
+        return json_response(
+            {
+                "enabled": enabled,
+                "exclusive": enabled,
+                "active_sessions": self.debug_sessions.active_count,
+                "platforms": platforms,
+                "comments": {
+                    key: parse_bool(value, False)
+                    for key, value in comments.items()
+                    if key
+                    in {
+                        "bilibili",
+                        "douyin",
+                        "weibo",
+                        "xiaoheihe",
+                        "miyoushe",
+                    }
+                },
+            }
+        )
+
+    async def debug_page_start(self):
+        owner = self._debug_page_owner()
+        if owner is None:
+            return error_response("请通过 AstrBot 插件 Page 访问调试台", status_code=403)
+        if not self._debug_mode_enabled():
+            return error_response(
+                "调试模式尚未开启，请先在插件配置中打开调试开关",
+                status_code=403,
+            )
+
+        payload = await request.json(default={})
+        if not isinstance(payload, dict):
+            return error_response("请求内容必须是 JSON 对象")
+        text = str(payload.get("text") or "").strip()
+        if not text:
+            return error_response("请输入需要解析的分享文本或链接")
+        if len(text) > 20_000:
+            return error_response("调试文本不能超过 20000 个字符")
+
+        matches = self._collect_parser_matches(text)
+        if not matches:
+            return error_response("没有匹配到已启用的解析平台")
+
+        session = await self.debug_sessions.create(
+            owner=owner,
+            runner=lambda emit: self._run_debug_page_parse(
+                text,
+                owner=owner,
+                emit=emit,
+            ),
+        )
+        return json_response(
+            {
+                "session_id": session.session_id,
+                "match_count": len(matches),
+            }
+        )
+
+    async def debug_page_events(self):
+        owner = self._debug_page_owner()
+        if owner is None:
+            return error_response("请通过 AstrBot 插件 Page 访问调试台", status_code=403)
+        if not self._debug_mode_enabled():
+            return error_response("调试模式已关闭", status_code=403)
+
+        session_id = request.query.get("session_id", "")
+        session = self.debug_sessions.get(str(session_id or ""), owner=owner)
+        if session is None:
+            return error_response("调试会话不存在或已过期", status_code=404)
+        return stream_response(
+            self.debug_sessions.stream(session),
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+    async def debug_page_cancel(self):
+        owner = self._debug_page_owner()
+        if owner is None:
+            return error_response("请通过 AstrBot 插件 Page 访问调试台", status_code=403)
+        payload = await request.json(default={})
+        session_id = payload.get("session_id") if isinstance(payload, dict) else None
+        cancelled = await self.debug_sessions.cancel(
+            str(session_id or ""),
+            owner=owner,
+        )
+        if not cancelled:
+            return error_response("调试会话不存在或已结束", status_code=404)
+        return json_response({"cancelled": True})
+
+    async def debug_page_media_preview(self, token: str):
+        owner = self._debug_page_owner()
+        if owner is None or not self._debug_mode_enabled():
+            return error_response("调试媒体不可用", status_code=403)
+        entry = self.debug_media.get(token, owner=owner)
+        if entry is None:
+            return error_response("媒体不存在或已过期", status_code=404)
+        if entry.size > 16 * 1024 * 1024:
+            return error_response("媒体过大，请使用下载按钮查看", status_code=413)
+
+        raw = await asyncio.to_thread(entry.path.read_bytes)
+        encoded = base64.b64encode(raw).decode("ascii")
+        return json_response(
+            {
+                "data_url": f"data:{entry.mime};base64,{encoded}",
+                "name": entry.name,
+                "mime": entry.mime,
+                "size": entry.size,
+            }
+        )
+
+    async def debug_page_media(self, token: str):
+        owner = self._debug_page_owner()
+        if owner is None or not self._debug_mode_enabled():
+            return error_response("调试媒体不可用", status_code=403)
+        entry = self.debug_media.get(token, owner=owner)
+        if entry is None:
+            return error_response("媒体不存在或已过期", status_code=404)
+        return file_response(
+            entry.path,
+            filename=entry.name,
+            content_type=entry.mime,
+        )
+
+    async def _run_debug_page_parse(self, text: str, *, owner: str, emit) -> None:
+        started_at = asyncio.get_running_loop().time()
+        matches = self._collect_parser_matches(text)
+        await emit(
+            {
+                "event": "started",
+                "match_count": len(matches),
+                "exclusive": True,
+            }
+        )
+
+        completed = 0
+        message_index = 0
+        for match_index, (parser, keyword, searched) in enumerate(matches, start=1):
+            platform_name = parser.platform.display_name
+            await emit(
+                {
+                    "event": "match",
+                    "index": match_index,
+                    "platform": platform_name,
+                    "url": searched.group(0).strip(),
+                }
+            )
+            parser.source_text = text
+            parse_started_at = asyncio.get_running_loop().time()
+            try:
+                result = await parser.parse(keyword, searched)
+            except SkipParseException:
+                await emit(
+                    {
+                        "event": "skipped",
+                        "platform": platform_name,
+                        "message": "该分享被解析器主动跳过",
+                    }
+                )
+                continue
+            except (SizeLimitException, ParseException) as exc:
+                await emit(
+                    {
+                        "event": "error",
+                        "platform": platform_name,
+                        "message": str(exc),
+                    }
+                )
+                continue
+            except Exception as exc:
+                logger.exception("Canvas 调试页解析发生未知错误")
+                await emit(
+                    {
+                        "event": "error",
+                        "platform": platform_name,
+                        "message": f"解析发生未知错误：{exc}",
+                    }
+                )
+                continue
+
+            await emit(
+                {
+                    "event": "parsed",
+                    "platform": platform_name,
+                    "parse_ms": round(
+                        (asyncio.get_running_loop().time() - parse_started_at)
+                        * 1000
+                    ),
+                    "result": serialize_parse_result(result),
+                }
+            )
+
+            serializer = DebugMessageSerializer(self.debug_media, owner=owner)
+            capture_event = DebugCaptureEvent(
+                emit=emit,
+                serializer=serializer,
+                started_at=started_at,
+                platform=platform_name,
+                initial_message_index=message_index,
+            )
+            try:
+                await self._send_parse_result(capture_event, result)
+            except Exception as exc:
+                logger.exception("Canvas 调试页模拟投递失败")
+                await emit(
+                    {
+                        "event": "error",
+                        "platform": platform_name,
+                        "message": f"模拟投递失败：{exc}",
+                    }
+                )
+                continue
+
+            message_index = capture_event.message_count
+            completed += 1
+            await emit(
+                {
+                    "event": "delivered",
+                    "platform": platform_name,
+                    "elapsed_ms": round(
+                        (asyncio.get_running_loop().time() - started_at) * 1000
+                    ),
+                }
+            )
+
+        await emit(
+            {
+                "event": "done",
+                "completed": completed,
+                "match_count": len(matches),
+                "elapsed_ms": round(
+                    (asyncio.get_running_loop().time() - started_at) * 1000
+                ),
+            }
+        )
+
+    # endregion
 
     @staticmethod
     def _looks_like_live_share(text: str) -> bool:
@@ -1358,9 +2126,63 @@ class ParserXPlugin(Star):
 
         return False
 
+    def _collect_parser_matches(
+        self,
+        text: str,
+    ) -> list[tuple[BaseParser, str, re.Match[str]]]:
+        matches: list[tuple[int, str, re.Match[str]]] = []
+        for keyword, pattern in self.key_pattern_list:
+            if keyword not in text:
+                continue
+            for searched in pattern.finditer(text):
+                if self._should_ignore_live_share(
+                    keyword,
+                    searched.group(0),
+                    text,
+                ):
+                    continue
+                matches.append((searched.start(), keyword, searched))
+
+        matches.sort(key=lambda item: (item[0], -len(item[1])))
+        processed_matches: set[tuple[str, str]] = set()
+        accepted_spans: list[tuple[int, int]] = []
+        accepted: list[tuple[BaseParser, str, re.Match[str]]] = []
+
+        for _, keyword, searched in matches:
+            parser = self.parser_map.get(keyword)
+            if parser is None:
+                continue
+
+            span = (searched.start(), searched.end())
+            if any(
+                span[0] < accepted_end and accepted_start < span[1]
+                for accepted_start, accepted_end in accepted_spans
+            ):
+                continue
+
+            raw_match = searched.group(0).strip()
+            match_url = re.sub(
+                r"^https?://",
+                "",
+                raw_match,
+                flags=re.IGNORECASE,
+            )
+            match_url = match_url.rstrip(").,;!?，。；！？）]")
+            match_key = (parser.platform.name, match_url.casefold())
+            if match_key in processed_matches:
+                continue
+
+            processed_matches.add(match_key)
+            accepted_spans.append(span)
+            accepted.append((parser, keyword, searched))
+
+        return accepted
+
     @filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP)
     @filter.event_message_type(filter.EventMessageType.ALL)
     async def on_message(self, event: AstrMessageEvent):
+        if self._debug_mode_enabled():
+            return
         if not isinstance(event, AiocqhttpMessageEvent):
             return
         umo = event.unified_msg_origin
@@ -1395,20 +2217,8 @@ class ParserXPlugin(Star):
         if chain and isinstance(chain[0], At) and str(chain[0].qq) != self_id:
             return
 
-        matches: list[tuple[int, str, re.Match[str]]] = []
-        for kw, pat in self.key_pattern_list:
-            if kw not in text:
-                continue
-            for m in pat.finditer(text):
-                matches.append((m.start(), kw, m))
-
-        matches = [
-            (start, kw, m)
-            for start, kw, m in matches
-            if not self._should_ignore_live_share(kw, m.group(0), text)
-        ]
-
-        if not matches:
+        collected_matches = self._collect_parser_matches(text)
+        if not collected_matches:
             return
 
         if isinstance(event, AiocqhttpMessageEvent):
@@ -1417,35 +2227,7 @@ class ParserXPlugin(Star):
                     self.arbiter.notify(event.bot, event.message_obj.message_id)
                 )
 
-        matches.sort(key=lambda x: (x[0], -len(x[1])))
-        processed_matches: set[tuple[str, str]] = set()
-        accepted_spans: list[tuple[int, int]] = []
-
-        for _, keyword, searched in matches:
-            parser = self.parser_map.get(keyword)
-            if parser is None:
-                continue
-
-            # 同一段文字被多个关键词规则命中时只处理一次。
-            # 例如 https://v.kuaishou.com/xxx 会同时匹配 "v.kuaishou" 与 "kuaishou"
-            # （后者是前者的子串），此前会被解析两次：第一次出视频、第二次失败
-            # 又补发一条 ⚠️ 提示。按字符区间去重可避免重复解析/重复发送。
-            span = (searched.start(), searched.end())
-            if any(
-                span[0] < a_end and a_start < span[1]
-                for a_start, a_end in accepted_spans
-            ):
-                continue
-
-            raw_match = searched.group(0).strip()
-            match_url = re.sub(r"^https?://", "", raw_match, flags=re.IGNORECASE)
-            match_url = match_url.rstrip(").,;!?，。；！？）]")
-            match_key = (parser.platform.name, match_url.casefold())
-            if match_key in processed_matches:
-                continue
-            processed_matches.add(match_key)
-            accepted_spans.append(span)
-
+        for parser, keyword, searched in collected_matches:
             try:
                 parser.source_text = text
                 parse_res = await parser.parse(keyword, searched)

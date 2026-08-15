@@ -12,6 +12,7 @@ from .card_theme import (
     XIAOHEIHE_CARD_THEME,
     PlatformCardTheme,
 )
+from .comment_style import COMMENT_HEADER_ICON, standalone_comment_css
 from .constants import COMMENT_FOOTER_BRAND
 from .html_renderer import HtmlRenderService
 
@@ -254,21 +255,27 @@ class SocialCommentCanvas:
         )
         metadata = [entry.time_text, entry.location, *entry.meta_items]
         metadata_text = " · ".join(item for item in metadata if item)
+        metadata_html = (
+            f'<span class="comment-meta">{self._text(metadata_text)}</span>'
+            if metadata_text
+            else ""
+        )
         creator_liked = (
             '<span class="creator-liked">作者赞过</span>' if entry.creator_liked else ""
         )
         actions = (
             '<div class="actions">'
-            f'<span class="action-meta">{self._text(metadata_text)}</span>'
-            f'<span class="action">{_LIKE_ICON}{self._text(entry.like_text)}</span>'
+            f"{creator_liked}"
             f'<span class="action">{_REPLY_ICON}{self._text(entry.reply_text)}</span>'
-            f"{creator_liked}</div>"
+            f'<span class="action">{_LIKE_ICON}{self._text(entry.like_text)}</span>'
+            "</div>"
         )
+        head = f'<div class="comment-head">{author}{metadata_html}</div>'
 
         if nested:
             return (
                 '<div class="reply-card">'
-                f'{avatar}<div class="reply-body">{author}'
+                f'{avatar}<div class="reply-body">{head}'
                 f'<div class="reply-content">{rich}</div>{sticker}{images}'
                 f"{actions}</div></div>"
             )
@@ -284,7 +291,7 @@ class SocialCommentCanvas:
         )
         return (
             '<article class="comment-card">'
-            f'{avatar}<section class="comment-body">{author}'
+            f'{avatar}<section class="comment-body">{head}'
             f'<div class="comment-content">{pinned}{rich}</div>'
             f"{sticker}{images}{actions}{first_reply}</section></article>"
         )
@@ -298,11 +305,11 @@ class SocialCommentCanvas:
         custom = custom.strip(" ·")
         if "仅展示部分热门评论" in custom:
             return "仅展示部分热门评论"
-        return f"热门评论 {len(document.entries)} / {document.total_text}"
+        return ""
 
     def render_entries_fragment(self, document: CommentDocument) -> str:
         """Render comment rows without the standalone comment-card shell."""
-        fallback = document.theme.brand_text
+        fallback = "评"
         return "".join(
             self._render_entry(entry, nested=False, fallback=fallback)
             for entry in document.entries
@@ -313,45 +320,19 @@ class SocialCommentCanvas:
         return cls._footer_label(document)
 
     def build_html(self, document: CommentDocument) -> str:
-        theme = document.theme
         entries = self.render_entries_fragment(document)
-        cover_class = " cover-portrait" if theme.portrait_cover else ""
-        cover = (
-            f'<img class="cover{cover_class}" src="{self._url(document.cover)}" '
-            'alt="" onerror="this.style.display=\'none\'">'
-            if document.cover
-            else ""
-        )
         footer_label = self._text(self.footer_label(document))
         footer_brand = self._text(COMMENT_FOOTER_BRAND)
+        styles = standalone_comment_css()
         return f"""<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <style id="parser-x-comment-styles">
-*{{box-sizing:border-box}}html,body{{margin:0;width:760px;background:{theme.background};color:{theme.text}}}html{{overflow-x:hidden;scrollbar-width:none}}html::-webkit-scrollbar{{width:0;height:0}}
-body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}}
-.page{{width:760px;padding:18px 22px 20px;background:{theme.background}}}
-.shell{{overflow:hidden;border:1px solid {theme.border};border-radius:14px;background:{theme.surface}}}
-.header{{display:flex;min-height:82px;align-items:center;gap:12px;padding:15px 16px 11px}}
-.brand{{display:grid;width:34px;height:34px;place-items:center;flex:0 0 34px;border-radius:50%;background:{theme.accent};color:#fff;font-size:16px;font-weight:800}}
-.header-copy{{min-width:0;flex:1}}.header h1{{margin:0;overflow:hidden;font-size:21px;font-weight:700;line-height:1.42;text-overflow:ellipsis;white-space:nowrap}}
-.header p{{margin:3px 0 0;color:{theme.muted};font-size:13px;line-height:1.45}}.cover{{width:88px;height:54px;border-radius:9px;object-fit:cover;background:{theme.nested_surface}}}.cover-portrait{{width:52px;height:68px;border-radius:10px}}
-.comment-list{{padding:0 16px}}.comment-card{{display:grid;grid-template-columns:44px 1fr;gap:12px;padding:15px 0;border-top:1px solid {theme.border}}}
-.avatar-shell{{position:relative;display:grid;place-items:center;overflow:hidden;border-radius:50%;background:{theme.accent_soft};color:{theme.accent};font-weight:800}}.avatar-shell img{{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}}
-.avatar{{width:44px;height:44px;font-size:17px}}.reply-avatar{{width:28px;height:28px;font-size:12px}}.comment-body,.reply-body{{min-width:0}}
-.author-row{{display:flex;min-height:21px;align-items:center;gap:6px;flex-wrap:wrap}}.nickname,.reply-name{{max-width:330px;overflow:hidden;color:{theme.text};font-size:16px;font-weight:650;text-overflow:ellipsis;white-space:nowrap}}.reply-name{{max-width:270px;font-size:14px}}
-.author-badge{{display:inline-flex;align-items:center;padding:1px 6px;border:1px solid transparent;border-radius:999px;background:{theme.accent_soft};color:{theme.accent};font-size:11px;font-weight:700;line-height:16px}}
-.comment-content,.reply-content{{margin-top:6px;color:{theme.text};font-size:18px;line-height:1.62;word-break:break-word}}.reply-content{{font-size:16px}}.highlight{{color:{theme.accent}}}.emoji-text{{display:inline-block;margin:0 2px;padding:0 4px;border-radius:5px;background:{theme.accent_soft};color:{theme.muted}}}
-.emote{{display:inline-block;width:24px;height:24px;margin:0 2px;object-fit:contain;vertical-align:-6px}}.pinned{{display:inline-block;margin-right:7px;padding:1px 7px;border-radius:5px;background:{theme.accent_soft};color:{theme.accent};font-size:12px;line-height:21px;vertical-align:2px}}
-.comment-image-wrap,.sticker-image-wrap{{display:block;width:fit-content;max-width:100%;margin:9px 0 0;overflow:hidden;border:1px solid {theme.border};border-radius:8px;background:{theme.nested_surface}}}.comment-image{{display:block;width:auto;height:auto;max-width:540px;object-fit:contain}}.sticker-image{{display:block;width:auto;height:auto;max-width:180px;max-height:180px;object-fit:contain}}
-.actions{{display:flex;align-items:center;gap:15px;margin-top:7px;color:{theme.muted};font-size:13px;line-height:20px;flex-wrap:wrap}}.action{{display:inline-flex;align-items:center;gap:4px}}.action-icon{{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}}.action-meta{{margin-right:auto}}.creator-liked{{padding:1px 6px;border-radius:5px;background:{theme.accent_soft};color:{theme.accent}}}
-.reply-card{{display:grid;grid-template-columns:28px 1fr;gap:9px;max-width:600px;margin-top:11px;padding:4px 0 4px 12px;border-left:2px solid {theme.border}}}.reply-card .actions{{gap:12px}}
-.footer{{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 16px 15px;border-top:1px solid {theme.border};color:{theme.muted};font-size:12px;line-height:1.45;flex-wrap:wrap}}.footer-brand{{color:{theme.accent};overflow-wrap:anywhere;word-break:break-all}}
+{styles}
 </style></head><body><div id="parser-x-comment-root" class="page"><div class="shell">
-<header class="header"><div class="brand">{self._text(theme.brand_text)}</div><div class="header-copy">
-<h1>{self._text(document.work_title or theme.platform_name + "作品")}</h1>
-<p>{self._text(theme.platform_name)} · {self._text(document.total_text)}</p>
-</div>{cover}</header><main class="comment-list">{entries}</main><footer class="footer"><span>{footer_label}</span><span class="footer-brand">{footer_brand}</span></footer>
+<header class="header"><div class="brand">{COMMENT_HEADER_ICON}</div><div class="header-copy">
+<h1>热门评论</h1><p>COMMENTS</p></div><span class="header-count">共 {self._text(document.total_text)}</span></header>
+<main class="comment-list">{entries}</main><footer class="footer"><span class="footer-label">{footer_label}</span><span class="footer-brand">{footer_brand}</span></footer>
 </div></div></body></html>"""
 
     async def render(self, out_path: Path, document: CommentDocument) -> None:

@@ -5,7 +5,11 @@ from html import escape
 from pathlib import Path
 from typing import Literal
 
-from ...card_theme import BILIBILI_CARD_THEME
+from ...comment_style import (
+    COMMENT_HEADER_ICON,
+    UNIFIED_COMMENT_STYLE,
+    standalone_comment_css,
+)
 from ...constants import COMMENT_FOOTER_BRAND
 from ...html_renderer import HtmlRenderService
 
@@ -111,7 +115,7 @@ class BiliCommentCanvas:
 
     def _render_avatar(self, author: BiliAuthorBadge, *, small: bool) -> str:
         class_name = "reply-avatar" if small else "avatar"
-        fallback = self._text((author.nickname or "B")[:1])
+        fallback = self._text((author.nickname or "评")[:1])
         image = ""
         if author.avatar:
             image = (
@@ -225,26 +229,28 @@ class BiliCommentCanvas:
         images = self._render_images(entry.images)
         metadata = [entry.time_text, entry.location, *entry.meta_items]
         metadata_text = " · ".join(item for item in metadata if item)
-        action_meta = (
-            f'<span class="action-meta">{self._text(metadata_text)}</span>'
+        metadata_html = (
+            f'<span class="comment-meta">{self._text(metadata_text)}</span>'
             if metadata_text
             else ""
         )
         up_liked = '<div class="up-liked">UP主觉得很赞</div>' if entry.up_liked else ""
         actions = (
             '<div class="actions">'
-            f"{action_meta}"
+            f'<span class="action">{_REPLY_ICON}{self._text(entry.reply_text)}</span>'
             f'<span class="action">{_LIKE_ICON}'
             f"{self._text(entry.like_text)}</span>"
-            f'<span class="action">{_REPLY_ICON}{self._text(entry.reply_text)}</span>'
             "</div>"
         )
         decor = "" if nested else self._render_decor(entry.decor)
+        aside = "".join(item for item in (decor, metadata_html) if item)
+        aside_html = f'<div class="comment-aside">{aside}</div>' if aside else ""
+        head = f'<div class="comment-head">{author}{aside_html}</div>'
 
         if nested:
             return (
                 '<div class="reply-card">'
-                f'{avatar}<div class="reply-body">{author}'
+                f'{avatar}<div class="reply-body">{head}'
                 f'<div class="reply-content">{rich}</div>{images}'
                 f"{actions}{up_liked}</div></div>"
             )
@@ -257,7 +263,7 @@ class BiliCommentCanvas:
         return (
             '<article class="comment-card">'
             f'{avatar}<section class="comment-body">'
-            f'<div class="comment-head">{author}{decor}</div>'
+            f"{head}"
             f'<div class="comment-content">{pinned}{rich}</div>'
             f"{images}{actions}{up_liked}{first_reply}</section></article>"
         )
@@ -271,7 +277,7 @@ class BiliCommentCanvas:
         custom = custom.strip(" ·")
         if "仅展示部分热门评论" in custom:
             return "仅展示部分热门评论"
-        return f"热门评论 {len(document.entries)} / {document.total_text}"
+        return ""
 
     def render_entries_fragment(self, document: BiliCommentDocument) -> str:
         """Render Bilibili comment rows without the standalone shell."""
@@ -284,54 +290,32 @@ class BiliCommentCanvas:
         return cls._footer_label(document)
 
     def build_html(self, document: BiliCommentDocument) -> str:
-        theme = BILIBILI_CARD_THEME
-        cover = (
-            f'<img class="cover" src="{self._url(document.cover)}" alt="" '
-            "onerror=\"this.style.display='none'\">"
-            if document.cover
-            else ""
-        )
         entries = self.render_entries_fragment(document)
         footer_label = self._text(self.footer_label(document))
         footer_brand = self._text(COMMENT_FOOTER_BRAND)
+        theme = UNIFIED_COMMENT_STYLE
+        extra_css = f"""
+.level{{height:17px;padding:0 4px;border-radius:3px;background:#c9ccd0;color:#fff;font-size:11px;font-weight:700;line-height:17px}}
+.level-2{{background:#8cd49c}}.level-3{{background:#7cccec}}.level-4{{background:#fbbc8c}}.level-5{{background:#ec642c}}.level-6{{background:#f34c4c}}.senior-flash{{font-size:10px}}
+.fan-medal{{display:inline-flex;height:18px;max-width:120px;overflow:hidden;border:1px solid var(--medal-border,#ff6699);border-radius:3px;font-size:11px;line-height:16px}}
+.fan-name{{max-width:88px;overflow:hidden;padding:0 4px;background:var(--medal-bg,#ff6699);color:var(--medal-fg,#fff);text-overflow:ellipsis;white-space:nowrap}}
+.fan-level{{min-width:18px;padding:0 3px;background:var(--medal-level-bg,#fff);color:var(--medal-level-fg,#ff6699);text-align:center}}
+.decor{{display:flex;max-width:115px;align-items:center;justify-content:flex-end;gap:3px;color:{theme.accent};font-size:10px;font-weight:700}}.decor-image{{width:34px;height:28px;overflow:hidden}}.decor-image img{{width:auto;height:38px;transform:translate(-55%,-5px)}}
+"""
+        styles = standalone_comment_css(extra_css=extra_css)
         return f"""<!doctype html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <style id="parser-x-comment-styles">
-*{{box-sizing:border-box}}html,body{{margin:0;width:760px;background:{theme.background};color:{theme.text}}}html{{overflow-x:hidden;scrollbar-width:none}}html::-webkit-scrollbar{{width:0;height:0}}
-body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}}
-.page{{width:760px;padding:18px 22px 20px;background:{theme.background}}}.shell{{overflow:hidden;border:1px solid {theme.border};border-radius:14px;background:{theme.surface}}}
-.header{{display:flex;min-height:82px;align-items:center;gap:12px;padding:15px 16px 11px}}
-.brand{{display:grid;width:34px;height:34px;place-items:center;flex:0 0 34px;border-radius:50%;background:{theme.accent};color:#fff;font-size:16px;font-weight:800}}
-.header-copy{{min-width:0;flex:1}}.header-copy h1{{margin:0;overflow:hidden;font-size:21px;font-weight:700;line-height:1.42;text-overflow:ellipsis;white-space:nowrap}}
-.header-copy p{{margin:3px 0 0;color:{theme.muted};font-size:13px;line-height:1.45}}.cover{{width:88px;height:54px;border-radius:9px;object-fit:cover;background:{theme.subtle}}}
-.comment-list{{padding:0 16px}}.comment-card{{position:relative;display:grid;grid-template-columns:44px 1fr;gap:12px;padding:15px 0;border-top:1px solid {theme.border}}}
-.avatar,.reply-avatar{{position:relative;display:grid;place-items:center;overflow:hidden;border-radius:50%;background:{theme.accent_soft};color:{theme.accent};font-weight:800}}.avatar-shell img{{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}}
-.avatar{{width:44px;height:44px;font-size:17px}}.reply-avatar{{width:28px;height:28px;font-size:12px}}.comment-body,.reply-body{{min-width:0}}
-.comment-head{{display:flex;min-height:22px;justify-content:space-between;gap:12px}}.author-row{{display:flex;min-width:0;align-items:center;gap:5px;flex-wrap:wrap}}
-.nickname,.reply-name{{max-width:300px;overflow:hidden;color:{theme.text};font-size:16px;font-weight:650;text-overflow:ellipsis;white-space:nowrap}}.reply-name{{max-width:240px;font-size:14px}}
-.level{{height:17px;padding:0 4px;border-radius:3px;background:#c9ccd0;color:#fff;font-size:11px;font-weight:700;line-height:17px}}
-.level-2{{background:#8cd49c}}.level-3{{background:#7cccec}}.level-4{{background:#fbbc8c}}.level-5{{background:#ec642c}}.level-6{{background:#f34c4c}}.senior-flash{{font-size:10px}}
-.fan-medal{{display:inline-flex;height:18px;max-width:120px;overflow:hidden;border:1px solid var(--medal-border,#ff6699);border-radius:3px;font-size:11px;line-height:16px}}
-.fan-name{{max-width:88px;overflow:hidden;padding:0 4px;background:var(--medal-bg,#ff6699);color:var(--medal-fg,#fff);text-overflow:ellipsis;white-space:nowrap}}
-.fan-level{{min-width:18px;padding:0 3px;background:var(--medal-level-bg,#fff);color:var(--medal-level-fg,#ff6699);text-align:center}}.up-badge{{height:18px;padding:0 5px;border-radius:999px;background:{theme.accent_soft};color:{theme.accent};font-size:11px;line-height:18px}}
-.decor{{display:flex;max-width:115px;align-items:center;gap:3px;color:{theme.accent};font-size:10px;font-weight:700}}.decor-image{{width:34px;height:28px;overflow:hidden}}.decor-image img{{width:auto;height:38px;transform:translate(-55%,-5px)}}
-.comment-content,.reply-content{{margin-top:6px;color:{theme.text};font-size:18px;line-height:1.62;word-break:break-word}}.reply-content{{font-size:16px}}.highlight{{color:#00aeec}}
-.emote{{display:inline-block;width:23px;height:23px;margin:0 2px;object-fit:contain;vertical-align:-5px}}.pinned{{display:inline-block;margin-right:7px;padding:0 6px;border-radius:5px;background:{theme.accent_soft};color:{theme.accent};font-size:12px;line-height:21px;vertical-align:2px}}
-.comment-image-wrap{{display:block;width:fit-content;max-width:100%;margin:9px 0 0;overflow:hidden;border:1px solid {theme.border};border-radius:8px;background:{theme.subtle}}}.comment-image{{display:block;width:auto;height:auto;max-width:540px;object-fit:contain}}
-.actions{{display:flex;align-items:center;gap:15px;margin-top:7px;color:{theme.muted};font-size:13px;line-height:20px;flex-wrap:wrap}}.action-meta{{margin-right:auto}}.action{{display:inline-flex;align-items:center;gap:4px}}.action-icon{{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}}
-.up-liked{{display:inline-block;margin-top:7px;padding:1px 7px;border-radius:5px;background:{theme.accent_soft};color:{theme.accent};font-size:12px}}
-.reply-card{{display:grid;grid-template-columns:28px 1fr;gap:9px;max-width:590px;margin-top:11px;padding:4px 0 4px 12px;border-left:2px solid {theme.border}}}
-.reply-card .actions{{gap:12px}}.footer{{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 16px 15px;border-top:1px solid {theme.border};color:{theme.muted};font-size:12px;line-height:1.45;flex-wrap:wrap}}.footer-brand{{color:{theme.accent};overflow-wrap:anywhere;word-break:break-all}}
+{styles}
 </style>
 </head>
 <body><div id="parser-x-comment-root" class="page"><div class="shell">
-<header class="header"><div class="brand">B</div><div class="header-copy">
-<h1>{self._text(document.work_title or "B站视频")}</h1>
-<p>B站 · {self._text(document.total_text)}</p>
-</div>{cover}</header><main class="comment-list">{entries}</main><footer class="footer"><span>{footer_label}</span><span class="footer-brand">{footer_brand}</span></footer>
+<header class="header"><div class="brand">{COMMENT_HEADER_ICON}</div><div class="header-copy">
+<h1>热门评论</h1><p>COMMENTS</p></div><span class="header-count">共 {self._text(document.total_text)}</span></header>
+<main class="comment-list">{entries}</main><footer class="footer"><span class="footer-label">{footer_label}</span><span class="footer-brand">{footer_brand}</span></footer>
 </div></div></body></html>"""
 
     async def render(self, out_path: Path, document: BiliCommentDocument) -> None:

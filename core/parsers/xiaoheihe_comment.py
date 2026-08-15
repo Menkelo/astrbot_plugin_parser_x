@@ -24,7 +24,7 @@ from .social_comment_feed import SocialCommentFeedBase
 
 
 class XiaoheiheCommentFeed(SocialCommentFeedBase):
-    CACHE_VERSION = "xiaoheihe_comment_v3_platform_emotes"
+    CACHE_VERSION = "xiaoheihe_comment_v4_unified_clean"
     PLATFORM_SLUG = "xiaoheihe"
     AVATAR_REFERER = "https://www.xiaoheihe.cn/"
 

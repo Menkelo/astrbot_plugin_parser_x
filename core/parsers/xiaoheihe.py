@@ -718,13 +718,12 @@ class XiaoheiheParser(BaseParser):
                     )
                 )
 
-            overview_parts: list[str | ImageContent] = []
+            native_parts: list[str | ImageContent] = []
             if cover_content is not None:
-                overview_parts.append(cover_content)
-            overview_parts.append(overview)
-            batches = [DeliveryBatch(overview_parts)]
-            if body_parts:
-                batches.append(DeliveryBatch(body_parts, mode="forward"))
+                native_parts.append(cover_content)
+            native_parts.append(overview)
+            native_parts.extend(body_parts)
+            batches = [DeliveryBatch(native_parts, mode="forward")]
             batches.extend(DeliveryBatch([video]) for video in video_contents)
 
             contents = [
@@ -786,6 +785,7 @@ class XiaoheiheParser(BaseParser):
                     "text_card_media": card_media_url,
                     "text_card_flow": card_flow,
                     "delivery_text_card_consume_non_video": True,
+                    "native_delivery": True,
                     "card_kind": (
                         "帖子 · 视频"
                         if video_contents
@@ -964,18 +964,15 @@ class XiaoheiheParser(BaseParser):
         if isinstance(price, dict) and price.get("current") is not None:
             overview_lines.append(f"💰 当前价格：¥{price['current']}")
 
-        overview_parts: list[str | ImageContent] = []
+        native_parts: list[str | ImageContent] = []
         if cover_content is not None:
-            overview_parts.append(cover_content)
-        overview_parts.append("\n".join(overview_lines))
-        batches = [DeliveryBatch(overview_parts)]
-        detail_parts: list[str | ImageContent] = []
+            native_parts.append(cover_content)
+        native_parts.append("\n".join(overview_lines))
         if text:
-            detail_parts.append(text)
+            native_parts.append(text)
         if screenshot_contents:
-            detail_parts.extend(["🖼️ 游戏截图", *screenshot_contents])
-        if detail_parts:
-            batches.append(DeliveryBatch(detail_parts, mode="forward"))
+            native_parts.extend(["🖼️ 游戏截图", *screenshot_contents])
+        batches = [DeliveryBatch(native_parts, mode="forward")]
         batches.extend(DeliveryBatch([video]) for video in video_contents)
 
         contents = [
@@ -990,6 +987,7 @@ class XiaoheiheParser(BaseParser):
             delivery=DeliveryPlan(batches),
             url=url,
             extra={
+                "native_delivery": True,
                 "render_text_card": True,
                 "text_card_text": text[:1200] if text else "",
                 "text_card_media": cover_url or "",
@@ -1105,10 +1103,11 @@ class XiaoheiheParser(BaseParser):
             title=page_title,
             text=page_description,
             contents=contents,
-            delivery=DeliveryPlan([DeliveryBatch(delivery_parts)]),
+            delivery=DeliveryPlan([DeliveryBatch(delivery_parts, mode="forward")]),
             url=url,
             extra={
                 "info": fallback_info,
+                "native_delivery": True,
                 "render_text_card": True,
                 "text_card_text": "\n\n".join(
                     item for item in (page_description, fallback_info) if item

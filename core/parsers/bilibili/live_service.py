@@ -375,4 +375,5 @@ class BiliLiveService:
             contents=image_contents,
             delivery=DeliveryPlan([DeliveryBatch([*image_contents, summary])]),
             url=f"https://live.bilibili.com/{real_room_id}",
+            extra={"native_delivery": True},
         )

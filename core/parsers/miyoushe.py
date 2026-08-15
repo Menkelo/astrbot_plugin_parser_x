@@ -265,22 +265,14 @@ class MiyousheParser(BaseParser):
             )
 
         title = str(post.get("subject") or post.get("title") or "米游社文章")
-        overview_lines = ["识别：米游社", f"📝标题：{title}"]
-        if text:
-            overview_lines.append(f"📄简介：{text}")
-        overview_parts: list[str | ImageContent] = []
+        native_parts: list[str | ImageContent] = []
         if cover_content is not None:
-            overview_parts.append(cover_content)
-        overview_parts.append("\n".join(overview_lines))
-        batches = [DeliveryBatch(overview_parts)]
-        if image_contents:
-            batches.append(
-                DeliveryBatch(
-                    list(image_contents),
-                    mode="direct" if len(image_contents) <= 9 else "forward",
-                    reply_original=len(image_contents) == 1,
-                )
-            )
+            native_parts.append(cover_content)
+        native_text = "\n\n".join(item for item in (title, text) if item).strip()
+        if native_text:
+            native_parts.append(native_text)
+        native_parts.extend(image_contents)
+        batches = [DeliveryBatch(native_parts, mode="forward")] if native_parts else []
         batches.extend(DeliveryBatch([video]) for video in video_contents)
 
         contents = [
@@ -315,6 +307,7 @@ class MiyousheParser(BaseParser):
                 "text_card_media": str(cover_url or ""),
                 "text_card_flow": card_flow,
                 "delivery_text_card_consume_non_video": True,
+                "native_delivery": True,
                 "card_emotes": card_emotes,
                 "card_kind": (
                     "文章 · 视频"

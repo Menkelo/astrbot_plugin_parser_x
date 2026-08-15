@@ -1,0 +1,8 @@
+{
+  "pages": {
+    "debug": {
+      "title": "Parser testbench",
+      "description": "Run the real parser pipeline and inspect QQ message delivery inside an AstrBot plugin Page."
+    }
+  }
+}

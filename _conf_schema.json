@@ -20,7 +20,7 @@
   },
   "comments": {
     "description": "热门评论",
-    "hint": "热门评论使用独立评论区图片，并在主内容后放入合并转发；失败或超时不影响正文卡和媒体。",
+    "hint": "热门评论仅用于视频作品，使用独立评论区图片并放入合并转发；失败或超时不影响主内容和媒体。",
     "type": "object",
     "items": {
       "bilibili": {"description": "B站评论区", "type": "bool", "default": true},
@@ -42,7 +42,7 @@
       },
       "timeout": {
         "description": "评论任务超时（秒）",
-        "hint": "包含评论抓取、头像处理、独立评论图渲染和缓存写入；失败或超时不影响正文卡和媒体发送。",
+        "hint": "包含评论抓取、头像处理、独立评论图渲染和缓存写入；失败或超时不影响主内容和媒体发送。",
         "type": "int",
         "slider": {"min": 15, "max": 180, "step": 5},
         "default": 90
@@ -50,8 +50,8 @@
     }
   },
   "rendering": {
-    "description": "卡片渲染",
-    "hint": "统一正文卡与独立评论区图片复用 AstrBot 官方 html_render（Canvas/T2I），插件不会启动本地 Chromium。",
+    "description": "评论区渲染",
+    "hint": "独立评论区图片复用 AstrBot 官方 html_render（Canvas/T2I），插件不会启动本地 Chromium。",
     "obvious_hint": true,
     "type": "object",
     "items": {
@@ -128,6 +128,19 @@
         "type": "file",
         "file_types": ["txt"],
         "default": []
+      }
+    }
+  },
+  "debug": {
+    "description": "Canvas 调试台",
+    "hint": "用于在 AstrBot 插件 Page 中直接测试真实解析与消息投递结构。",
+    "type": "object",
+    "items": {
+      "enabled": {
+        "description": "启用独占调试模式",
+        "hint": "默认关闭。开启后仅接受 Parser X 的 Canvas 插件调试页请求，QQ 与其他消息适配器中的分享链接将不再触发解析。",
+        "type": "bool",
+        "default": false
       }
     }
   },

@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Parser X 调试台</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <div class="page-shell">
+      <header class="topbar">
+        <div class="brand-block">
+          <span class="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 24 24">
+              <path d="M5 4h14a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H9l-5 4v-4H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Z" />
+              <path d="M8 9h8M8 13h5" />
+            </svg>
+          </span>
+          <div>
+            <h1>Parser X 调试台</h1>
+            <p>真实解析流程 · Canvas 渲染 · QQ 消息结构模拟</p>
+          </div>
+        </div>
+        <div id="mode-status" class="mode-status is-loading" role="status">
+          <span class="status-dot" aria-hidden="true"></span>
+          <span id="mode-status-text">正在读取插件状态</span>
+        </div>
+      </header>
+
+      <main class="workspace">
+        <aside class="composer-panel">
+          <section id="mode-notice" class="mode-notice" aria-live="polite">
+            <strong>正在连接调试接口</strong>
+            <span>请稍候。</span>
+          </section>
+
+          <form id="parse-form" class="parse-form">
+            <label for="share-text">分享文本或链接</label>
+            <textarea
+              id="share-text"
+              name="share-text"
+              rows="9"
+              maxlength="20000"
+              placeholder="粘贴你原本会发到 QQ 的完整分享文本……"
+              spellcheck="false"
+            ></textarea>
+            <div class="form-meta">
+              <span>支持一次粘贴多个链接</span>
+              <span id="char-count">0 / 20000</span>
+            </div>
+            <div class="action-row">
+              <button id="run-button" class="primary-button" type="submit" disabled>
+                开始解析
+              </button>
+              <button id="cancel-button" class="secondary-button" type="button" disabled>
+                取消
+              </button>
+              <button id="clear-button" class="ghost-button" type="button">
+                清空结果
+              </button>
+            </div>
+          </form>
+
+          <section class="platform-section" aria-labelledby="platform-heading">
+            <div class="section-heading-row">
+              <h2 id="platform-heading">已加载平台</h2>
+              <button id="refresh-status" class="text-button" type="button">刷新状态</button>
+            </div>
+            <div id="platform-list" class="platform-list">
+              <span class="platform-chip">读取中</span>
+            </div>
+          </section>
+
+          <section class="behavior-note">
+            <h2>独占调试规则</h2>
+            <p>调试开关开启期间，QQ 和其他适配器中的分享链接不会触发 Parser X，仅本页面可以发起解析。</p>
+          </section>
+        </aside>
+
+        <section class="result-panel" aria-labelledby="result-heading">
+          <div class="result-toolbar">
+            <div>
+              <h2 id="result-heading">消息时间线</h2>
+              <p id="run-subtitle">等待一次解析任务</p>
+            </div>
+            <div id="run-metrics" class="run-metrics" hidden>
+              <span id="metric-message">0 条消息</span>
+              <span id="metric-time">0 ms</span>
+            </div>
+          </div>
+
+          <div id="empty-state" class="empty-state">
+            <div class="empty-icon" aria-hidden="true">PX</div>
+            <h3>不用再去 QQ 试链接了</h3>
+            <p>解析结果会按实际完成顺序出现在这里，包括引用消息、图片、视频、文件和合并转发节点。</p>
+          </div>
+
+          <div id="event-log" class="event-log" aria-live="polite"></div>
+          <div id="message-timeline" class="message-timeline"></div>
+          <div id="parse-details" class="parse-details"></div>
+        </section>
+      </main>
+    </div>
+
+    <div id="toast" class="toast" role="alert" aria-live="assertive" hidden></div>
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>
