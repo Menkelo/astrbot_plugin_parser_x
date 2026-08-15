@@ -443,6 +443,12 @@ class WeiboParser(BaseParser):
             cover=(static_pic_urls[0] if static_pic_urls else author_avatar),
             owner_id=user.get("id"),
         )
+        extra.update(
+            {
+                "render_text_card": True,
+                "text_card_avatar": author_avatar,
+            }
+        )
 
         author = self.create_author(
             author_name, author_avatar, ext_headers=self.headers

@@ -610,7 +610,8 @@ def test_xiaoheihe_api_preserves_rich_body_order_and_native_delivery(tmp_path):
     assert result.text == "帖子简介\n\n正文内容"
     assert len(result.contents) == 2
     assert result.author is not None and result.author.name == "作者"
-    assert "render_text_card" not in result.extra
+    assert result.extra["render_text_card"] is True
+    assert result.extra["text_card_text"] == "帖子简介"
     assert result.delivery is not None
     assert len(result.delivery.batches) == 2
     overview, body = result.delivery.batches
@@ -679,7 +680,8 @@ def test_xiaoheihe_game_uses_signed_api_without_cookie(tmp_path):
     assert "Valve" in (result.text or "")
     assert len(result.contents) == 1
     assert result.delivery is not None
-    assert "render_text_card" not in result.extra
+    assert result.extra["render_text_card"] is True
+    assert "游戏简介" in result.extra["text_card_text"]
 
 
 def test_miyoushe_uses_native_delivery_and_enables_comments(tmp_path):
@@ -772,7 +774,8 @@ def test_miyoushe_uses_native_delivery_and_enables_comments(tmp_path):
     assert isinstance(images.parts[0], ImageContent)
     assert isinstance(video.parts[0], VideoContent)
     assert callable(result.extra["comment_task_factory"])
-    assert "render_text_card" not in result.extra
+    assert result.extra["render_text_card"] is True
+    assert result.extra["text_card_avatar"].endswith("avatar.jpg")
 
 
 def test_bilibili_comment_renderer_prefers_astrbot_canvas(tmp_path):
@@ -954,12 +957,46 @@ def test_text_card_uses_html_render_service(tmp_path):
 
     asyncio.run(run())
     with Image.open(text_output) as image:
-        assert image.size == (760, 177)
+        assert image.size == (760, 171)
     assert len(calls) == 1
     assert all(return_url is False for _, _, return_url, _ in calls)
     assert all(options["scale"] == "css" for _, _, _, options in calls)
     assert all(options["timeout"] == 45_000 for _, _, _, options in calls)
     assert all(COMMENT_FOOTER_BRAND in template for template, *_ in calls)
+    assert 'data-card-style="minimal-feed"' in calls[0][0]
+    assert "#e7a121" in calls[0][0]
+    assert '<div class="platform-mark">微</div>' in calls[0][0]
+
+
+@pytest.mark.parametrize(
+    ("key", "name", "glyph", "accent"),
+    [
+        ("bilibili", "B站动态", "B", "#df4d82"),
+        ("miyoushe", "米游社", "米", "#3e8dbe"),
+        ("xiaoheihe", "小黑盒", "盒", "#ef6b2e"),
+        ("xiaohongshu", "小红书", "薯", "#df3343"),
+        ("weibo", "微博", "微", "#e7a121"),
+    ],
+)
+def test_unified_content_card_keeps_only_platform_brand_identity(
+    key,
+    name,
+    glyph,
+    accent,
+):
+    html = TextCardRenderer(HtmlRenderService()).build_html(
+        platform_key=key,
+        platform_name=name,
+        author_name="作者",
+        title="标题",
+        text="正文",
+    )
+
+    assert 'data-card-style="minimal-feed"' in html
+    assert f'<div class="platform-mark">{glyph}</div>' in html
+    assert accent in html
+    assert "border-radius:14px" in html
+    assert "box-shadow" not in html
 
 
 def test_bilibili_live_uses_native_images_and_text_without_render_card(tmp_path):
@@ -1141,9 +1178,10 @@ def test_comment_reply_action_uses_svg_icon_instead_of_dotted_circle():
     )
 
     for html in (bili_html, social_html):
-        assert '<svg class="reply-icon"' in html
+        assert '<svg class="reply-icon action-icon"' in html
         assert "◌" not in html
-        assert ".reply-icon{width:15px;height:15px;fill:currentColor}" in html
+        assert "fill:none;stroke:currentColor" in html
+        assert '<svg class="like-icon action-icon"' in html
 
 
 def test_image_download_preserves_detected_animated_format(tmp_path):
@@ -2211,11 +2249,11 @@ def test_comment_feed_footers_use_repository_brand(tmp_path):
 
 
 def test_comment_layout_cache_versions_invalidate_pre_fix_images():
-    assert BiliCommentFeed.CACHE_VERSION == "bili_comment_v9_reply_icon"
-    assert DouyinCommentFeed.CACHE_VERSION == "douyin_comment_v8_reply_icon"
-    assert WeiboCommentFeed.CACHE_VERSION == "weibo_comment_v8_avatar_reply_icon"
-    assert XiaoheiheCommentFeed.CACHE_VERSION == "xiaoheihe_comment_v1_official_render"
-    assert MiyousheCommentFeed.CACHE_VERSION == "miyoushe_comment_v1_official_render"
+    assert BiliCommentFeed.CACHE_VERSION == "bili_comment_v10_unified_minimal"
+    assert DouyinCommentFeed.CACHE_VERSION == "douyin_comment_v9_unified_minimal"
+    assert WeiboCommentFeed.CACHE_VERSION == "weibo_comment_v9_unified_minimal"
+    assert XiaoheiheCommentFeed.CACHE_VERSION == "xiaoheihe_comment_v2_unified_minimal"
+    assert MiyousheCommentFeed.CACHE_VERSION == "miyoushe_comment_v2_unified_minimal"
 
 
 def test_manifest_has_a_reviewable_upstream_baseline():
@@ -2384,6 +2422,148 @@ def test_delivery_plan_sends_weibo_body_before_single_image_reply(tmp_path):
     assert isinstance(event.sent[1][0], Reply)
     assert event.sent[1][0].id == 9753
     assert isinstance(event.sent[1][1], MessageImage)
+
+
+def test_delivery_plan_replaces_summary_with_unified_card(tmp_path):
+    from astrbot_plugin_parser_x.core.data import (
+        Author,
+        DeliveryBatch,
+        DeliveryPlan,
+        ParseResult,
+        Platform,
+    )
+    from astrbot_plugin_parser_x.core.data import (
+        ImageContent as PluginImageContent,
+    )
+    from astrbot_plugin_parser_x.main import ParserXPlugin
+
+    source_path = tmp_path / "source.jpg"
+    source_path.write_bytes(b"image")
+    plugin = object.__new__(ParserXPlugin)
+    plugin.config = {"behavior": {"show_download_fail_tip": True}}
+    plugin.cache_dir = tmp_path
+    plugin._background_tasks = set()
+
+    class FakeTextRenderer:
+        def __init__(self):
+            self.kwargs = None
+
+        async def render_text_card(self, out_path, **kwargs):
+            self.kwargs = kwargs
+            _save_render_fixture(out_path, size=(760, 260))
+
+    plugin.text_renderer = FakeTextRenderer()
+
+    class Event:
+        message_obj = SimpleNamespace(message_id=9755)
+
+        def __init__(self):
+            self.sent = []
+
+        @staticmethod
+        def get_sender_id():
+            return "42"
+
+        @staticmethod
+        def get_sender_name():
+            return "用户"
+
+        @staticmethod
+        def chain_result(chain):
+            return chain
+
+        @staticmethod
+        def plain_result(text):
+            return [Plain(text)]
+
+        async def send(self, result):
+            self.sent.append(result)
+
+    content = PluginImageContent(source_path)
+    result = ParseResult(
+        platform=Platform(name="weibo", display_name="微博"),
+        author=Author(name="作者"),
+        title="微博标题",
+        text="正文必须进入统一卡片",
+        contents=[content],
+        delivery=DeliveryPlan(
+            [
+                DeliveryBatch(["识别：微博\n正文必须进入统一卡片"]),
+                DeliveryBatch([content], reply_original=True),
+            ]
+        ),
+        url="https://weibo.com/example",
+        extra={"render_text_card": True},
+    )
+    event = Event()
+    asyncio.run(plugin._send_parse_result(event, result))
+
+    assert plugin.text_renderer.kwargs["platform_key"] == "weibo"
+    assert plugin.text_renderer.kwargs["text"] == "正文必须进入统一卡片"
+    assert len(event.sent) == 2
+    assert len(event.sent[0]) == 1
+    assert isinstance(event.sent[0][0], MessageImage)
+    assert isinstance(event.sent[1][0], Reply)
+    assert isinstance(event.sent[1][1], MessageImage)
+
+
+def test_delivery_card_failure_keeps_plain_summary(tmp_path):
+    from astrbot_plugin_parser_x.core.data import (
+        DeliveryBatch,
+        DeliveryPlan,
+        ParseResult,
+        Platform,
+    )
+    from astrbot_plugin_parser_x.main import ParserXPlugin
+
+    plugin = object.__new__(ParserXPlugin)
+    plugin.config = {"behavior": {"show_download_fail_tip": True}}
+    plugin.cache_dir = tmp_path
+    plugin._background_tasks = set()
+
+    class FailingTextRenderer:
+        async def render_text_card(self, *_args, **_kwargs):
+            raise RuntimeError("renderer unavailable")
+
+    plugin.text_renderer = FailingTextRenderer()
+
+    class Event:
+        message_obj = SimpleNamespace(message_id=9756)
+
+        def __init__(self):
+            self.sent = []
+
+        @staticmethod
+        def get_sender_id():
+            return "42"
+
+        @staticmethod
+        def get_sender_name():
+            return "用户"
+
+        @staticmethod
+        def chain_result(chain):
+            return chain
+
+        @staticmethod
+        def plain_result(text):
+            return [Plain(text)]
+
+        async def send(self, result):
+            self.sent.append(result)
+
+    result = ParseResult(
+        platform=Platform(name="weibo", display_name="微博"),
+        text="渲染失败仍要保留正文",
+        delivery=DeliveryPlan([DeliveryBatch(["识别：微博\n渲染失败仍要保留正文"])]),
+        extra={"render_text_card": True},
+    )
+    event = Event()
+    asyncio.run(plugin._send_parse_result(event, result))
+
+    assert len(event.sent) == 1
+    assert isinstance(event.sent[0][0], Plain)
+    assert "渲染失败仍要保留正文" in event.sent[0][0].text
 
 
 def test_delivery_plan_repairs_missing_weibo_body():

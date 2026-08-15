@@ -30,7 +30,7 @@ class _RawMiyousheFeed:
 
 class MiyousheCommentFeed(SocialCommentFeedBase):
     COMMENT_URL = "https://bbs-api.miyoushe.com/post/wapi/getPostReplies"
-    CACHE_VERSION = "miyoushe_comment_v1_official_render"
+    CACHE_VERSION = "miyoushe_comment_v2_unified_minimal"
     PLATFORM_SLUG = "miyoushe"
     AVATAR_REFERER = "https://www.miyoushe.com/"
 

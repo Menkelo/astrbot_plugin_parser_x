@@ -20,7 +20,10 @@ Parser X 不直接复制 rconsole-plugin 的 Yunzai 代码。同步的单位是�
    - 国外平台：当前项目范围明确排除，不增加解析器、配置项或路由。
    - 评论区：先对照 `utils/bili-comment.js`、`utils/douyin-comment.js`、
      `utils/weibo.js` 的接口与可见字段，再分别更新平台 feed；共享布局只更新
-     `core/comment_canvas.py`，B站专属等级/粉丝牌仍留在 `core/parsers/bilibili/`。
+     `core/comment_canvas.py` 与 B站专属 Canvas，平台色统一从 `core/card_theme.py` 读取，
+     B站等级/粉丝牌等字段仍留在 `core/parsers/bilibili/`。
+   - 正文/动态卡：统一骨架更新 `core/text_renderer.py`，平台只在 `core/card_theme.py`
+     声明名称、字标和品牌色；媒体投递顺序继续由各 Parser 的 `DeliveryPlan` 控制。
 5. 为每个行为变化增加测试夹具；禁止只修改 manifest 来“消除更新提示”。
 6. 运行 compileall、pytest、ruff，以及 AstrBot 当前版本下的插件导入测试。
 7. 人工在 aiocqhttp/NapCat 或 Lagrange 上至少验证：文本、单图、多图、视频、合并转发、失败降级。

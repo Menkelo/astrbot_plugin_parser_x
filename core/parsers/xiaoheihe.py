@@ -654,6 +654,16 @@ class XiaoheiheParser(BaseParser):
                 owner_id=owner_id,
                 total=total,
             )
+            card_text = description or text
+            if len(card_text) > 1200:
+                card_text = f"{card_text[:1197]}..."
+            extra.update(
+                {
+                    "render_text_card": True,
+                    "text_card_avatar": avatar or "",
+                    "text_card_text": card_text,
+                }
+            )
             return self.result(
                 title=title,
                 author=self.create_author(
@@ -834,6 +844,10 @@ class XiaoheiheParser(BaseParser):
             contents=contents,
             delivery=DeliveryPlan(batches),
             url=url,
+            extra={
+                "render_text_card": True,
+                "text_card_text": text[:1200] if text else "",
+            },
         )
 
     async def _parse_page_fallback(self, url: str, kind: str, item_id: str):
@@ -924,7 +938,13 @@ class XiaoheiheParser(BaseParser):
             contents=contents,
             delivery=DeliveryPlan([DeliveryBatch(delivery_parts)]),
             url=url,
-            extra={"info": fallback_info},
+            extra={
+                "info": fallback_info,
+                "render_text_card": True,
+                "text_card_text": "\n\n".join(
+                    item for item in (page_description, fallback_info) if item
+                ),
+            },
         )
 
     @staticmethod

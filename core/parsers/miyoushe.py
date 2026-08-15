@@ -289,6 +289,12 @@ class MiyousheParser(BaseParser):
             cover=cover_url,
             owner_id=owner_id,
         )
+        extra.update(
+            {
+                "render_text_card": True,
+                "text_card_avatar": str(author_avatar or ""),
+            }
+        )
         return self.result(
             title=title,
             author=self.create_author(author_name, author_avatar),

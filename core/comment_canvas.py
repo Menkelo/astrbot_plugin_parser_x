@@ -5,12 +5,25 @@ from html import escape
 from pathlib import Path
 from typing import Literal
 
+from .card_theme import (
+    DOUYIN_CARD_THEME,
+    MIYOUSHE_CARD_THEME,
+    WEIBO_CARD_THEME,
+    XIAOHEIHE_CARD_THEME,
+    PlatformCardTheme,
+)
 from .constants import COMMENT_FOOTER_BRAND
 from .html_renderer import HtmlRenderService
 
 _REPLY_ICON = (
-    '<svg class="reply-icon" viewBox="0 0 24 24" aria-hidden="true">'
-    '<path d="M9 7 4 12l5 5v-3h4.5c3.1 0 5.6 1.2 7.5 4-1-5.1-4-8-8.5-8H9V7Z"/>'
+    '<svg class="reply-icon action-icon" viewBox="0 0 24 24" aria-hidden="true">'
+    '<path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4Z"/>'
+    "</svg>"
+)
+
+_LIKE_ICON = (
+    '<svg class="like-icon action-icon" viewBox="0 0 24 24" aria-hidden="true">'
+    '<path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1.1-1.1a5.5 5.5 0 0 0-7.8 7.8L12 21l8.8-8.6a5.5 5.5 0 0 0 0-7.8Z"/>'
     "</svg>"
 )
 
@@ -31,59 +44,30 @@ class CommentTheme:
     portrait_cover: bool = False
 
 
-DOUYIN_THEME = CommentTheme(
-    platform_name="抖音",
-    brand_text="抖",
-    accent="#fe2c55",
-    accent_soft="rgba(254,44,85,.15)",
-    background="#0b0b0d",
-    surface="#131316",
-    nested_surface="#1c1c20",
-    text="#f5f5f6",
-    muted="#96969e",
-    border="rgba(255,255,255,.09)",
-    dark=True,
-    portrait_cover=True,
-)
+def _comment_theme(
+    theme: PlatformCardTheme,
+    *,
+    portrait_cover: bool = False,
+) -> CommentTheme:
+    return CommentTheme(
+        platform_name=theme.display_name,
+        brand_text=theme.glyph,
+        accent=theme.accent,
+        accent_soft=theme.accent_soft,
+        background=theme.background,
+        surface=theme.surface,
+        nested_surface=theme.subtle,
+        text=theme.text,
+        muted=theme.muted,
+        border=theme.border,
+        portrait_cover=portrait_cover,
+    )
 
-WEIBO_THEME = CommentTheme(
-    platform_name="微博",
-    brand_text="微",
-    accent="#ff8200",
-    accent_soft="#fff1e4",
-    background="#f5f5f5",
-    surface="#ffffff",
-    nested_surface="#f8f8f8",
-    text="#1f1f1f",
-    muted="#939393",
-    border="#ececec",
-)
 
-XIAOHEIHE_THEME = CommentTheme(
-    platform_name="小黑盒",
-    brand_text="盒",
-    accent="#ff6a00",
-    accent_soft="#fff0e5",
-    background="#f3f4f6",
-    surface="#ffffff",
-    nested_surface="#f7f7f8",
-    text="#202124",
-    muted="#8a8f98",
-    border="#e8eaed",
-)
-
-MIYOUSHE_THEME = CommentTheme(
-    platform_name="米游社",
-    brand_text="米",
-    accent="#4c8df6",
-    accent_soft="#eaf2ff",
-    background="#f3f6fb",
-    surface="#ffffff",
-    nested_surface="#f5f8fd",
-    text="#252b36",
-    muted="#8b94a5",
-    border="#e3e9f2",
-)
+DOUYIN_THEME = _comment_theme(DOUYIN_CARD_THEME, portrait_cover=True)
+WEIBO_THEME = _comment_theme(WEIBO_CARD_THEME)
+XIAOHEIHE_THEME = _comment_theme(XIAOHEIHE_CARD_THEME)
+MIYOUSHE_THEME = _comment_theme(MIYOUSHE_CARD_THEME)
 
 
 @dataclass(slots=True)
@@ -276,7 +260,7 @@ class SocialCommentCanvas:
         actions = (
             '<div class="actions">'
             f'<span class="action-meta">{self._text(metadata_text)}</span>'
-            f'<span class="action">♡ {self._text(entry.like_text)}</span>'
+            f'<span class="action">{_LIKE_ICON}{self._text(entry.like_text)}</span>'
             f'<span class="action">{_REPLY_ICON}{self._text(entry.reply_text)}</span>'
             f"{creator_liked}</div>"
         )
@@ -305,6 +289,17 @@ class SocialCommentCanvas:
             f"{sticker}{images}{actions}{first_reply}</section></article>"
         )
 
+    @staticmethod
+    def _footer_label(document: CommentDocument) -> str:
+        custom = (document.footer_text or "").replace(
+            COMMENT_FOOTER_BRAND,
+            "",
+        )
+        custom = custom.strip(" ·")
+        if "仅展示部分热门评论" in custom:
+            return "仅展示部分热门评论"
+        return f"热门评论 {len(document.entries)} / {document.total_text}"
+
     def build_html(self, document: CommentDocument) -> str:
         theme = document.theme
         fallback = theme.brand_text
@@ -312,7 +307,6 @@ class SocialCommentCanvas:
             self._render_entry(entry, nested=False, fallback=fallback)
             for entry in document.entries
         )
-        display_text = f"展示 {len(document.entries)} 条"
         cover_class = " cover-portrait" if theme.portrait_cover else ""
         cover = (
             f'<img class="cover{cover_class}" src="{self._url(document.cover)}" '
@@ -320,10 +314,8 @@ class SocialCommentCanvas:
             if document.cover
             else ""
         )
-        footer = self._text(
-            document.footer_text
-            or f"{COMMENT_FOOTER_BRAND} · {theme.platform_name}评论区"
-        )
+        footer_label = self._text(self._footer_label(document))
+        footer_brand = self._text(COMMENT_FOOTER_BRAND)
         return f"""<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -331,27 +323,27 @@ class SocialCommentCanvas:
 *{{box-sizing:border-box}}html,body{{margin:0;width:760px;background:{theme.background};color:{theme.text}}}
 body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}}
 .page{{width:760px;padding:18px 22px 20px;background:{theme.background}}}
-.shell{{overflow:hidden;border:1px solid {theme.border};border-radius:22px;background:{theme.surface};box-shadow:0 12px 35px rgba(0,0,0,{".24" if theme.dark else ".08"})}}
-.header{{display:flex;min-height:96px;align-items:center;gap:14px;padding:17px 19px;border-bottom:1px solid {theme.border}}}
-.brand{{display:grid;width:46px;height:46px;place-items:center;flex:0 0 46px;border-radius:14px;background:{theme.accent};color:#fff;font-size:21px;font-weight:800}}
-.header-copy{{min-width:0;flex:1}}.header h1{{margin:0;overflow:hidden;font-size:23px;font-weight:680;text-overflow:ellipsis;white-space:nowrap}}
-.header p{{margin:6px 0 0;color:{theme.muted};font-size:14px}}.cover{{width:96px;height:60px;border-radius:10px;object-fit:cover;background:{theme.nested_surface}}}.cover-portrait{{width:68px;height:88px;border-radius:12px}}
-.comment-list{{padding:0 19px}}.comment-card{{display:grid;grid-template-columns:50px 1fr;gap:14px;padding:20px 0;border-bottom:1px solid {theme.border}}}.comment-card:last-child{{border-bottom:0}}
+.shell{{overflow:hidden;border:1px solid {theme.border};border-radius:14px;background:{theme.surface}}}
+.header{{display:flex;min-height:82px;align-items:center;gap:12px;padding:15px 16px 11px}}
+.brand{{display:grid;width:34px;height:34px;place-items:center;flex:0 0 34px;border-radius:50%;background:{theme.accent};color:#fff;font-size:16px;font-weight:800}}
+.header-copy{{min-width:0;flex:1}}.header h1{{margin:0;overflow:hidden;font-size:21px;font-weight:700;line-height:1.42;text-overflow:ellipsis;white-space:nowrap}}
+.header p{{margin:3px 0 0;color:{theme.muted};font-size:13px;line-height:1.45}}.cover{{width:88px;height:54px;border-radius:9px;object-fit:cover;background:{theme.nested_surface}}}.cover-portrait{{width:52px;height:68px;border-radius:10px}}
+.comment-list{{padding:0 16px}}.comment-card{{display:grid;grid-template-columns:44px 1fr;gap:12px;padding:15px 0;border-top:1px solid {theme.border}}}
 .avatar-shell{{position:relative;display:grid;place-items:center;overflow:hidden;border-radius:50%;background:{theme.accent_soft};color:{theme.accent};font-weight:800}}.avatar-shell img{{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}}
-.avatar{{width:50px;height:50px;font-size:20px}}.reply-avatar{{width:31px;height:31px;font-size:13px}}.comment-body,.reply-body{{min-width:0}}
-.author-row{{display:flex;min-height:22px;align-items:center;gap:6px;flex-wrap:wrap}}.nickname,.reply-name{{max-width:310px;overflow:hidden;color:{theme.muted};font-size:17px;text-overflow:ellipsis;white-space:nowrap}}.reply-name{{max-width:250px;font-size:15px}}
-.author-badge{{display:inline-flex;align-items:center;padding:2px 7px;border:1px solid transparent;border-radius:999px;background:{theme.accent};color:#fff;font-size:11px;font-weight:700;line-height:16px}}
-.comment-content,.reply-content{{margin-top:8px;color:{theme.text};font-size:19px;line-height:1.62;word-break:break-word}}.reply-content{{font-size:16px}}.highlight{{color:{theme.accent}}}.emoji-text{{display:inline-block;margin:0 2px;padding:0 4px;border-radius:5px;background:{theme.accent_soft};color:{theme.muted}}}
+.avatar{{width:44px;height:44px;font-size:17px}}.reply-avatar{{width:28px;height:28px;font-size:12px}}.comment-body,.reply-body{{min-width:0}}
+.author-row{{display:flex;min-height:21px;align-items:center;gap:6px;flex-wrap:wrap}}.nickname,.reply-name{{max-width:330px;overflow:hidden;color:{theme.text};font-size:16px;font-weight:650;text-overflow:ellipsis;white-space:nowrap}}.reply-name{{max-width:270px;font-size:14px}}
+.author-badge{{display:inline-flex;align-items:center;padding:1px 6px;border:1px solid transparent;border-radius:999px;background:{theme.accent_soft};color:{theme.accent};font-size:11px;font-weight:700;line-height:16px}}
+.comment-content,.reply-content{{margin-top:6px;color:{theme.text};font-size:18px;line-height:1.62;word-break:break-word}}.reply-content{{font-size:16px}}.highlight{{color:{theme.accent}}}.emoji-text{{display:inline-block;margin:0 2px;padding:0 4px;border-radius:5px;background:{theme.accent_soft};color:{theme.muted}}}
 .emote{{display:inline-block;width:24px;height:24px;margin:0 2px;object-fit:contain;vertical-align:-6px}}.pinned{{display:inline-block;margin-right:7px;padding:1px 7px;border-radius:5px;background:{theme.accent_soft};color:{theme.accent};font-size:12px;line-height:21px;vertical-align:2px}}
-.comment-image-wrap,.sticker-image-wrap{{display:block;width:fit-content;max-width:100%;margin:10px 0 0;overflow:hidden;border:1px solid {theme.border};border-radius:10px;background:{theme.nested_surface}}}.comment-image{{display:block;width:auto;height:auto;max-width:540px;object-fit:contain}}.sticker-image{{display:block;width:auto;height:auto;max-width:180px;max-height:180px;object-fit:contain}}
-.actions{{display:flex;align-items:center;gap:17px;margin-top:9px;color:{theme.muted};font-size:13px;line-height:20px;flex-wrap:wrap}}.action{{display:inline-flex;align-items:center;gap:4px}}.reply-icon{{width:15px;height:15px;fill:currentColor}}.action-meta{{margin-right:auto}}.creator-liked{{padding:1px 6px;border-radius:5px;background:{theme.accent_soft};color:{theme.accent}}}
-.reply-card{{display:grid;grid-template-columns:31px 1fr;gap:9px;max-width:600px;margin-top:13px;padding:11px 12px;border-radius:12px;background:{theme.nested_surface}}}.reply-card .actions{{gap:12px}}
-.footer{{padding:14px 18px 16px;border-top:1px solid {theme.border};color:{theme.muted};font-size:12px;text-align:center}}
+.comment-image-wrap,.sticker-image-wrap{{display:block;width:fit-content;max-width:100%;margin:9px 0 0;overflow:hidden;border:1px solid {theme.border};border-radius:8px;background:{theme.nested_surface}}}.comment-image{{display:block;width:auto;height:auto;max-width:540px;object-fit:contain}}.sticker-image{{display:block;width:auto;height:auto;max-width:180px;max-height:180px;object-fit:contain}}
+.actions{{display:flex;align-items:center;gap:15px;margin-top:7px;color:{theme.muted};font-size:13px;line-height:20px;flex-wrap:wrap}}.action{{display:inline-flex;align-items:center;gap:4px}}.action-icon{{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}}.action-meta{{margin-right:auto}}.creator-liked{{padding:1px 6px;border-radius:5px;background:{theme.accent_soft};color:{theme.accent}}}
+.reply-card{{display:grid;grid-template-columns:28px 1fr;gap:9px;max-width:600px;margin-top:11px;padding:4px 0 4px 12px;border-left:2px solid {theme.border}}}.reply-card .actions{{gap:12px}}
+.footer{{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 16px 15px;border-top:1px solid {theme.border};color:{theme.muted};font-size:12px;line-height:1.45;flex-wrap:wrap}}.footer-brand{{color:{theme.accent};overflow-wrap:anywhere;word-break:break-all}}
 </style></head><body><div id="parser-x-comment-root" class="page"><div class="shell">
 <header class="header"><div class="brand">{self._text(theme.brand_text)}</div><div class="header-copy">
 <h1>{self._text(document.work_title or theme.platform_name + "作品")}</h1>
-<p>{self._text(theme.platform_name)}评论 · {self._text(display_text)} · {self._text(document.total_text)}</p>
-</div>{cover}</header><main class="comment-list">{entries}</main><footer class="footer">{footer}</footer>
+<p>{self._text(theme.platform_name)} · {self._text(document.total_text)}</p>
+</div>{cover}</header><main class="comment-list">{entries}</main><footer class="footer"><span>{footer_label}</span><span class="footer-brand">{footer_brand}</span></footer>
 </div></div></body></html>"""
 
     async def render(self, out_path: Path, document: CommentDocument) -> None:

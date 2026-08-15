@@ -269,6 +269,10 @@ class ParserXPlugin(Star):
 
     @staticmethod
     def _text_card_body(result: ParseResult) -> str:
+        override = result.extra.get("text_card_text")
+        if isinstance(override, str):
+            return override.strip()
+
         parts: list[str] = []
         text = (result.text or "").strip()
         if text:
@@ -306,7 +310,7 @@ class ParserXPlugin(Star):
                     timestamp_text or "",
                     result.url or "",
                     text,
-                    "text_card_v7_shared_media",
+                    "text_card_v8_minimal_brand",
                 ]
             ).encode("utf-8")
         ).hexdigest()[:12]
@@ -327,6 +331,7 @@ class ParserXPlugin(Star):
                 text=text,
                 title=title,
                 timestamp_text=timestamp_text,
+                platform_key=result.platform.name,
             )
 
         return ImageContent(out_path)
@@ -451,6 +456,38 @@ class ParserXPlugin(Star):
                 else:
                     batches.insert(0, DeliveryBatch([f"识别：微博\n{body}"]))
                 logger.warning("微博投递计划缺少正文，已自动补回")
+
+        if result.extra.get("render_text_card"):
+            try:
+                card = await self._build_text_card_content(result)
+            except Exception as exc:
+                logger.warning(f"delivery text-card render failed: {exc}")
+            else:
+                if card is not None:
+                    try:
+                        batch_index = int(
+                            result.extra.get("delivery_text_card_batch", 0)
+                        )
+                    except (TypeError, ValueError):
+                        batch_index = 0
+                    if 0 <= batch_index < len(batches):
+                        original = batches[batch_index]
+                        replace_text = bool(
+                            result.extra.get(
+                                "delivery_text_card_replace_text",
+                                True,
+                            )
+                        )
+                        remaining = [
+                            part
+                            for part in original.parts
+                            if not replace_text or not isinstance(part, str)
+                        ]
+                        batches[batch_index] = DeliveryBatch(
+                            [card, *remaining],
+                            mode=original.mode,
+                            reply_original=original.reply_original,
+                        )
 
         show_download_fail_tip = self._show_download_fail_tip()
         path_map: dict[int, tuple[Path | None, str | None]] = {}

@@ -19,7 +19,7 @@ from .social_comment_feed import SocialCommentFeedBase
 
 
 class XiaoheiheCommentFeed(SocialCommentFeedBase):
-    CACHE_VERSION = "xiaoheihe_comment_v1_official_render"
+    CACHE_VERSION = "xiaoheihe_comment_v2_unified_minimal"
     PLATFORM_SLUG = "xiaoheihe"
     AVATAR_REFERER = "https://www.xiaoheihe.cn/"
 

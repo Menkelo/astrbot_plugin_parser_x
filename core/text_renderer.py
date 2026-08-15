@@ -2,6 +2,7 @@ import re
 from html import escape
 from pathlib import Path
 
+from .card_theme import resolve_card_theme
 from .constants import COMMENT_FOOTER_BRAND
 from .html_renderer import HtmlRenderService
 
@@ -18,17 +19,92 @@ class TextCardRenderer:
         self.render_service = render_service
 
     @staticmethod
-    def _render_text_html(text: str) -> str:
+    def _escape_jinja(value: str) -> str:
+        return value.replace("{", "&#123;").replace("}", "&#125;")
+
+    @classmethod
+    def _safe_text(cls, value: object) -> str:
+        return cls._escape_jinja(escape(str(value or "")))
+
+    @classmethod
+    def _safe_url(cls, value: object) -> str:
+        return cls._escape_jinja(escape(str(value or ""), quote=True))
+
+    @classmethod
+    def _render_text_html(cls, text: str) -> str:
         parts: list[str] = []
         last = 0
 
         for match in RICH_TEXT_RE.finditer(text or ""):
-            parts.append(escape(text[last : match.start()]))
-            parts.append(f'<span class="text-link">{escape(match.group(0))}</span>')
+            parts.append(cls._safe_text(text[last : match.start()]))
+            parts.append(
+                f'<span class="text-link">{cls._safe_text(match.group(0))}</span>'
+            )
             last = match.end()
 
-        parts.append(escape(text[last:]))
+        parts.append(cls._safe_text(text[last:]))
         return "".join(parts)
+
+    def build_html(
+        self,
+        *,
+        platform_name: str,
+        author_name: str | None,
+        text: str,
+        author_avatar: str | None = None,
+        title: str | None = None,
+        timestamp_text: str | None = None,
+        platform_key: str | None = None,
+    ):
+        theme = resolve_card_theme(platform_key, platform_name)
+        display_name = str(platform_name or theme.display_name).strip()
+        card_title = str(title or "").strip() or f"{display_name}内容"
+
+        profile_html = ""
+        if author_name:
+            initial = self._safe_text(str(author_name).strip()[:1] or theme.glyph)
+            avatar_image = ""
+            if author_avatar:
+                avatar_image = (
+                    f'<img src="{self._safe_url(author_avatar)}" alt="" '
+                    "onerror=\"this.style.display='none'\">"
+                )
+            profile_html = (
+                '<div class="profile">'
+                f'<div class="avatar"><span>{initial}</span>{avatar_image}</div>'
+                f'<div class="author">{self._safe_text(author_name)}</div></div>'
+            )
+
+        meta_parts = [display_name]
+        if timestamp_text:
+            meta_parts.append(str(timestamp_text))
+        meta_text = " · ".join(meta_parts)
+        text_html = self._render_text_html(text)
+        text_block = f'<div class="text">{text_html}</div>' if text else ""
+
+        html = f"""<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style id="parser-x-content-card-styles">
+*{{box-sizing:border-box}}html,body{{margin:0;width:760px;background:{theme.background};color:{theme.text}}}
+body{{padding:18px 22px 20px;overflow-x:hidden;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}}
+.card{{width:716px;overflow:hidden;border:1px solid {theme.border};border-radius:14px;background:{theme.surface}}}
+.head{{display:flex;align-items:center;gap:12px;padding:16px 18px 13px}}
+.platform-mark{{display:grid;width:34px;height:34px;place-items:center;flex:0 0 34px;border-radius:50%;background:{theme.accent};color:#fff;font-size:16px;font-weight:800}}
+.head-copy{{min-width:0;flex:1}}.head h1{{margin:0;overflow-wrap:anywhere;color:{theme.text};font-size:21px;font-weight:700;line-height:1.42}}
+.meta{{margin-top:3px;color:{theme.muted};font-size:13px;line-height:1.45}}
+.body{{display:grid;gap:13px;padding:15px 18px 18px;border-top:1px solid {theme.border}}}
+.profile{{display:flex;align-items:center;gap:10px}}.avatar{{position:relative;display:grid;width:36px;height:36px;place-items:center;flex:0 0 36px;overflow:hidden;border-radius:50%;background:{theme.accent_soft};color:{theme.accent};font-size:14px;font-weight:800}}
+.avatar img{{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}}.author{{min-width:0;overflow:hidden;color:{theme.text};font-size:16px;font-weight:650;text-overflow:ellipsis;white-space:nowrap}}
+.text{{color:{theme.text};font-size:18px;line-height:1.72;white-space:pre-wrap;word-break:break-word}}.text-link{{color:{theme.accent};font-weight:650}}
+.footer{{display:flex;align-items:center;justify-content:flex-end;padding-top:12px;border-top:1px solid {theme.border};color:{theme.accent};font-size:12px;line-height:1.45;overflow-wrap:anywhere;word-break:break-all}}
+</style></head><body><article class="card" data-card-style="minimal-feed">
+<header class="head"><div class="platform-mark">{self._safe_text(theme.glyph)}</div><div class="head-copy">
+<h1>{self._safe_text(card_title)}</h1><div class="meta">{self._safe_text(meta_text)}</div></div></header>
+<div class="body">{profile_html}{text_block}<footer class="footer">{self._safe_text(COMMENT_FOOTER_BRAND)}</footer></div>
+</article></body></html>"""
+
+        return html
 
     async def render_text_card(
         self,
@@ -40,190 +116,21 @@ class TextCardRenderer:
         author_avatar: str | None = None,
         title: str | None = None,
         timestamp_text: str | None = None,
+        platform_key: str | None = None,
     ):
-        avatar_html = ""
-        if author_avatar:
-            avatar_html = f'<img class="avatar" src="{escape(author_avatar)}" alt="">'
-        elif author_name:
-            avatar_html = '<div class="avatar avatar-ph"></div>'
-        author_html = (
-            f'<div class="author">{escape(author_name)}</div>' if author_name else ""
+        html = self.build_html(
+            platform_name=platform_name,
+            platform_key=platform_key,
+            author_name=author_name,
+            author_avatar=author_avatar,
+            title=title,
+            text=text,
+            timestamp_text=timestamp_text,
         )
-        time_html = (
-            f'<div class="time">{escape(timestamp_text)}</div>'
-            if timestamp_text
-            else ""
-        )
-        profile_html = ""
-        if avatar_html or author_html or time_html:
-            profile_html = (
-                '<div class="profile">'
-                f'{avatar_html}<div class="author-block">'
-                f"{author_html}{time_html}</div></div>"
-            )
-        title_html = f'<div class="title">{escape(title)}</div>' if title else ""
-        text_html = self._render_text_html(text)
-        text_block = f'<div class="text">{text_html}</div>' if text else ""
-
-        html = f"""
-        <!doctype html>
-        <html>
-        <head>
-          <meta charset="utf-8"/>
-          <style>
-            * {{
-              box-sizing: border-box;
-            }}
-
-            html {{
-              margin: 0;
-              padding: 0;
-              width: 760px;
-              background: #f3f5f8;
-            }}
-
-            body {{
-              margin: 0;
-              padding: 26px;
-              width: 760px;
-              font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
-              background: #f3f5f8;
-              color: #20242c;
-              overflow-x: hidden;
-            }}
-
-            .card {{
-              width: 708px;
-              background: #fff;
-              border: 1px solid #e7ebf0;
-              border-radius: 16px;
-              padding: 24px;
-              box-shadow: 0 10px 30px rgba(32, 36, 44, .08);
-            }}
-
-            .meta {{
-              display: flex;
-              align-items: center;
-              justify-content: flex-start;
-              gap: 16px;
-            }}
-
-            .platform {{
-              display: inline-flex;
-              align-items: center;
-              min-height: 24px;
-              padding: 3px 9px;
-              border-radius: 999px;
-              background: #f6fbff;
-              border: 1px solid #e2f1ff;
-              color: #8ebfe9;
-              font-size: 13px;
-              font-weight: 750;
-              line-height: 1.2;
-            }}
-
-            .time {{
-              margin-top: 2px;
-              color: #8c95a3;
-              font-size: 13px;
-              line-height: 1.45;
-              text-align: left;
-              word-break: break-word;
-            }}
-
-            .profile {{
-              margin-top: 16px;
-              display: flex;
-              align-items: center;
-              gap: 14px;
-            }}
-
-            .author-block {{
-              min-width: 0;
-            }}
-
-            .avatar {{
-              width: 54px;
-              height: 54px;
-              border-radius: 50%;
-              object-fit: cover;
-              background: #eef3f7;
-              border: 1px solid #e7edf3;
-              flex-shrink: 0;
-              display: block;
-            }}
-
-            .avatar-ph {{
-              background: linear-gradient(135deg, #eef5fb, #e4edf6);
-            }}
-
-            .author {{
-              color: #20242c;
-              font-size: 21px;
-              font-weight: 850;
-              line-height: 1.35;
-              word-break: break-word;
-            }}
-
-            .title {{
-              margin-top: 20px;
-              color: #20242c;
-              font-size: 20px;
-              font-weight: 850;
-              line-height: 1.45;
-              word-break: break-word;
-            }}
-
-            .text {{
-              margin-top: 18px;
-              color: #303744;
-              font-size: 18px;
-              line-height: 1.78;
-              white-space: pre-wrap;
-              word-break: break-word;
-            }}
-
-            .text-link {{
-              color: #8ebfe9;
-              font-weight: 650;
-            }}
-
-            .footer {{
-              margin-top: 12px;
-              color: #9aa2ad;
-              font-size: 12px;
-              line-height: 1.4;
-            }}
-          </style>
-        </head>
-        <body>
-          <div class="card">
-            <div class="meta">
-              <div class="platform">{escape(platform_name)}</div>
-            </div>
-            {profile_html}
-            {title_html}
-            {text_block}
-            <div class="footer">{escape(COMMENT_FOOTER_BRAND)}</div>
-          </div>
-
-          <script>
-            for (const img of document.querySelectorAll("img")) {{
-              img.addEventListener("error", () => {{
-                img.replaceWith(Object.assign(document.createElement("div"), {{
-                  className: "avatar avatar-ph"
-                }}));
-              }});
-            }}
-          </script>
-        </body>
-        </html>
-        """
-
         return await self.render_service.render(
             out_path,
             html,
             options={"type": "png", "full_page": True, "scale": "css"},
             target_width=760,
-            bottom_padding=26,
+            bottom_padding=20,
         )

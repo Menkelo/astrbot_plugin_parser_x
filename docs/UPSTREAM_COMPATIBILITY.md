@@ -11,18 +11,18 @@
 
 | 上游模块 | Parser X 状态 | 实现位置 | 说明 |
 | --- | --- | --- | --- |
-| Bilibili | 原生 | `core/parsers/bilibili/` | 视频、分P、动态；直播使用封面、关键帧与文字原生消息链，不经过 HTML 卡片；`comment_feed.py`/`comment_canvas.py` 对照上游 `utils/bili-comment.js` 与评论模板做独立语义适配，支持分页候选补足并将选中评论渲染为单张自适应长图，优先使用 AstrBot Canvas |
+| Bilibili | 原生 | `core/parsers/bilibili/` | 视频、分P、动态；多图/文字动态使用统一概览卡，单图动态直接引用原消息；直播使用封面、关键帧与文字原生消息链；`comment_feed.py`/`comment_canvas.py` 保留等级、粉丝牌和 UP 标识，并使用统一评论骨架生成单张自适应长图 |
 | 抖音 | 原生 | `core/parsers/douyin/` | 视频、图文、图集、Cookie 与 yt-dlp 兜底；`comment_feed.py` 对照上游 `utils/douyin-comment.js` 适配 Cookie 评论接口、A-Bogus、表情、图片、贴纸、作者标识与楼中楼 |
 | 快手 | 原生 | `core/parsers/kuaishou.py` | 视频、图片、图文 |
-| 微博 | 原生 | `core/parsers/weibo.py`、`core/parsers/weibo_comment.py` | 正文、图片、视频按原生消息链分开发送，单图引用原消息；使用公开 `m.weibo.cn/comments/hotflow` 生成热门评论 Canvas 卡片，支持认证/VIP、微博表情、原博与楼中楼 |
-| 小红书 | 原生 | `core/parsers/xiaohongshu.py` | 视频、图片、图文 |
+| 微博 | 原生 | `core/parsers/weibo.py`、`core/parsers/weibo_comment.py` | 正文概览卡、图片、视频按原生消息批次分开发送，单图引用原消息；使用公开 `m.weibo.cn/comments/hotflow` 生成统一热门评论 Canvas 卡片，支持认证/VIP、微博表情、原博与楼中楼 |
+| 小红书 | 原生 | `core/parsers/xiaohongshu.py` | 视频、图片、图文；图文正文使用统一概览卡 |
 | AcFun | 兼容层 | `core/parsers/ytdlp.py` | 单视频 |
 | 西瓜视频 | 兼容层 | `core/parsers/ytdlp.py` | 单视频 |
 | 皮皮虾 | 兼容层 | `core/parsers/ytdlp.py` | 取决于 yt-dlp extractor 可用性 |
 | 微视 | 兼容层 | `core/parsers/ytdlp.py` | 取决于 yt-dlp extractor 可用性 |
 | 网易云音乐 | 兼容层 | `core/parsers/ytdlp.py` | 发送音频文件 |
-| 米游社 | 原生 | `core/parsers/miyoushe.py`、`core/parsers/miyoushe_comment.py` | 正文、图片和视频按原生消息链分开发送；公开 `getPostReplies` 热门评论区支持认证、等级、配图与楼中楼 |
-| 小黑盒 | 原生 | `core/parsers/xiaoheihe.py`、`core/parsers/xiaoheihe_comment.py` | 帖子富文本按图文顺序转发，游戏详情与截图分层发送，视频独立发送；无 Cookie 也先尝试签名接口并读取帖子评论 |
+| 米游社 | 原生 | `core/parsers/miyoushe.py`、`core/parsers/miyoushe_comment.py` | 文章概览使用统一内容卡，图片和视频按原生消息批次发送；公开 `getPostReplies` 热门评论区支持认证、等级、配图与楼中楼 |
+| 小黑盒 | 原生 | `core/parsers/xiaoheihe.py`、`core/parsers/xiaoheihe_comment.py` | 帖子/游戏概览使用统一内容卡，帖子富文本按图文顺序转发，游戏详情与截图分层发送，视频独立发送；无 Cookie 也先尝试签名接口并读取帖子评论 |
 | 贴吧、微信视频号、QQ音乐、酷狗音乐、汽水音乐、通用网页 AI 总结 | 已移除 | - | 不注册路由、配置项或命令；贴吧官方页面不稳定且正文依赖非官方服务，因此不保留虚假可用入口 |
 | 点歌、云盘上传、扫码登录 | 不适用 | - | 强依赖 Yunzai 群文件、Redis 与管理员模型 |
 | 插件自更新 | 不适用 | - | 由 AstrBot 插件管理器负责 |
@@ -48,8 +48,8 @@
   会扩大隐私、部署与配置范围，因此不纳入解析核心。
 - `YUYUYUYU2147/rconsole-plugin`：主要增强点歌；该能力不属于 Parser X 的链接解析边界。
 
-本轮从上游继续采用的是原生消息顺序：B站直播不再渲染专用 HTML 卡片，而是发送封面、
-关键帧和直播信息；小黑盒、微博、米游社同样使用平台原生消息批次。
+本轮从上游继续采用的是原生消息顺序：B站直播不渲染专用 HTML 卡片，而是发送封面、
+关键帧和直播信息；小黑盒、微博、米游社的媒体仍使用平台原生消息批次，概览层改为统一卡片。
 
 ## 地区范围
 

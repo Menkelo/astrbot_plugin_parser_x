@@ -20,7 +20,8 @@ class BiliDynamicRenderer(TextCardRenderer):
     ):
         await self.render_text_card(
             out_path=out_path,
-            platform_name="Bilibili",
+            platform_name="B站动态",
+            platform_key="bilibili",
             author_name=author_name,
             author_avatar=author_avatar,
             title=title,

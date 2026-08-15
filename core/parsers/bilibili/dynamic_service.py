@@ -54,7 +54,7 @@ class BiliDynamicService:
             (
                 f"{dynamic_id}|{author_name}|{author_avatar}|"
                 f"{dynamic_title}|{full_text}|{image_urls}|"
-                f"dyn_service_v6_static"
+                f"dyn_service_v7_unified_minimal"
             ).encode()
         ).hexdigest()[:10]
         out_path = (
