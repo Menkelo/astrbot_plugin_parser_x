@@ -27,7 +27,7 @@ class BiliDynamicService:
     def _build_delivery_contents(
         full_images: list[MediaContent],
     ) -> tuple[list[MediaContent], bool]:
-        """Defer shared-card rendering to the sender and flag single-image works."""
+        """Keep source media and report whether the dynamic contains one image."""
         return list(full_images), len(full_images) == 1
 
     # region 通用工具
@@ -885,38 +885,31 @@ class BiliDynamicService:
 
         contents, single_image_work = self._build_delivery_contents(full_images)
 
-        author_avatar_data_uri = None
-        if not single_image_work:
-            author_avatar_data_uri = await self.img_to_data_uri(
-                author_avatar,
-                referer=f"https://t.bilibili.com/{dynamic_id}",
-            )
+        author_avatar_data_uri = await self.img_to_data_uri(
+            author_avatar,
+            referer=f"https://t.bilibili.com/{dynamic_id}",
+        )
 
         logger.info(
             f"[Bilibili][诊断] 动态附加图片 {len(full_images)} 张; "
-            f"正文 {len(full_text or '')} 字; 单图直发={single_image_work}"
+            f"正文 {len(full_text or '')} 字; 单图入卡={single_image_work}"
         )
 
+        card_info = ["正文完整保留"]
+        if single_image_work:
+            card_info.append("单图已合并至卡片")
+        elif full_images:
+            card_info.append(f"媒体 {len(full_images)} 项")
         extra = {
-            "reply_original_for_single_image": single_image_work,
-            "send_text": single_image_work,
+            "render_text_card": True,
+            "text_card_avatar": author_avatar_data_uri or author_avatar or "",
+            "text_card_media": image_urls[0] if image_urls else "",
+            "card_platform_name": "B站动态",
+            "card_kind": "动态 · 图文" if full_images else "动态",
+            "card_author_badge": "UP主",
+            "card_info": card_info,
+            "card_emotes": card_emotes,
         }
-        if not single_image_work:
-            card_info = ["正文完整保留"]
-            if full_images:
-                card_info.append(f"媒体 {len(full_images)} 项")
-            extra.update(
-                {
-                    "render_text_card": True,
-                    "text_card_avatar": author_avatar_data_uri or author_avatar or "",
-                    "text_card_media": image_urls[0] if image_urls else "",
-                    "card_platform_name": "B站动态",
-                    "card_kind": "动态 · 图文" if full_images else "动态",
-                    "card_author_badge": "UP主",
-                    "card_info": card_info,
-                    "card_emotes": card_emotes,
-                }
-            )
 
         return self.parser.result(
             title=dynamic_title,
@@ -925,7 +918,7 @@ class BiliDynamicService:
             author=self.parser.create_author(author_name, author_avatar),
             timestamp=pub_ts,
             url=f"https://t.bilibili.com/{dynamic_id}",
-            # 单图作品直接引用触发解析的原消息；多图和纯文字动态由
-            # 插件发送阶段渲染统一长卡，避免解析阶段阻塞 Canvas。
+            # 所有动态都由插件发送阶段渲染统一长卡；单图仅在卡片主视觉
+            # 中出现一次，多图继续在卡片后按独立节点发送。
             extra=extra,
         )

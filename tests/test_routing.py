@@ -55,7 +55,7 @@ from core.parsers.douyin.comment_feed import DouyinCommentFeed
 from core.parsers.miyoushe_comment import MiyousheCommentFeed
 from core.parsers.weibo_comment import WeiboCommentFeed
 from core.parsers.xiaoheihe_comment import XiaoheiheCommentFeed
-from core.parsers.ytdlp import AcFunParser
+from core.parsers.ytdlp import AcFunParser, NeteaseMusicParser
 from core.platform_emotes import (
     build_bilibili_emote_map,
     build_miyoushe_emote_map,
@@ -269,6 +269,40 @@ def test_ytdlp_parser_builds_a_downloadable_media_result(tmp_path):
     assert path.name == "demo.mp4"
     assert downloader.extract_args[2]["force_generic_extractor"] is False
     assert downloader.download_args[1]["max_size_mb"] == 42
+
+
+def test_ytdlp_audio_parser_also_uses_shared_card(tmp_path):
+    class FakeDownloader:
+        async def ytdlp_extract_info(self, *_args, **_kwargs):
+            return VideoInfo(
+                title="示例歌曲",
+                uploader="音乐人",
+                duration=180,
+                thumbnail="https://img.example.com/music.jpg",
+                description="歌曲简介",
+            )
+
+        async def download_audio(self, *_args, **_kwargs):
+            output = tmp_path / "music.mp3"
+            output.write_bytes(b"audio")
+            return output
+
+    async def parse():
+        parser = NeteaseMusicParser(
+            {"cache_dir": str(tmp_path), "performance": {}},
+            FakeDownloader(),
+        )
+        keyword, searched = parser.search_url("https://music.163.com/song?id=123456")
+        result = await parser.parse(keyword, searched)
+        await result.contents[0].get_path()
+        return result
+
+    result = asyncio.run(parse())
+
+    assert result.extra["render_text_card"] is True
+    assert result.extra["text_card_media"].endswith("music.jpg")
+    assert result.extra["card_kind"] == "音频"
+    assert result.extra["card_info"] == ["音频文件独立发送"]
 
 
 def test_domestic_parser_helpers_cover_new_routes():
@@ -1326,8 +1360,49 @@ def test_text_card_uses_html_render_service(tmp_path):
     assert 'data-card-style="minimal-feed"' in calls[0][0]
     assert "#ff8200" in calls[0][0]
     assert "platform-mark" not in calls[0][0]
-    assert "backdrop-filter:blur(18px)" in calls[0][0]
-    assert "radial-gradient" in calls[0][0]
+    assert "backdrop-filter" not in calls[0][0]
+    assert "radial-gradient" not in calls[0][0]
+
+
+def test_media_only_card_does_not_use_share_url_as_body(tmp_path):
+    from astrbot_plugin_parser_x.core.data import (
+        ImageContent as PluginImageContent,
+    )
+    from astrbot_plugin_parser_x.core.data import ParseResult, Platform
+    from astrbot_plugin_parser_x.main import ParserXPlugin
+
+    plugin = object.__new__(ParserXPlugin)
+    plugin.cache_dir = tmp_path
+
+    class FakeTextRenderer:
+        def __init__(self):
+            self.kwargs = None
+
+        async def render_text_card(self, out_path, **kwargs):
+            self.kwargs = kwargs
+            _save_render_fixture(out_path, size=(760, 320))
+
+    renderer = FakeTextRenderer()
+    plugin.text_renderer = renderer
+    source = tmp_path / "source.jpg"
+    result = ParseResult(
+        platform=Platform(name="xiaohongshu", display_name="小红书"),
+        contents=[PluginImageContent(source)],
+        url="https://www.xiaohongshu.com/explore/demo?xsec_token=secret",
+        extra={
+            "render_text_card": True,
+            "text_card_media": "https://img.example.com/note.jpg",
+            "card_kind": "笔记 · 图文",
+        },
+    )
+
+    card = asyncio.run(plugin._build_text_card_content(result))
+
+    assert card is not None
+    assert renderer.kwargs["title"] is None
+    assert renderer.kwargs["text"] == ""
+    assert renderer.kwargs["media_fit"] == "contain"
+    assert "xiaohongshu.com" not in repr(renderer.kwargs)
 
 
 @pytest.mark.parametrize(
@@ -1363,9 +1438,9 @@ def test_unified_content_card_keeps_only_platform_brand_identity(
     assert "platform-mark" not in html
     assert accent in html
     assert "border-radius:14px" in html
-    assert "backdrop-filter:blur(18px)" in html
-    assert "box-shadow:inset" in html
-    assert "background-size:3px 3px" in html
+    assert "backdrop-filter" not in html
+    assert ".brand-bar::before" not in html
+    assert "radial-gradient" not in html
 
 
 def test_unified_content_card_accepts_media_accent_without_monogram():
@@ -1382,7 +1457,7 @@ def test_unified_content_card_accepts_media_accent_without_monogram():
 
     assert 'data-accent-source="media"' in html
     assert "#184f7a" in html
-    assert "backdrop-filter:blur(18px)" in html
+    assert "backdrop-filter" not in html
     assert "platform-mark" not in html
     assert ">微<" not in html
 
@@ -1893,7 +1968,7 @@ def test_bilibili_dynamic_collects_custom_emote_urls_from_rich_nodes():
     assert emotes == {"[UP主_好耶]": "https://i0.hdslb.com/custom.png"}
 
 
-def test_bilibili_single_image_dynamic_marks_body_for_direct_reply(tmp_path):
+def test_bilibili_single_image_dynamic_uses_shared_card(tmp_path):
     from astrbot_plugin_parser_x.core.data import (
         Author,
         ParseResult,
@@ -1926,6 +2001,9 @@ def test_bilibili_single_image_dynamic_marks_body_for_direct_reply(tmp_path):
 
     service = BiliDynamicService(FakeParser())
 
+    async def fake_avatar(*_args, **_kwargs):
+        return "data:image/png;base64,YXZhdGFy"
+
     async def fake_fetch(_dynamic_id):
         return {
             "item": {
@@ -1948,13 +2026,17 @@ def test_bilibili_single_image_dynamic_marks_body_for_direct_reply(tmp_path):
         }
 
     service._fetch_dynamic_raw = fake_fetch
+    service.img_to_data_uri = fake_avatar
     result = asyncio.run(service.parse_dynamic(123456))
 
     assert result.text == "不能被漏掉的动态正文"
     assert len(result.contents) == 1
-    assert result.extra["reply_original_for_single_image"] is True
-    assert result.extra["send_text"] is True
-    assert "render_text_card" not in result.extra
+    assert result.extra["render_text_card"] is True
+    assert result.extra["text_card_media"] == "https://i0.hdslb.com/dynamic.jpg"
+    assert result.extra["text_card_avatar"].startswith("data:image/png")
+    assert "单图已合并至卡片" in result.extra["card_info"]
+    assert "reply_original_for_single_image" not in result.extra
+    assert "send_text" not in result.extra
 
 
 def test_bilibili_comment_normalization_covers_rconsole_visible_fields(tmp_path):
@@ -3198,19 +3280,21 @@ def test_delivery_plan_replaces_summary_with_unified_card(tmp_path):
             ]
         ),
         url="https://weibo.com/example",
-        extra={"render_text_card": True},
+        extra={
+            "render_text_card": True,
+            "text_card_media": "https://img.example.com/source.jpg",
+        },
     )
     event = Event()
     asyncio.run(plugin._send_parse_result(event, result))
 
     assert plugin.text_renderer.kwargs["platform_key"] == "weibo"
     assert plugin.text_renderer.kwargs["text"] == "正文必须进入统一卡片"
-    assert len(event.sent) == 2
+    assert plugin.text_renderer.kwargs["media_fit"] == "contain"
+    assert len(event.sent) == 1
     assert len(event.sent[0]) == 2
     assert isinstance(event.sent[0][0], Reply)
     assert isinstance(event.sent[0][1], MessageImage)
-    assert len(event.sent[1]) == 1
-    assert isinstance(event.sent[1][0], MessageImage)
 
 
 def test_delivery_card_stays_separate_from_rich_text_images_and_video(
@@ -3850,7 +3934,7 @@ def test_delivery_plan_forward_failure_falls_back_in_original_order(tmp_path):
     assert event.sent[2][0].text == "后文"
 
 
-def test_single_image_card_replies_separately_from_source_image(tmp_path):
+def test_single_image_card_embeds_source_without_resending_it(tmp_path):
     from astrbot_plugin_parser_x.core.data import (
         Author,
         ParseResult,
@@ -3905,18 +3989,19 @@ def test_single_image_card_replies_separately_from_source_image(tmp_path):
         text="不能被吞掉的正文",
         contents=[PluginImageContent(image_path)],
         url="https://weibo.com/example",
-        extra={"render_text_card": True},
+        extra={
+            "render_text_card": True,
+            "text_card_media": "https://img.example.com/source.jpg",
+        },
     )
 
     asyncio.run(plugin._send_parse_result(event, result))
 
-    assert len(event.sent) == 2
+    assert len(event.sent) == 1
     assert isinstance(event.sent[0][0], Reply)
     assert event.sent[0][0].id == 1357
     assert len(event.sent[0]) == 2
     assert isinstance(event.sent[0][1], MessageImage)
-    assert len(event.sent[1]) == 1
-    assert isinstance(event.sent[1][0], MessageImage)
 
 
 def test_unified_card_is_not_sent_standalone_without_original_message_id(tmp_path):

@@ -277,6 +277,20 @@ class ParserXPlugin(Star):
         return "\n\n".join(parts)
 
     @staticmethod
+    def _card_embeds_single_image(result: ParseResult) -> bool:
+        """Return whether the shared card fully replaces the only source image."""
+
+        if result.extra.get("keep_single_image_after_card"):
+            return False
+        media_url = result.extra.get("text_card_media")
+        return bool(
+            isinstance(media_url, str)
+            and media_url.strip()
+            and len(result.contents) == 1
+            and isinstance(result.contents[0], (ImageContent, GraphicsContent))
+        )
+
+    @staticmethod
     def _bounded_timeout(value: object, default: float, maximum: float) -> float:
         try:
             number = float(value)
@@ -300,9 +314,12 @@ class ParserXPlugin(Star):
     ) -> ImageContent | None:
         text = self._text_card_body(result)
         title = (result.title or "").strip() or None
-        if not text and not title:
+        media_url = result.extra.get("text_card_media")
+        if not isinstance(media_url, str) or not media_url.strip():
+            media_url = None
+        if not text and not title and not media_url:
             text = (result.url or "").strip()
-        if not text and not title:
+        if not text and not title and not media_url:
             return None
 
         author_name = result.author.name if result.author else None
@@ -315,10 +332,11 @@ class ParserXPlugin(Star):
             or result.platform.name
         )
         timestamp_text = result.formatted_datetime
-        media_url = result.extra.get("text_card_media")
-        if not isinstance(media_url, str) or not media_url.strip():
-            media_url = None
-        media_fit = str(result.extra.get("text_card_media_fit") or "cover")
+        requested_media_fit = result.extra.get("text_card_media_fit")
+        media_fit = str(
+            requested_media_fit
+            or ("contain" if self._card_embeds_single_image(result) else "cover")
+        )
         if media_fit not in {"cover", "contain"}:
             media_fit = "cover"
         content_kind = result.extra.get("card_kind")
@@ -358,7 +376,7 @@ class ParserXPlugin(Star):
                     accent_color,
                     accent_soft,
                     accent_source,
-                    "text_card_v12_fixed_brand_glass",
+                    "text_card_v13_single_image_inline_plain_header",
                 ]
             ).encode("utf-8")
         ).hexdigest()[:12]
@@ -606,10 +624,23 @@ class ParserXPlugin(Star):
                             else:
                                 batches.pop(batch_index)
 
-                        batches = [
-                            DeliveryBatch(batch.parts, mode=batch.mode)
-                            for batch in batches
-                        ]
+                        embedded_image = (
+                            result.contents[0]
+                            if self._card_embeds_single_image(result)
+                            else None
+                        )
+                        cleaned_batches: list[DeliveryBatch] = []
+                        for batch in batches:
+                            parts = [
+                                part
+                                for part in batch.parts
+                                if part is not embedded_image
+                            ]
+                            if parts:
+                                cleaned_batches.append(
+                                    DeliveryBatch(parts, mode=batch.mode)
+                                )
+                        batches = cleaned_batches
                         comments_embedded = card_comments_embedded
 
         show_download_fail_tip = self._show_download_fail_tip()
@@ -800,6 +831,9 @@ class ParserXPlugin(Star):
                 fallback = self._format_text_fallback(result)
                 if fallback:
                     await event.send(event.plain_result(fallback))
+                return
+
+            if card_sent and self._card_embeds_single_image(result):
                 return
 
             tasks = [self._download_content(c) for c in result.contents]

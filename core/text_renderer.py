@@ -217,8 +217,7 @@ class TextCardRenderer:
             accent=resolved_accent,
             accent_soft=resolved_soft,
         )
-        accent_dark = mix_hex_color(theme.accent, "#000000", 0.24)
-        accent_deep = mix_hex_color(theme.accent, "#000000", 0.38)
+        accent_dark = mix_hex_color(theme.accent, "#000000", 0.16)
         display_name = str(platform_name or theme.display_name).strip()
         card_title = str(title or "").strip() or f"{display_name}内容"
         card_title_html = self._render_text_html(
@@ -315,10 +314,9 @@ class TextCardRenderer:
 *{{box-sizing:border-box}}html,body{{margin:0;width:760px;background:{theme.background};color:{theme.text}}}html{{overflow-x:hidden;scrollbar-width:none}}html::-webkit-scrollbar{{width:0;height:0}}
 body{{padding:18px 22px 20px;overflow-x:hidden;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}}
 .card{{width:716px;overflow:hidden;border:1px solid {theme.border};border-radius:14px;background:{theme.surface}}}
-.brand-bar{{position:relative;isolation:isolate;display:flex;min-height:58px;align-items:center;justify-content:space-between;gap:16px;overflow:hidden;padding:14px 20px;border-bottom:1px solid rgba(255,255,255,.22);background:linear-gradient(115deg,rgba(255,255,255,.18),rgba(255,255,255,.035) 42%,rgba(0,0,0,.12)),linear-gradient(135deg,{accent_dark} 0%,{theme.accent} 58%,{accent_deep} 100%);box-shadow:inset 0 1px rgba(255,255,255,.28),inset 0 -1px rgba(0,0,0,.12);color:#fff;-webkit-backdrop-filter:blur(18px) saturate(145%);backdrop-filter:blur(18px) saturate(145%)}}
-.brand-bar::before{{position:absolute;z-index:-1;inset:-45% -8%;background:radial-gradient(circle at 14% 16%,rgba(255,255,255,.42),transparent 31%),radial-gradient(circle at 82% 88%,rgba(255,255,255,.14),transparent 36%);content:"";filter:blur(7px)}}.brand-bar::after{{position:absolute;z-index:-1;inset:0;background-image:radial-gradient(rgba(255,255,255,.34) .55px,transparent .72px);background-size:3px 3px;content:"";mix-blend-mode:soft-light;opacity:.18}}
-.brand-copy,.product-name{{position:relative;z-index:1;text-shadow:0 1px 2px rgba(0,0,0,.2)}}.brand-copy{{display:flex;min-width:0;align-items:center}}.brand-name{{overflow:hidden;font-size:19px;font-weight:700;letter-spacing:.02em;text-overflow:ellipsis;white-space:nowrap}}.product-name{{font-size:13px;opacity:.9;white-space:nowrap}}
-.hero{{width:100%;max-height:430px;overflow:hidden;border-bottom:1px solid {theme.border};background:{theme.subtle}}}.hero-image{{display:block;width:100%;min-height:240px;max-height:430px;object-fit:cover}}.hero-image.media-contain{{object-fit:contain}}
+.brand-bar{{display:flex;min-height:58px;align-items:center;justify-content:space-between;gap:16px;padding:14px 20px;border-bottom:1px solid {accent_dark};background:{theme.accent};color:#fff}}
+.brand-copy{{display:flex;min-width:0;align-items:center}}.brand-name{{overflow:hidden;font-size:19px;font-weight:700;letter-spacing:.02em;text-overflow:ellipsis;white-space:nowrap}}.product-name{{font-size:13px;opacity:.88;white-space:nowrap}}
+.hero{{width:100%;max-height:760px;overflow:hidden;border-bottom:1px solid {theme.border};background:{theme.subtle}}}.hero-image{{display:block;width:100%;min-height:240px;max-height:430px;object-fit:cover}}.hero-image.media-contain{{max-height:760px;object-fit:contain}}
 .primary-block{{display:grid;gap:10px;padding:19px 20px 17px}}.primary-block h1{{margin:0;overflow-wrap:anywhere;color:{theme.text};font-size:25px;font-weight:700;line-height:1.42}}.primary-block h1 .inline-emote{{width:32px;height:32px;vertical-align:-8px}}.meta{{color:{theme.muted};font-size:13px;line-height:1.45}}
 .metrics,.info-chips{{display:flex;align-items:center;gap:7px;flex-wrap:wrap}}.metric,.info-chip{{display:inline-flex;align-items:center;gap:5px;padding:5px 9px;border-radius:999px;background:{theme.subtle};color:{theme.muted};font-size:13px;line-height:1.45}}.metric strong{{color:{theme.text};font-size:14px}}
 .profile-block,.copy-block,.info-block,.comments-block,.footer{{border-top:1px solid {theme.border}}}.profile-block{{padding:15px 20px}}.profile{{display:flex;align-items:center;gap:10px}}.profile-avatar{{position:relative;display:grid;width:40px;height:40px;place-items:center;flex:0 0 40px;overflow:hidden;border:1px solid {theme.border};border-radius:50%;background:{theme.accent_soft};color:{theme.accent};font-size:14px;font-weight:800}}
