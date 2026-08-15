@@ -90,30 +90,6 @@ ACFUN_CARD_THEME = PlatformCardTheme(
     accent_soft="#fff0f2",
 )
 
-XIGUA_CARD_THEME = PlatformCardTheme(
-    key="xigua",
-    display_name="西瓜视频",
-    glyph="西",
-    accent="#ff4a45",
-    accent_soft="#fff0ef",
-)
-
-PIPIXIA_CARD_THEME = PlatformCardTheme(
-    key="pipixia",
-    display_name="皮皮虾",
-    glyph="皮",
-    accent="#ff5a36",
-    accent_soft="#fff2ed",
-)
-
-WEISHI_CARD_THEME = PlatformCardTheme(
-    key="weishi",
-    display_name="微视",
-    glyph="视",
-    accent="#ff5a65",
-    accent_soft="#fff0f2",
-)
-
 NETEASE_MUSIC_CARD_THEME = PlatformCardTheme(
     key="netease_music",
     display_name="网易云音乐",
@@ -147,12 +123,6 @@ _THEME_ALIASES = {
     "微博": WEIBO_CARD_THEME,
     "acfun": ACFUN_CARD_THEME,
     "a站": ACFUN_CARD_THEME,
-    "xigua": XIGUA_CARD_THEME,
-    "西瓜视频": XIGUA_CARD_THEME,
-    "pipixia": PIPIXIA_CARD_THEME,
-    "皮皮虾": PIPIXIA_CARD_THEME,
-    "weishi": WEISHI_CARD_THEME,
-    "微视": WEISHI_CARD_THEME,
     "netease_music": NETEASE_MUSIC_CARD_THEME,
     "neteasemusic": NETEASE_MUSIC_CARD_THEME,
     "网易云音乐": NETEASE_MUSIC_CARD_THEME,
@@ -183,11 +153,8 @@ __all__ = [
     "KUAISHOU_CARD_THEME",
     "MIYOUSHE_CARD_THEME",
     "NETEASE_MUSIC_CARD_THEME",
-    "PIPIXIA_CARD_THEME",
     "PlatformCardTheme",
     "WEIBO_CARD_THEME",
-    "WEISHI_CARD_THEME",
-    "XIGUA_CARD_THEME",
     "XIAOHEIHE_CARD_THEME",
     "XIAOHONGSHU_CARD_THEME",
     "resolve_card_theme",

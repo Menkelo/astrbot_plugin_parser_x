@@ -8,13 +8,7 @@ from .miyoushe import MiyousheParser
 from .weibo import WeiboParser
 from .xiaoheihe import XiaoheiheParser
 from .xiaohongshu import XiaoHongShuParser
-from .ytdlp import (
-    AcFunParser,
-    NeteaseMusicParser,
-    PipixiaParser,
-    WeishiParser,
-    XiguaParser,
-)
+from .ytdlp import AcFunParser, NeteaseMusicParser
 
 __all__ = [
     "BaseParser",
@@ -30,8 +24,5 @@ __all__ = [
     "MiyousheParser",
     "XiaoheiheParser",
     "AcFunParser",
-    "XiguaParser",
-    "PipixiaParser",
-    "WeishiParser",
     "NeteaseMusicParser",
 ]

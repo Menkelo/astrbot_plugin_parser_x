@@ -78,25 +78,93 @@
         </aside>
 
         <section class="result-panel" aria-labelledby="result-heading">
-          <div class="result-toolbar">
+          <div class="qq-window">
+            <div class="result-toolbar qq-titlebar">
+              <div class="qq-contact-block">
+                <div class="qq-contact-avatar" aria-hidden="true">
+                  <svg viewBox="0 0 24 24">
+                    <path d="M5 4h14a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H9l-5 4v-4H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Z" />
+                    <path d="M8 9h8M8 13h5" />
+                  </svg>
+                  <span class="qq-online-dot"></span>
+                </div>
+                <div class="qq-contact-copy">
+                  <div class="qq-title-line">
+                    <h2 id="result-heading">Parser X 调试会话</h2>
+                    <span class="qq-pc-badge">PC QQ 预览</span>
+                  </div>
+                  <p id="run-subtitle">等待一次解析任务</p>
+                </div>
+              </div>
+              <div class="qq-title-tools">
+                <div id="run-metrics" class="run-metrics" hidden>
+                  <span id="metric-message">0 条消息</span>
+                  <span id="metric-time">0 ms</span>
+                </div>
+                <span class="qq-tool-icon" title="语音通话" aria-hidden="true">
+                  <svg viewBox="0 0 24 24"><path d="M7 4h3l2 5-2 2a16 16 0 0 0 3 3l2-2 5 2v3a2 2 0 0 1-2 2C10 19 5 14 5 6a2 2 0 0 1 2-2Z" /></svg>
+                </span>
+                <span class="qq-tool-icon" title="视频通话" aria-hidden="true">
+                  <svg viewBox="0 0 24 24"><rect x="3" y="6" width="13" height="12" rx="2" /><path d="m16 10 5-3v10l-5-3Z" /></svg>
+                </span>
+                <span class="qq-tool-icon" title="更多" aria-hidden="true">
+                  <svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1" /><circle cx="12" cy="12" r="1" /><circle cx="19" cy="12" r="1" /></svg>
+                </span>
+                <span class="qq-title-divider" aria-hidden="true"></span>
+                <span class="qq-window-controls" aria-hidden="true">
+                  <span class="qq-window-button is-minimize" title="最小化"></span>
+                  <span class="qq-window-button is-maximize" title="最大化"></span>
+                  <span class="qq-window-button is-close" title="关闭"></span>
+                </span>
+              </div>
+            </div>
+
+            <div id="qq-chat-body" class="qq-chat-body">
+              <div id="empty-state" class="empty-state">
+                <div class="empty-icon" aria-hidden="true">PX</div>
+                <h3>这里会模拟一场 PC QQ 对话</h3>
+                <p>发送链接后，输入内容和 Parser X 的真实消息组件会按实际完成顺序出现在会话中。</p>
+              </div>
+
+              <div id="message-timeline" class="message-timeline" aria-live="polite"></div>
+            </div>
+
+            <div class="qq-composer" aria-hidden="true">
+              <div class="qq-composer-tools">
+                <span class="qq-composer-icon" title="表情">
+                  <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8" /><path d="M9 10h.01M15 10h.01M8.5 14c1.9 2 5.1 2 7 0" /></svg>
+                </span>
+                <span class="qq-composer-icon" title="发送文件">
+                  <svg viewBox="0 0 24 24"><path d="M4 7.5h6l1.7 2H20v8.5a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2Z" /><path d="M4 7.5V6a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v1.5" /></svg>
+                </span>
+                <span class="qq-composer-icon" title="截图">
+                  <svg viewBox="0 0 24 24"><path d="m5 5 14 14M19 5 5 19" /><circle cx="12" cy="12" r="8" /></svg>
+                </span>
+                <span class="qq-composer-icon" title="图片">
+                  <svg viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="14" rx="2" /><circle cx="9" cy="10" r="1.5" /><path d="m6 17 4-4 3 3 2-2 3 3" /></svg>
+                </span>
+                <span class="qq-composer-icon" title="语音消息">
+                  <svg viewBox="0 0 24 24"><rect x="9" y="4" width="6" height="11" rx="3" /><path d="M6.5 11.5a5.5 5.5 0 0 0 11 0M12 17v3M9 20h6" /></svg>
+                </span>
+                <span class="qq-tool-spacer"></span>
+                <span class="qq-composer-icon" title="更多">
+                  <svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1" /><circle cx="12" cy="12" r="1" /><circle cx="19" cy="12" r="1" /></svg>
+                </span>
+              </div>
+              <div class="qq-faux-editor">消息由左侧调试输入区发送</div>
+              <div class="qq-composer-actions">
+                <span>按 Ctrl + Enter 快速开始解析</span>
+                <button type="button" tabindex="-1" disabled>发送</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="debug-detail-heading">
             <div>
-              <h2 id="result-heading">消息时间线</h2>
-              <p id="run-subtitle">等待一次解析任务</p>
-            </div>
-            <div id="run-metrics" class="run-metrics" hidden>
-              <span id="metric-message">0 条消息</span>
-              <span id="metric-time">0 ms</span>
+              <h2>解析数据</h2>
+              <p>用于核对平台结果与原始组件，不属于 QQ 消息内容。</p>
             </div>
           </div>
-
-          <div id="empty-state" class="empty-state">
-            <div class="empty-icon" aria-hidden="true">PX</div>
-            <h3>不用再去 QQ 试链接了</h3>
-            <p>解析结果会按实际完成顺序出现在这里，包括引用消息、图片、视频、文件和合并转发节点。</p>
-          </div>
-
-          <div id="event-log" class="event-log" aria-live="polite"></div>
-          <div id="message-timeline" class="message-timeline"></div>
           <div id="parse-details" class="parse-details"></div>
         </section>
       </main>

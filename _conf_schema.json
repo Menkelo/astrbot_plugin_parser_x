@@ -12,9 +12,6 @@
       "miyoushe": {"description": "米游社", "type": "bool", "default": true},
       "xiaoheihe": {"description": "小黑盒", "type": "bool", "default": true},
       "acfun": {"description": "AcFun（yt-dlp）", "type": "bool", "default": true},
-      "xigua": {"description": "西瓜视频（yt-dlp）", "type": "bool", "default": true},
-      "pipixia": {"description": "皮皮虾（yt-dlp）", "type": "bool", "default": true},
-      "weishi": {"description": "微视（yt-dlp）", "type": "bool", "default": true},
       "netease_music": {"description": "网易云音乐（yt-dlp）", "type": "bool", "default": true}
     }
   },

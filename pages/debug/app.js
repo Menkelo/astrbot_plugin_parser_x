@@ -17,7 +17,7 @@ const elements = {
   metricMessage: document.getElementById("metric-message"),
   metricTime: document.getElementById("metric-time"),
   emptyState: document.getElementById("empty-state"),
-  eventLog: document.getElementById("event-log"),
+  chatBody: document.getElementById("qq-chat-body"),
   timeline: document.getElementById("message-timeline"),
   details: document.getElementById("parse-details"),
   toast: document.getElementById("toast"),
@@ -76,9 +76,9 @@ function resetOutput() {
   messageCount = 0;
   latestElapsedMs = 0;
   elements.emptyState.hidden = false;
-  elements.eventLog.replaceChildren();
   elements.timeline.replaceChildren();
   elements.details.replaceChildren();
+  elements.chatBody.scrollTop = 0;
   setText(elements.runSubtitle, "等待一次解析任务");
   updateMetrics();
 }
@@ -90,7 +90,18 @@ function appendEvent(message, kind = "normal") {
   if (kind === "error") row.classList.add("is-error");
   if (kind === "success") row.classList.add("is-success");
   setText(row, message);
-  elements.eventLog.append(row);
+  elements.timeline.append(row);
+  row.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+function appendTimeDivider(date = new Date()) {
+  const row = document.createElement("div");
+  row.className = "qq-time-divider";
+  setText(
+    row,
+    date.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" }),
+  );
+  elements.timeline.append(row);
 }
 
 function platformInitial(platform) {
@@ -170,7 +181,7 @@ async function loadMediaPreview(card, type, media, placeholder) {
 
 function createMediaCard(type, media = {}) {
   const card = document.createElement("div");
-  card.className = "media-card";
+  card.className = `media-card is-${type}`;
 
   const placeholder = document.createElement("div");
   placeholder.className = "media-placeholder";
@@ -192,11 +203,38 @@ function createMediaCard(type, media = {}) {
 function createFileCard(media = {}) {
   const card = document.createElement("div");
   card.className = "file-card";
-  const copy = document.createElement("span");
+
+  const icon = document.createElement("span");
+  icon.className = "file-icon";
+  setText(icon, "FILE");
+
+  const body = document.createElement("span");
+  body.className = "file-body";
+  const copy = document.createElement("strong");
   copy.className = "file-copy";
-  setText(copy, `${media.name || "文件"} · ${formatBytes(media.size)}`);
-  card.append(copy, createDownloadButton(media));
+  setText(copy, media.name || "文件");
+  const meta = document.createElement("span");
+  meta.className = "file-meta";
+  setText(meta, formatBytes(media.size));
+  body.append(copy, meta);
+
+  card.append(icon, body, createDownloadButton(media, "接收"));
   return card;
+}
+
+function componentPreview(component) {
+  const type = component?.type || "unknown";
+  if (type === "text") {
+    const text = String(component.text || "").replace(/\s+/g, " ").trim();
+    return text || "[文字]";
+  }
+  if (type === "reply") return "[回复消息]";
+  if (type === "image") return "[图片]";
+  if (type === "video") return "[视频]";
+  if (type === "audio") return "[语音]";
+  if (type === "file") return `[文件] ${component.media?.name || ""}`.trim();
+  if (type === "forward") return "[聊天记录]";
+  return `[${component.label || type}]`;
 }
 
 function renderComponent(component) {
@@ -209,7 +247,7 @@ function renderComponent(component) {
   if (type === "reply") {
     const reply = document.createElement("div");
     reply.className = "reply-strip";
-    return setText(reply, `引用原消息 · ${component.id || "unknown"}`);
+    return setText(reply, `回复了一条消息 · ${component.id || "unknown"}`);
   }
   if (type === "image" || type === "video" || type === "audio") {
     return createMediaCard(type, component.media || {});
@@ -230,11 +268,37 @@ function renderComponent(component) {
 function renderForward(component) {
   const details = document.createElement("details");
   details.className = "forward-card";
-  details.open = true;
 
   const nodes = Array.isArray(component.nodes) ? component.nodes : [];
   const summary = document.createElement("summary");
-  setText(summary, `合并转发 · ${nodes.length} 个节点`);
+  const summaryCopy = document.createElement("span");
+  summaryCopy.className = "forward-summary-copy";
+  const title = document.createElement("strong");
+  setText(title, "聊天记录");
+  const previewList = document.createElement("span");
+  previewList.className = "forward-preview-list";
+  if (nodes.length) {
+    nodes.slice(0, 2).forEach((node) => {
+      const line = document.createElement("span");
+      line.className = "forward-preview-line";
+      const preview = (node.content || []).map(componentPreview).find(Boolean) || "[空消息]";
+      setText(line, `${node.name || "Parser X"}: ${preview}`);
+      previewList.append(line);
+    });
+  } else {
+    const line = document.createElement("span");
+    line.className = "forward-preview-line";
+    setText(line, "暂无消息");
+    previewList.append(line);
+  }
+  const count = document.createElement("span");
+  count.className = "forward-preview-count";
+  setText(count, `查看 ${nodes.length} 条转发消息`);
+  summaryCopy.append(title, previewList, count);
+  const arrow = document.createElement("span");
+  arrow.className = "forward-arrow";
+  setText(arrow, "›");
+  summary.append(summaryCopy, arrow);
   details.append(summary);
 
   const nodeList = document.createElement("div");
@@ -274,7 +338,7 @@ function renderMessage(payload, platform) {
   updateMetrics();
 
   const entry = document.createElement("article");
-  entry.className = "message-entry";
+  entry.className = "message-entry is-incoming";
   const avatar = document.createElement("div");
   avatar.className = "message-avatar";
   setText(avatar, "PX");
@@ -284,12 +348,15 @@ function renderMessage(payload, platform) {
   const meta = document.createElement("div");
   meta.className = "message-meta";
   const name = document.createElement("strong");
-  setText(name, platform || "Parser X");
+  setText(name, "Parser X");
+  const platformBadge = document.createElement("span");
+  platformBadge.className = "message-platform";
+  setText(platformBadge, platform || "解析结果");
   const sequence = document.createElement("span");
-  setText(sequence, `消息 ${payload?.index || messageCount}`);
+  setText(sequence, `#${payload?.index || messageCount}`);
   const elapsed = document.createElement("span");
   setText(elapsed, `+${payload?.elapsed_ms || 0} ms`);
-  meta.append(name, sequence, elapsed);
+  meta.append(name, platformBadge, sequence, elapsed);
 
   const stack = document.createElement("div");
   stack.className = "component-stack";
@@ -298,6 +365,30 @@ function renderMessage(payload, platform) {
   });
   main.append(meta, stack);
   entry.append(avatar, main);
+  elements.timeline.append(entry);
+  entry.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+function renderUserMessage(text) {
+  elements.emptyState.hidden = true;
+  const entry = document.createElement("article");
+  entry.className = "message-entry is-self";
+
+  const avatar = document.createElement("div");
+  avatar.className = "message-avatar user-avatar";
+  setText(avatar, "我");
+
+  const main = document.createElement("div");
+  main.className = "message-main";
+
+  const stack = document.createElement("div");
+  stack.className = "component-stack";
+  const bubble = document.createElement("div");
+  bubble.className = "text-bubble";
+  setText(bubble, text);
+  stack.append(bubble);
+  main.append(stack);
+  entry.append(main, avatar);
   elements.timeline.append(entry);
   entry.scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
@@ -449,6 +540,8 @@ async function startRun() {
 
   resetOutput();
   elements.emptyState.hidden = true;
+  appendTimeDivider();
+  renderUserMessage(text);
   setBusy(true);
   setText(elements.runSubtitle, "正在启动真实解析流程");
 

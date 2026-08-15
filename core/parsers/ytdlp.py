@@ -110,32 +110,6 @@ class AcFunParser(YtDlpParser):
         return await self._parse_ytdlp(searched)
 
 
-class XiguaParser(YtDlpParser):
-    platform = Platform(name="xigua", display_name="西瓜视频")
-
-    @handle("ixigua.com", r"https?://(?:www\.)?ixigua\.com/\d+[^\s<>]*")
-    async def parse_xigua(self, searched: Match[str]):
-        return await self._parse_ytdlp(searched)
-
-
-class PipixiaParser(YtDlpParser):
-    platform = Platform(name="pipixia", display_name="皮皮虾")
-
-    @handle("pipix.com", r"https?://h5\.pipix\.com/[^\s<>]+")
-    @handle("pipigx.com", r"https?://h5\.pipigx\.com/[^\s<>]+")
-    async def parse_pipixia(self, searched: Match[str]):
-        return await self._parse_ytdlp(searched)
-
-
-class WeishiParser(YtDlpParser):
-    platform = Platform(name="weishi", display_name="微视")
-
-    @handle("weishi.qq.com", r"https?://(?:h5\.|isee\.)?weishi\.qq\.com/[^\s<>]+")
-    @handle("xsj.qq.com", r"https?://s\.xsj\.qq\.com/[^\s<>]+")
-    async def parse_weishi(self, searched: Match[str]):
-        return await self._parse_ytdlp(searched)
-
-
 class NeteaseMusicParser(YtDlpParser):
     platform = Platform(name="netease_music", display_name="网易云音乐")
     media_kind = "audio"

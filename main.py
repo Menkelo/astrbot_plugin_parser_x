@@ -113,12 +113,12 @@ class ParserXPlugin(Star):
             config["behavior"] = behavior
             config["config_v2_migrated"] = True
 
-        # Tieba was previously exposed through an unreliable third-party
-        # detail service. Remove stale values from upgraded installations so
-        # the deleted route does not linger in the persisted configuration.
+        # Remove stale switches for routes that are no longer registered so
+        # upgraded installations do not keep displaying retired platforms.
         platforms = config.get("platforms", {})
         if isinstance(platforms, dict):
-            platforms.pop("tieba", None)
+            for retired_platform in ("tieba", "xigua", "pipixia", "weishi"):
+                platforms.pop(retired_platform, None)
             config["platforms"] = platforms
         integrations = config.get("integrations", {})
         if isinstance(integrations, dict):

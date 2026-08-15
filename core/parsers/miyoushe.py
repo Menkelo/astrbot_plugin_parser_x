@@ -147,6 +147,115 @@ class MiyousheParser(BaseParser):
             return "\n".join(item for item in parts if item)
         return ""
 
+    @classmethod
+    def _structured_content_flow(cls, value: Any) -> list[dict[str, str]]:
+        """Extract ordered text and image blocks from MiHoYo's Quill delta."""
+
+        if isinstance(value, str):
+            try:
+                value = json.loads(value)
+            except (TypeError, ValueError):
+                return []
+        if not isinstance(value, list):
+            return []
+
+        flow: list[dict[str, str]] = []
+        text_parts: list[str] = []
+        seen_images: set[str] = set()
+
+        def flush_text() -> None:
+            if not text_parts:
+                return
+            text = cls._plain_content("".join(text_parts))
+            text_parts.clear()
+            if text:
+                flow.append({"type": "text", "text": text})
+
+        def append_embedded_text(text: str) -> None:
+            text = cls._plain_content(text)
+            if not text:
+                return
+            if text_parts and not text_parts[-1].endswith("\n"):
+                text_parts.append("\n")
+            text_parts.append(text)
+            if not text.endswith("\n"):
+                text_parts.append("\n")
+
+        for row in value:
+            if not isinstance(row, dict):
+                continue
+            insert = row.get("insert")
+            if isinstance(insert, str):
+                text_parts.append(insert)
+                continue
+            if not isinstance(insert, dict):
+                continue
+
+            image_value = (
+                insert.get("image")
+                or insert.get("image_url")
+                or insert.get("img_url")
+            )
+            if isinstance(image_value, dict):
+                image_value = (
+                    image_value.get("url")
+                    or image_value.get("image_url")
+                    or image_value.get("src")
+                )
+            image_url = normalize_image_url(image_value)
+            if image_url:
+                flush_text()
+                if image_url not in seen_images:
+                    seen_images.add(image_url)
+                    flow.append({"type": "image", "url": image_url})
+                continue
+
+            embedded_text = insert.get("backup_text")
+            if not isinstance(embedded_text, str) or not embedded_text.strip():
+                embedded_text = next(
+                    (
+                        insert.get(key)
+                        for key in ("text", "content", "describe")
+                        if isinstance(insert.get(key), str)
+                        and str(insert.get(key)).strip()
+                    ),
+                    "",
+                )
+            if not embedded_text and isinstance(insert.get("fold"), dict):
+                fold = insert["fold"]
+                embedded_text = "\n".join(
+                    item
+                    for item in (
+                        cls._plain_content(fold.get("title")),
+                        cls._plain_content(fold.get("content")),
+                    )
+                    if item
+                )
+            if embedded_text:
+                append_embedded_text(str(embedded_text))
+
+        flush_text()
+        return flow
+
+    @classmethod
+    def _ordered_content_flow(cls, post: dict[str, Any]) -> list[dict[str, str]]:
+        flow = cls._structured_content_flow(post.get("structured_content"))
+        fallback_text = cls._plain_content(post.get("content"))
+        if fallback_text and not any(block.get("type") == "text" for block in flow):
+            flow.insert(0, {"type": "text", "text": fallback_text})
+
+        seen_images = {
+            block.get("url", "")
+            for block in flow
+            if block.get("type") == "image"
+        }
+        for image_url in cls._image_urls(post):
+            if image_url in seen_images:
+                continue
+            seen_images.add(image_url)
+            flow.append({"type": "image", "url": image_url})
+        return flow
+
     @staticmethod
     def _image_urls(post: dict[str, Any]) -> list[str]:
         urls: list[str] = []
@@ -221,7 +330,14 @@ class MiyousheParser(BaseParser):
             or "米游社用户"
         )
         author_avatar = user.get("avatar_url") or user.get("avatar")
-        full_text = self._plain_content(post.get("content"))
+        ordered_flow = self._ordered_content_flow(post)
+        full_text = "\n".join(
+            block.get("text", "")
+            for block in ordered_flow
+            if block.get("type") == "text"
+        ).strip()
+        if not full_text:
+            full_text = self._plain_content(post.get("content"))
         text = full_text
         if len(text) > 4000:
             text = text[:3997] + "..."
@@ -235,16 +351,30 @@ class MiyousheParser(BaseParser):
                     ext_headers=self.headers,
                 )
             )
-        post_image_urls = self._image_urls(post)
-        body_image_urls = [item for item in post_image_urls if item != cover_url]
-        image_contents = [
-            ImageContent(self.downloader.download_img(item, ext_headers=self.headers))
-            for item in body_image_urls
-        ]
         card_flow: list[dict[str, str]] = []
-        if full_text:
-            card_flow.append({"type": "text", "text": full_text})
-        card_flow.extend({"type": "image", "url": item} for item in body_image_urls)
+        body_image_urls: list[str] = []
+        for block in ordered_flow:
+            block_type = block.get("type")
+            if block_type == "text" and block.get("text"):
+                card_flow.append({"type": "text", "text": block["text"]})
+                continue
+            if block_type != "image":
+                continue
+            image_url = block.get("url", "")
+            if not image_url or image_url == cover_url or image_url in body_image_urls:
+                continue
+            body_image_urls.append(image_url)
+            card_flow.append({"type": "image", "url": image_url})
+        if full_text and not any(block.get("type") == "text" for block in card_flow):
+            card_flow.insert(0, {"type": "text", "text": full_text})
+
+        image_content_by_url = {
+            image_url: ImageContent(
+                self.downloader.download_img(image_url, ext_headers=self.headers)
+            )
+            for image_url in body_image_urls
+        }
+        image_contents = list(image_content_by_url.values())
         video_contents = []
         video_url, duration = self._video_url(post_container.get("vod_list"))
         if video_url:
@@ -268,10 +398,15 @@ class MiyousheParser(BaseParser):
         native_parts: list[str | ImageContent] = []
         if cover_content is not None:
             native_parts.append(cover_content)
-        native_text = "\n\n".join(item for item in (title, text) if item).strip()
-        if native_text:
-            native_parts.append(native_text)
-        native_parts.extend(image_contents)
+        if title:
+            native_parts.append(title)
+        for block in card_flow:
+            if block.get("type") == "text" and block.get("text"):
+                native_parts.append(block["text"])
+                continue
+            image_content = image_content_by_url.get(block.get("url", ""))
+            if image_content is not None:
+                native_parts.append(image_content)
         batches = [DeliveryBatch(native_parts, mode="forward")] if native_parts else []
         batches.extend(DeliveryBatch([video]) for video in video_contents)
 

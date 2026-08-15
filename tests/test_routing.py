@@ -199,6 +199,30 @@ def test_tieba_is_fully_removed_from_routes_and_configuration():
     assert not (Path(__file__).parents[1] / "core" / "parsers" / "tieba.py").exists()
 
 
+def test_retired_ytdlp_platforms_are_fully_removed():
+    classes = BaseParser.get_all_subclass()
+    keywords = {
+        keyword for parser in classes for keyword, _ in parser._key_patterns
+    }
+    schema = json.loads(
+        (Path(__file__).parents[1] / "_conf_schema.json").read_text(encoding="utf-8")
+    )
+
+    assert not {
+        "ixigua.com",
+        "pipix.com",
+        "pipigx.com",
+        "weishi.qq.com",
+        "xsj.qq.com",
+    } & keywords
+    assert not {"xigua", "pipixia", "weishi"} & set(
+        schema["platforms"]["items"]
+    )
+    assert not {"XiguaParser", "PipixiaParser", "WeishiParser"} & {
+        parser.__name__ for parser in classes
+    }
+
+
 def test_config_schema_uses_latest_astrbot_panel_features():
     schema = json.loads(
         (Path(__file__).parents[1] / "_conf_schema.json").read_text(encoding="utf-8")
@@ -378,6 +402,40 @@ def test_domestic_parser_helpers_cover_new_routes():
         '<script>$render_data = [{"status":{"id":"1",'
         '"text":"<p>详情页正文</p>"}}][0]</script>'
     ) == {"id": "1", "text": "<p>详情页正文</p>"}
+
+
+def test_miyoushe_structured_content_preserves_text_image_order():
+    cover = "https://img.example.com/cover.jpg"
+    body = "https://img.example.com/body.jpg"
+    missing = "https://img.example.com/missing.jpg"
+    post = {
+        "content": "<p>降级正文</p>",
+        "structured_content": json.dumps(
+            [
+                {"insert": {"image": cover}},
+                {"insert": "第一段\n"},
+                {"insert": {"image": body}},
+                {
+                    "insert": {
+                        "backup_text": "【注意事项】\n折叠正文\n",
+                        "fold": {"title": "[]", "content": "[]"},
+                    }
+                },
+                {"insert": {"divider": "line_2"}},
+                {"insert": "尾段\n"},
+            ],
+            ensure_ascii=False,
+        ),
+        "images": [cover, body, missing],
+    }
+
+    assert MiyousheParser._ordered_content_flow(post) == [
+        {"type": "image", "url": cover},
+        {"type": "text", "text": "第一段"},
+        {"type": "image", "url": body},
+        {"type": "text", "text": "【注意事项】\n折叠正文\n尾段"},
+        {"type": "image", "url": missing},
+    ]
 
 
 @pytest.mark.parametrize(
@@ -1115,6 +1173,23 @@ def test_miyoushe_uses_native_delivery_and_enables_comments(tmp_path):
                             "uid": "42",
                             "subject": "文章标题",
                             "content": "<p>第一段</p><p>第二段</p>",
+                            "structured_content": json.dumps(
+                                [
+                                    {
+                                        "insert": {
+                                            "image": "https://img.example.com/cover.jpg"
+                                        }
+                                    },
+                                    {"insert": "第一段\n"},
+                                    {
+                                        "insert": {
+                                            "image": "https://img.example.com/body.jpg"
+                                        }
+                                    },
+                                    {"insert": "第二段\n"},
+                                ],
+                                ensure_ascii=False,
+                            ),
                             "cover": "https://img.example.com/cover.jpg",
                             "images": ["https://img.example.com/body.jpg"],
                             "created_at": 1_700_000_000,
@@ -1171,8 +1246,10 @@ def test_miyoushe_uses_native_delivery_and_enables_comments(tmp_path):
     images, video = result.delivery.batches
     assert images.mode == "forward"
     assert isinstance(images.parts[0], ImageContent)
-    assert "文章标题" in images.parts[1]
-    assert isinstance(images.parts[2], ImageContent)
+    assert images.parts[1] == "文章标题"
+    assert images.parts[2] == "第一段"
+    assert isinstance(images.parts[3], ImageContent)
+    assert images.parts[4] == "第二段"
     assert isinstance(video.parts[0], VideoContent)
     assert "comment_document_task_factory" not in result.extra
     assert callable(result.extra["comment_image_task_factory"])
@@ -1180,8 +1257,9 @@ def test_miyoushe_uses_native_delivery_and_enables_comments(tmp_path):
     assert result.extra["text_card_avatar"].endswith("avatar.jpg")
     assert result.extra["text_card_media"].endswith("cover.jpg")
     assert result.extra["text_card_flow"] == [
-        {"type": "text", "text": "第一段\n第二段"},
+        {"type": "text", "text": "第一段"},
         {"type": "image", "url": "https://img.example.com/body.jpg"},
+        {"type": "text", "text": "第二段"},
     ]
     assert result.extra["delivery_text_card_consume_non_video"] is True
 
@@ -1432,9 +1510,6 @@ def test_media_only_card_does_not_use_share_url_as_body(tmp_path):
         ("xiaohongshu", "小红书", "#ff2442"),
         ("weibo", "微博", "#ff8200"),
         ("acfun", "AcFun", "#fd4c5b"),
-        ("xigua", "西瓜视频", "#ff4a45"),
-        ("pipixia", "皮皮虾", "#ff5a36"),
-        ("weishi", "微视", "#ff5a65"),
     ],
 )
 def test_unified_content_card_keeps_only_platform_brand_identity(
@@ -4880,7 +4955,12 @@ def test_plugin_initializes_and_registers_aiocqhttp_parsers(tmp_path):
         schema=schema,
     )
     config["bili_comment"] = "false"
-    config["platforms"] = {"tieba": True}
+    config["platforms"] = {
+        "tieba": True,
+        "xigua": True,
+        "pipixia": True,
+        "weishi": True,
+    }
     config["integrations"] = {"tieba_api_base": "http://example.invalid/api"}
 
     async def run_lifecycle():
@@ -4898,6 +4978,11 @@ def test_plugin_initializes_and_registers_aiocqhttp_parsers(tmp_path):
                 assert "channels.weixin.qq.com" not in plugin.parser_map
                 assert "tiktok.com" not in plugin.parser_map
                 assert "youtube.com" not in plugin.parser_map
+                assert "ixigua.com" not in plugin.parser_map
+                assert "pipix.com" not in plugin.parser_map
+                assert "pipigx.com" not in plugin.parser_map
+                assert "weishi.qq.com" not in plugin.parser_map
+                assert "xsj.qq.com" not in plugin.parser_map
                 assert plugin.key_pattern_list
                 assert plugin.config["comment_settings_migrated"] is True
                 assert plugin.config["config_v2_migrated"] is True
@@ -4905,6 +4990,9 @@ def test_plugin_initializes_and_registers_aiocqhttp_parsers(tmp_path):
                 assert plugin.config["behavior"]["show_download_fail_tip"] is True
                 assert plugin.config["behavior"]["disabled_sessions"] == []
                 assert "tieba" not in plugin.config["platforms"]
+                assert "xigua" not in plugin.config["platforms"]
+                assert "pipixia" not in plugin.config["platforms"]
+                assert "weishi" not in plugin.config["platforms"]
                 assert "integrations" not in plugin.config
                 assert plugin.parser_map["b23.tv"].enable_comment_card is False
                 assert plugin.render_service.available
