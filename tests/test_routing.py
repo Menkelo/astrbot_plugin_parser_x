@@ -1452,6 +1452,96 @@ def test_bilibili_dynamic_defers_shared_card_to_sender(tmp_path):
     assert text_only_contents == []
 
 
+def test_bilibili_dynamic_repost_recovers_original_body_and_images():
+    original_modules = {
+        "module_author": {"name": "原UP主"},
+        "module_dynamic": {
+            "major": {
+                "opus": {
+                    "summary": {"text": "原动态完整正文"},
+                    "pics": [{"url": "https://i0.hdslb.com/original.jpg"}],
+                }
+            }
+        },
+    }
+    modules = {"module_dynamic": {"desc": {"text": "转发时补充的话"}}}
+    item = {
+        "modules": modules,
+        "orig": {"modules": original_modules},
+    }
+
+    assert BiliDynamicService.extract_dynamic_text(item, modules) == (
+        "转发时补充的话\n\n转发自 @原UP主：\n原动态完整正文"
+    )
+    assert BiliDynamicService.extract_dynamic_image_urls(item, modules) == [
+        "https://i0.hdslb.com/original.jpg"
+    ]
+
+
+def test_bilibili_single_image_dynamic_marks_body_for_direct_reply(tmp_path):
+    from astrbot_plugin_parser_x.core.data import (
+        Author,
+        ParseResult,
+        Platform,
+    )
+    from astrbot_plugin_parser_x.core.data import (
+        ImageContent as PluginImageContent,
+    )
+
+    class FakeParser:
+        headers = {}
+
+        @staticmethod
+        def create_image_contents(urls, **_kwargs):
+            return [
+                PluginImageContent(tmp_path / f"image-{index}.jpg")
+                for index, _url in enumerate(urls)
+            ]
+
+        @staticmethod
+        def create_author(name, _avatar):
+            return Author(name=name)
+
+        @staticmethod
+        def result(**kwargs):
+            return ParseResult(
+                platform=Platform(name="bilibili", display_name="B站"),
+                **kwargs,
+            )
+
+    service = BiliDynamicService(FakeParser())
+
+    async def fake_fetch(_dynamic_id):
+        return {
+            "item": {
+                "modules": {
+                    "module_author": {
+                        "name": "UP主",
+                        "face": "https://i0.hdslb.com/avatar.jpg",
+                        "pub_ts": 1_700_000_000,
+                    },
+                    "module_dynamic": {
+                        "desc": {"text": "不能被漏掉的动态正文"},
+                        "major": {
+                            "opus": {
+                                "pics": [{"url": "https://i0.hdslb.com/dynamic.jpg"}]
+                            }
+                        },
+                    },
+                }
+            }
+        }
+
+    service._fetch_dynamic_raw = fake_fetch
+    result = asyncio.run(service.parse_dynamic(123456))
+
+    assert result.text == "不能被漏掉的动态正文"
+    assert len(result.contents) == 1
+    assert result.extra["reply_original_for_single_image"] is True
+    assert result.extra["send_text"] is True
+    assert "render_text_card" not in result.extra
+
+
 def test_bilibili_comment_normalization_covers_rconsole_visible_fields(tmp_path):
     class FakeParser:
         headers = {}
@@ -2449,7 +2539,14 @@ def test_onebot_message_chain_uses_public_aiocqhttp_conversion():
 
 
 def test_single_image_result_replies_to_original_message(tmp_path):
-    from astrbot_plugin_parser_x.core.data import ImageContent as PluginImageContent
+    from astrbot_plugin_parser_x.core.data import (
+        Author,
+        ParseResult,
+        Platform,
+    )
+    from astrbot_plugin_parser_x.core.data import (
+        ImageContent as PluginImageContent,
+    )
     from astrbot_plugin_parser_x.main import ParserXPlugin
 
     image_path = tmp_path / "single.jpg"
@@ -2488,13 +2585,16 @@ def test_single_image_result_replies_to_original_message(tmp_path):
 
     event = Event()
     content = PluginImageContent(image_path)
-    result = SimpleNamespace(
+    result = ParseResult(
+        platform=Platform(name="bilibili", display_name="B站"),
+        author=Author(name="UP主"),
+        title="动态标题",
         contents=[content],
-        comment_contents=[],
-        extra={"reply_original_for_single_image": True},
-        platform=SimpleNamespace(display_name="测试"),
-        text="",
-        extra_info=None,
+        extra={
+            "reply_original_for_single_image": True,
+            "send_text": True,
+        },
+        text="不能被漏掉的动态正文",
         url="https://example.com",
     )
 
@@ -2511,7 +2611,9 @@ def test_single_image_result_replies_to_original_message(tmp_path):
     assert len(event.sent) == 1
     assert isinstance(event.sent[0][0], Reply)
     assert event.sent[0][0].id == 2468
-    assert isinstance(event.sent[0][1], MessageImage)
+    assert isinstance(event.sent[0][1], Plain)
+    assert "不能被漏掉的动态正文" in event.sent[0][1].text
+    assert isinstance(event.sent[0][2], MessageImage)
 
 
 def test_delivery_plan_sends_weibo_body_before_single_image_reply(tmp_path):
@@ -2671,11 +2773,55 @@ def test_delivery_plan_replaces_summary_with_unified_card(tmp_path):
 
     assert plugin.text_renderer.kwargs["platform_key"] == "weibo"
     assert plugin.text_renderer.kwargs["text"] == "正文必须进入统一卡片"
-    assert len(event.sent) == 2
-    assert len(event.sent[0]) == 1
-    assert isinstance(event.sent[0][0], MessageImage)
-    assert isinstance(event.sent[1][0], Reply)
-    assert isinstance(event.sent[1][1], MessageImage)
+    assert len(event.sent) == 1
+    assert len(event.sent[0]) == 3
+    assert isinstance(event.sent[0][0], Reply)
+    assert isinstance(event.sent[0][1], MessageImage)
+    assert isinstance(event.sent[0][2], MessageImage)
+
+
+def test_delivery_card_coalesces_rich_text_images_but_keeps_video_separate(
+    tmp_path,
+):
+    from astrbot_plugin_parser_x.core.data import (
+        DeliveryBatch,
+    )
+    from astrbot_plugin_parser_x.core.data import (
+        ImageContent as PluginImageContent,
+    )
+    from astrbot_plugin_parser_x.core.data import (
+        VideoContent as PluginVideoContent,
+    )
+    from astrbot_plugin_parser_x.main import ParserXPlugin
+
+    card = PluginImageContent(tmp_path / "card.jpg")
+    cover = PluginImageContent(tmp_path / "cover.jpg")
+    body_image = PluginImageContent(tmp_path / "body.jpg")
+    video = PluginVideoContent(tmp_path / "video.mp4")
+    batches = [
+        DeliveryBatch([card, cover]),
+        DeliveryBatch(["富文本正文", body_image], mode="forward"),
+        DeliveryBatch([video]),
+    ]
+
+    ParserXPlugin._coalesce_delivery_card_batches(batches, 0)
+
+    assert len(batches) == 2
+    assert batches[0].parts == [card, cover, "富文本正文", body_image]
+    assert batches[0].mode == "forward"
+    assert batches[1].parts == [video]
+
+    large_batches = [
+        DeliveryBatch([card]),
+        DeliveryBatch(
+            [
+                PluginImageContent(tmp_path / f"gallery-{index}.jpg")
+                for index in range(9)
+            ]
+        ),
+    ]
+    ParserXPlugin._coalesce_delivery_card_batches(large_batches, 0)
+    assert large_batches[0].mode == "forward"
 
 
 def test_unified_card_embeds_structured_comments_only_once(tmp_path):
@@ -3326,6 +3472,82 @@ def test_single_image_shared_card_keeps_body_in_direct_reply(tmp_path):
     assert len(event.sent[0]) == 3
     assert isinstance(event.sent[0][1], MessageImage)
     assert isinstance(event.sent[0][2], MessageImage)
+
+
+def test_multi_image_shared_card_uses_one_forward_node(tmp_path):
+    from astrbot_plugin_parser_x.core.data import (
+        ImageContent as PluginImageContent,
+    )
+    from astrbot_plugin_parser_x.core.data import (
+        ParseResult,
+        Platform,
+    )
+    from astrbot_plugin_parser_x.main import ParserXPlugin
+
+    first_path = tmp_path / "first.jpg"
+    second_path = tmp_path / "second.jpg"
+    first_path.write_bytes(b"first")
+    second_path.write_bytes(b"second")
+    plugin = object.__new__(ParserXPlugin)
+    plugin.config = {"behavior": {"show_download_fail_tip": True}}
+    plugin.cache_dir = tmp_path
+    plugin._background_tasks = set()
+
+    class FakeTextRenderer:
+        async def render_text_card(self, out_path, **_kwargs):
+            _save_render_fixture(out_path, size=(760, 320))
+
+    plugin.text_renderer = FakeTextRenderer()
+
+    class Event:
+        message_obj = SimpleNamespace(message_id=1359)
+
+        def __init__(self):
+            self.sent = []
+
+        @staticmethod
+        def get_sender_id():
+            return "42"
+
+        @staticmethod
+        def get_sender_name():
+            return "用户"
+
+        @staticmethod
+        def chain_result(chain):
+            return chain
+
+        @staticmethod
+        def plain_result(text):
+            return [Plain(text)]
+
+        async def send(self, result):
+            self.sent.append(result)
+
+    async def fake_download_content(_self, content):
+        return content, await content.get_path(), None
+
+    result = ParseResult(
+        platform=Platform(name="xiaohongshu", display_name="小红书"),
+        text="图文正文",
+        contents=[
+            PluginImageContent(first_path),
+            PluginImageContent(second_path),
+        ],
+        extra={"render_text_card": True},
+    )
+    event = Event()
+    with patch.object(ParserXPlugin, "_download_content", fake_download_content):
+        asyncio.run(plugin._send_parse_result(event, result))
+
+    assert len(event.sent) == 1
+    assert isinstance(event.sent[0][0], Nodes)
+    assert len(event.sent[0][0].nodes) == 1
+    assert len(event.sent[0][0].nodes[0].content) == 3
+    assert all(
+        isinstance(segment, MessageImage)
+        for segment in event.sent[0][0].nodes[0].content
+    )
 
 
 def test_video_shared_card_and_video_are_sent_as_separate_messages(tmp_path):

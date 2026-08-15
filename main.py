@@ -292,6 +292,47 @@ class ParserXPlugin(Star):
             number = default
         return max(1.0, min(number, maximum))
 
+    @staticmethod
+    def _coalesce_delivery_card_batches(
+        batches: list[DeliveryBatch],
+        card_batch_index: int,
+    ) -> None:
+        """Keep a rendered card and its following text/images in one message group."""
+        if not 0 <= card_batch_index < len(batches):
+            return
+
+        anchor = batches[card_batch_index]
+        merged_parts = list(anchor.parts)
+        merged_mode = anchor.mode
+        reply_original = anchor.reply_original
+        next_index = card_batch_index + 1
+
+        while next_index < len(batches):
+            candidate = batches[next_index]
+            if not candidate.parts or not all(
+                isinstance(part, (str, ImageContent, GraphicsContent))
+                for part in candidate.parts
+            ):
+                break
+
+            merged_parts.extend(candidate.parts)
+            if candidate.mode == "forward":
+                merged_mode = "forward"
+            reply_original = reply_original or candidate.reply_original
+            batches.pop(next_index)
+
+        image_count = sum(
+            isinstance(part, (ImageContent, GraphicsContent)) for part in merged_parts
+        )
+        if image_count > 9:
+            merged_mode = "forward"
+
+        batches[card_batch_index] = DeliveryBatch(
+            merged_parts,
+            mode=merged_mode,
+            reply_original=reply_original,
+        )
+
     async def _build_text_card_content(
         self,
         result: ParseResult,
@@ -569,6 +610,14 @@ class ParserXPlugin(Star):
                             mode=original.mode,
                             reply_original=original.reply_original,
                         )
+                        if result.extra.get(
+                            "delivery_text_card_coalesce",
+                            True,
+                        ):
+                            self._coalesce_delivery_card_batches(
+                                batches,
+                                batch_index,
+                            )
                         comments_embedded = card_comments_embedded
 
         show_download_fail_tip = self._show_download_fail_tip()
@@ -902,11 +951,16 @@ class ParserXPlugin(Star):
                 # 时较常见的 WebSocket API call timeout），降级为逐条发送，避免整条消息
                 # 因合并转发失败而完全发不出（此前图文/图集分支无兜底，超时即静默丢失）。
                 try:
-                    nodes = Nodes([])
-                    for seg in segs:
-                        nodes.nodes.append(
-                            Node(uin=node_uin, name=node_name, content=[seg])
-                        )
+                    nodes = Nodes(
+                        [
+                            Node(
+                                uin=node_uin,
+                                name=node_name,
+                                content=segs[offset : offset + 20],
+                            )
+                            for offset in range(0, len(segs), 20)
+                        ]
+                    )
                     if nodes.nodes:
                         await event.send(event.chain_result([nodes]))
                     return

@@ -455,28 +455,15 @@ class BiliDynamicService:
         return None
 
     @classmethod
-    def extract_dynamic_text(cls, item: dict, modules: Any) -> str:
-        """
-        稳定提取 B站动态正文。
-
-        优先级：
-        1. module_dynamic.desc.text
-        2. module_dynamic.desc.rich_text_nodes
-        3. module_dynamic.major.opus.summary.text
-        4. module_dynamic.major.opus.summary.rich_text_nodes
-        5. module_dynamic.major.opus.content.paragraphs
-        6. module_dynamic.major.archive.desc
-        7. module_dynamic.major.archive.title
-        8. opus modules 列表里的话题/段落/链接卡
-        """
+    def _extract_dynamic_text_value(cls, item: dict, modules: Any) -> str:
         modules_list_text = cls.extract_modules_list_text(modules)
 
         if not isinstance(modules, dict):
-            return modules_list_text or "（无正文）"
+            return modules_list_text
 
         md = modules.get("module_dynamic") or {}
         if not isinstance(md, dict):
-            return modules_list_text or "（无正文）"
+            return modules_list_text
 
         desc = md.get("desc") or {}
         if isinstance(desc, dict):
@@ -524,7 +511,41 @@ class BiliDynamicService:
         if isinstance(item, dict):
             item_modules_text = cls.extract_modules_list_text(item.get("modules"))
 
-        return modules_list_text or item_modules_text or "（无正文）"
+        return modules_list_text or item_modules_text
+
+    @classmethod
+    def extract_dynamic_text(cls, item: dict, modules: Any) -> str:
+        """
+        稳定提取 B站动态正文，并在转发动态中补回原动态正文。
+
+        优先级：
+        1. module_dynamic.desc.text / rich_text_nodes
+        2. module_dynamic.major.opus.summary / content.paragraphs
+        3. module_dynamic.major.archive.desc / title
+        4. opus modules 列表里的话题、段落和链接卡
+        5. item.orig 中的原动态正文
+        """
+        primary_text = cls._extract_dynamic_text_value(item, modules)
+        original = item.get("orig") if isinstance(item, dict) else None
+        if not isinstance(original, dict):
+            return primary_text or "（无正文）"
+
+        original_modules = original.get("modules") or {}
+        original_text = cls._extract_dynamic_text_value(original, original_modules)
+        if not original_text:
+            return primary_text or "（无正文）"
+
+        original_author, _, _ = cls.extract_author_info(original_modules)
+        original_label = (
+            f"转发自 @{original_author}："
+            if original_author and original_author != "B站用户"
+            else "转发动态："
+        )
+        original_body = f"{original_label}\n{original_text}"
+        if primary_text and primary_text not in {"转发动态", "转发"}:
+            if primary_text != original_text:
+                return f"{primary_text}\n\n{original_body}"
+        return original_body
 
     @classmethod
     def extract_modules_list_image_urls(cls, modules: Any) -> list[str]:
@@ -611,6 +632,15 @@ class BiliDynamicService:
 
         if isinstance(item, dict):
             image_urls.extend(cls.extract_modules_list_image_urls(item.get("modules")))
+
+            original = item.get("orig")
+            if isinstance(original, dict):
+                image_urls.extend(
+                    cls.extract_dynamic_image_urls(
+                        original,
+                        original.get("modules") or {},
+                    )
+                )
 
         return cls._dedupe_image_urls(image_urls)
 
@@ -747,8 +777,33 @@ class BiliDynamicService:
         author_name, author_avatar, pub_ts = self.extract_author_info(modules)
 
         dynamic_title = self.extract_dynamic_title(item, modules)
-        full_text = self.neutralize_at_text(self.extract_dynamic_text(item, modules))
+        original = item.get("orig") if isinstance(item, dict) else None
+        if not dynamic_title and isinstance(original, dict):
+            dynamic_title = self.extract_dynamic_title(
+                original,
+                original.get("modules") or {},
+            )
+
+        full_text = self.extract_dynamic_text(item, modules)
         image_urls = self.extract_dynamic_image_urls(item, modules)
+
+        if not full_text or full_text == "（无正文）":
+            page_raw = await self._fetch_opus_page_raw(dynamic_id)
+            page_item = (page_raw or {}).get("item") or {}
+            page_modules = page_item.get("modules") or {}
+            page_text = self.extract_dynamic_text(page_item, page_modules)
+            if page_text and page_text != "（无正文）":
+                full_text = page_text
+            if not dynamic_title:
+                dynamic_title = self.extract_dynamic_title(page_item, page_modules)
+            image_urls = self._dedupe_image_urls(
+                [
+                    *image_urls,
+                    *self.extract_dynamic_image_urls(page_item, page_modules),
+                ]
+            )
+
+        full_text = self.neutralize_at_text(full_text or "（无正文）")
 
         media_headers = self.parser.headers.copy()
         media_headers["Referer"] = f"https://www.bilibili.com/opus/{dynamic_id}"
@@ -776,7 +831,10 @@ class BiliDynamicService:
             f"正文 {len(full_text or '')} 字; 单图直发={single_image_work}"
         )
 
-        extra = {"reply_original_for_single_image": single_image_work}
+        extra = {
+            "reply_original_for_single_image": single_image_work,
+            "send_text": single_image_work,
+        }
         if not single_image_work:
             card_info = ["正文完整保留"]
             if full_images:
