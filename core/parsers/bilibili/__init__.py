@@ -676,13 +676,13 @@ class BilibiliParser(BaseParser):
         url += f"?p={page_info.index + 1}" if page_info.index > 0 else ""
 
         # === B站评论区总开关 ===
-        # 开启：把结构化评论嵌入视频长卡；失败时保留无评论正文卡。
+        # 开启：生成独立评论区图片，发送阶段放入合并转发。
         # 关闭：直接跳过，减少请求和渲染耗时。
-        comment_document_task_factory = None
+        comment_image_task_factory = None
         if self.enable_comment_card:
 
-            async def build_comment_document():
-                return await self.comment_feed.build_document(
+            async def build_comment_images():
+                return await self.comment_feed.build_images(
                     video_info.aid,
                     1,
                     video_title=page_info.title,
@@ -690,7 +690,7 @@ class BilibiliParser(BaseParser):
                     owner_mid=video_info.owner.mid,
                 )
 
-            comment_document_task_factory = build_comment_document
+            comment_image_task_factory = build_comment_images
 
         stream_task = self._get_stream_ladders_with_qn_fallback(
             video,
@@ -836,10 +836,10 @@ class BilibiliParser(BaseParser):
                 "bilibili",
                 emote_catalog,
             )
-        if comment_document_task_factory:
+        if comment_image_task_factory:
             extra.update(
                 {
-                    "comment_document_task_factory": comment_document_task_factory,
+                    "comment_image_task_factory": comment_image_task_factory,
                     "comment_timeout": self.comment_timeout,
                 }
             )

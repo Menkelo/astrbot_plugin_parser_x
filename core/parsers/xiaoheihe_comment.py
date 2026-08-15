@@ -262,7 +262,7 @@ class XiaoheiheCommentFeed(SocialCommentFeedBase):
             await self._embed_avatars(document.entries)
         return document
 
-    def build_images(
+    async def build_images(
         self,
         link_id: str,
         threads: list[dict],
@@ -272,14 +272,13 @@ class XiaoheiheCommentFeed(SocialCommentFeedBase):
         owner_id: str | int | None,
         total: int | None = None,
     ) -> list[ImageContent]:
-        document = self._build_document(
+        document = await self.build_document(
             link_id,
             threads,
             work_title=work_title,
             cover=cover,
             owner_id=owner_id,
             total=total,
-            emote_map=fallback_emote_map("xiaoheihe"),
         )
         if document is None:
             return []

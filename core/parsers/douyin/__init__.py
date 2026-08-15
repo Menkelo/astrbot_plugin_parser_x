@@ -73,8 +73,8 @@ class DouyinParser(BaseParser):
         if not self.enable_comment_card or not self.cookies or not aweme_id:
             return {}
 
-        async def build_comment_document():
-            return await self.comment_feed.build_document(
+        async def build_comment_images():
+            return await self.comment_feed.build_images(
                 str(aweme_id),
                 work_title=title,
                 cover=cover,
@@ -82,7 +82,7 @@ class DouyinParser(BaseParser):
             )
 
         return {
-            "comment_document_task_factory": build_comment_document,
+            "comment_image_task_factory": build_comment_images,
             "comment_timeout": self.comment_timeout,
         }
 
