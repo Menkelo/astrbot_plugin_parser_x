@@ -22,3 +22,10 @@
 - Repository: https://github.com/AstrBotDevs/AstrBot
 - Documentation: https://docs.astrbot.app/
 - Use in this project: public plugin API, metadata, storage and aiocqhttp integration contract.
+
+## xhshow
+
+- Repository: https://github.com/Cloxl/xhshow
+- License: MIT License
+- Use in this project: generate the current Xiaohongshu web request signature headers for the optional,
+  Cookie-authenticated video comment feed. Parser X does not start or bundle a browser for this feature.

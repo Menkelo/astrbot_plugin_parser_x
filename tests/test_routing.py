@@ -20,6 +20,7 @@ from PIL import Image, ImageDraw
 
 from core.comment_canvas import (
     DOUYIN_THEME,
+    XIAOHONGSHU_THEME,
     CommentAuthor,
     CommentDocument,
     CommentEntry,
@@ -55,6 +56,7 @@ from core.parsers.douyin.comment_feed import DouyinCommentFeed
 from core.parsers.miyoushe_comment import MiyousheCommentFeed
 from core.parsers.weibo_comment import WeiboCommentFeed
 from core.parsers.xiaoheihe_comment import XiaoheiheCommentFeed
+from core.parsers.xiaohongshu_comment import XiaohongshuCommentFeed
 from core.parsers.ytdlp import AcFunParser, NeteaseMusicParser
 from core.platform_emotes import (
     build_bilibili_emote_map,
@@ -110,6 +112,84 @@ def test_comment_settings_normalize_bool_and_clamp_values():
         legacy_enabled="false",
     )
     assert legacy.enabled is False
+
+
+@pytest.mark.parametrize(
+    "parser_cls",
+    [
+        BilibiliParser,
+        DouyinParser,
+        WeiboParser,
+        XiaoHongShuParser,
+        XiaoheiheParser,
+        MiyousheParser,
+    ],
+)
+def test_all_parser_results_remove_comment_tasks_without_video(parser_cls, tmp_path):
+    async def build_comment_images():
+        return []
+
+    result = parser_cls.result(
+        contents=[ImageContent(tmp_path / "image.jpg")],
+        extra={
+            "comment_image_task_factory": build_comment_images,
+            "comment_document_task_factory": build_comment_images,
+            "comment_timeout": 45,
+        },
+    )
+
+    assert result.has_video is False
+    assert "comment_image_task_factory" not in result.extra
+    assert "comment_document_task_factory" not in result.extra
+    assert "comment_timeout" not in result.extra
+
+
+def test_parser_results_keep_comment_tasks_for_video_contents_and_delivery(tmp_path):
+    from core.data import DeliveryBatch, DeliveryPlan
+
+    async def build_comment_images():
+        return []
+
+    direct = WeiboParser.result(
+        contents=[VideoContent(tmp_path / "direct.mp4")],
+        extra={
+            "comment_image_task_factory": build_comment_images,
+            "comment_timeout": 45,
+        },
+    )
+    planned_video = VideoContent(tmp_path / "planned.mp4")
+    planned = MiyousheParser.result(
+        delivery=DeliveryPlan([DeliveryBatch([planned_video])]),
+        extra={
+            "comment_image_task_factory": build_comment_images,
+            "comment_timeout": 45,
+        },
+    )
+
+    for result in (direct, planned):
+        assert result.has_video is True
+        assert callable(result.extra["comment_image_task_factory"])
+        assert result.extra["comment_timeout"] == 45
+
+
+def test_parse_result_constructor_treats_dynamic_media_as_non_video(tmp_path):
+    from core.data import DynamicContent, ParseResult, Platform
+
+    async def build_comment_images():
+        return []
+
+    result = ParseResult(
+        platform=Platform(name="demo", display_name="演示"),
+        contents=[DynamicContent(tmp_path / "animation.gif")],
+        extra={
+            "comment_image_task_factory": build_comment_images,
+            "comment_timeout": 45,
+        },
+    )
+
+    assert result.has_video is False
+    assert "comment_image_task_factory" not in result.extra
+    assert "comment_timeout" not in result.extra
 
 
 def test_comment_timeout_values_are_bounded_and_invalid_values_fall_back():
@@ -239,12 +319,15 @@ def test_config_schema_uses_latest_astrbot_panel_features():
     assert schema["behavior"]["items"]["disabled_sessions"]["collapsed"] is True
     assert schema["comments"]["items"]["xiaoheihe"]["default"] is True
     assert schema["comments"]["items"]["miyoushe"]["default"] is True
+    assert schema["comments"]["items"]["xiaohongshu"]["default"] is False
+    assert schema["cookies"]["items"]["xiaohongshu_cookie"]["default"] == ""
 
 
 def test_runtime_dependencies_do_not_require_local_browser():
     repo_root = Path(__file__).parents[1]
     requirements = (repo_root / "requirements.txt").read_text(encoding="utf-8")
     assert "playwright" not in requirements.lower()
+    assert "xhshow>=0.2,<0.3" in requirements.lower()
     source_files = [repo_root / "main.py", *(repo_root / "core").rglob("*.py")]
     source = "\n".join(path.read_text(encoding="utf-8") for path in source_files)
     assert "playwright" not in source.lower()
@@ -461,6 +544,439 @@ def test_xiaohongshu_removes_internal_topic_markers_only_inside_hashtags():
     )
 
 
+def test_xiaohongshu_query_value_preserves_encoded_token_characters():
+    assert (
+        XiaoHongShuParser._query_value(
+            "https://www.xiaohongshu.com/explore/demo?"
+            "xsec_token=token%2Bvalue%3D&xsec_source=pc_feed",
+            "xsec_token",
+        )
+        == "token+value="
+    )
+
+
+def test_xiaohongshu_attaches_comments_only_to_video_notes(tmp_path):
+    class FakeDownloader:
+        def download_img(self, _url, **_kwargs):
+            async def done():
+                return tmp_path / "image.jpg"
+
+            return asyncio.create_task(done())
+
+        def download_video(self, _url, **_kwargs):
+            async def done():
+                return tmp_path / "video.mp4"
+
+            return asyncio.create_task(done())
+
+    config = {
+        "cache_dir": str(tmp_path),
+        "cookies": {
+            "xiaohongshu_cookie": "a1=test-a1; web_session=test-session"
+        },
+        "comments": {
+            "xiaohongshu": True,
+            "display_count": 7,
+            "timeout": 45,
+        },
+    }
+    calls = []
+
+    async def run():
+        parser = XiaoHongShuParser(config, FakeDownloader())
+
+        async def fake_build_images(*args, **kwargs):
+            calls.append((args, kwargs))
+            return []
+
+        parser.comment_feed.build_images = fake_build_images
+        final_url = (
+            "https://www.xiaohongshu.com/explore/note123?"
+            "xsec_token=token%2Bvalue%3D&xsec_source=pc_feed"
+        )
+        video_data = {
+            "noteId": "note123",
+            "type": "video",
+            "title": "视频标题",
+            "desc": "视频正文",
+            "user": {
+                "userId": "owner42",
+                "nickname": "作者",
+                "avatar": "https://img.example.com/avatar.jpg",
+            },
+            "interactInfo": {"commentCount": "128"},
+            "imageList": [{"urlDefault": "https://img.example.com/cover.jpg"}],
+            "video": {
+                "media": {
+                    "stream": {
+                        "h264": [{"url": "https://video.example.com/video.mp4"}]
+                    }
+                }
+            },
+        }
+        image_data = {
+            **video_data,
+            "type": "normal",
+            "video": None,
+            "imageList": [{"urlDefault": "https://img.example.com/image.jpg"}],
+        }
+
+        video_result = parser._process_explore_data(
+            video_data,
+            final_url,
+            note_id="note123",
+        )
+        image_result = parser._process_explore_data(
+            image_data,
+            final_url,
+            note_id="note123",
+        )
+        await video_result.extra["comment_image_task_factory"]()
+        await asyncio.gather(
+            *(
+                content.get_path()
+                for content in [*video_result.contents, *image_result.contents]
+            )
+        )
+        await parser.close_session()
+        return video_result, image_result
+
+    video_result, image_result = asyncio.run(run())
+    assert callable(video_result.extra["comment_image_task_factory"])
+    assert video_result.extra["comment_timeout"] == 45
+    assert "comment_image_task_factory" not in image_result.extra
+    assert len(calls) == 1
+    args, kwargs = calls[0]
+    assert args == ("note123", "token+value=")
+    assert kwargs == {
+        "work_title": "视频标题",
+        "cover": "https://img.example.com/cover.jpg",
+        "owner_id": "owner42",
+        "total_hint": 128,
+    }
+
+
+def test_xiaohongshu_comments_require_explicit_opt_in_even_with_cookie(tmp_path):
+    class FakeDownloader:
+        def download_video(self, _url, **_kwargs):
+            async def done():
+                return tmp_path / "video.mp4"
+
+            return asyncio.create_task(done())
+
+    config = {
+        "cache_dir": str(tmp_path),
+        "cookies": {
+            "xiaohongshu_cookie": "a1=test-a1; web_session=test-session"
+        },
+        "comments": {
+            "display_count": 7,
+            "timeout": 45,
+        },
+    }
+
+    async def run():
+        parser = XiaoHongShuParser(config, FakeDownloader())
+        result = parser._process_explore_data(
+            {
+                "noteId": "note123",
+                "type": "video",
+                "title": "视频标题",
+                "user": {"nickname": "作者"},
+                "video": {
+                    "media": {
+                        "stream": {
+                            "h264": [
+                                {"url": "https://video.example.com/video.mp4"}
+                            ]
+                        }
+                    }
+                },
+            },
+            "https://www.xiaohongshu.com/explore/note123?xsec_token=token",
+            note_id="note123",
+        )
+        await asyncio.gather(*(content.get_path() for content in result.contents))
+        await parser.close_session()
+        return result
+
+    result = asyncio.run(run())
+    assert result.extra["video_separate_from_card"] is True
+    assert "comment_image_task_factory" not in result.extra
+    assert "comment_timeout" not in result.extra
+
+
+def test_xiaohongshu_discovery_comments_are_video_only(tmp_path):
+    class FakeDownloader:
+        def download_img(self, _url, **_kwargs):
+            async def done():
+                return tmp_path / "image.jpg"
+
+            return asyncio.create_task(done())
+
+        def download_video(self, _url, **_kwargs):
+            async def done():
+                return tmp_path / "video.mp4"
+
+            return asyncio.create_task(done())
+
+    config = {
+        "cache_dir": str(tmp_path),
+        "cookies": {
+            "xiaohongshu_cookie": "a1=test-a1; web_session=test-session"
+        },
+        "comments": {
+            "xiaohongshu": True,
+            "display_count": 7,
+            "timeout": 45,
+        },
+    }
+    calls = []
+
+    async def run():
+        parser = XiaoHongShuParser(config, FakeDownloader())
+
+        async def fake_build_images(*args, **kwargs):
+            calls.append((args, kwargs))
+            return []
+
+        parser.comment_feed.build_images = fake_build_images
+        final_url = (
+            "https://www.xiaohongshu.com/discovery/item/note456?"
+            "xsec_token=discovery%2Btoken%3D"
+        )
+        video_data = {
+            "noteId": "note456",
+            "type": "video",
+            "title": "Discovery 视频",
+            "desc": "视频正文",
+            "user": {
+                "userId": "owner84",
+                "nickName": "作者",
+                "avatar": "https://img.example.com/avatar.jpg",
+            },
+            "interactInfo": {"commentCount": "64"},
+            "imageList": [
+                {"urlSizeLarge": "https://img.example.com/fallback-cover.jpg"}
+            ],
+            "video": {
+                "media": {
+                    "stream": {
+                        "h264": [{"url": "https://video.example.com/video.mp4"}]
+                    }
+                }
+            },
+        }
+        image_data = {
+            **video_data,
+            "type": "normal",
+            "video": None,
+            "imageList": [
+                {"urlSizeLarge": "https://img.example.com/image.jpg"}
+            ],
+        }
+        preload_data = {
+            "imagesList": [
+                {"urlSizeLarge": "https://img.example.com/cover.jpg"}
+            ]
+        }
+
+        video_result = parser._process_discovery_data(
+            video_data,
+            preload_data,
+            final_url,
+            note_id="note456",
+        )
+        image_result = parser._process_discovery_data(
+            image_data,
+            {},
+            final_url,
+            note_id="note456",
+        )
+        await video_result.extra["comment_image_task_factory"]()
+        await asyncio.gather(
+            *(
+                content.get_path()
+                for content in [*video_result.contents, *image_result.contents]
+            )
+        )
+        await parser.close_session()
+        return video_result, image_result
+
+    video_result, image_result = asyncio.run(run())
+    assert callable(video_result.extra["comment_image_task_factory"])
+    assert "comment_image_task_factory" not in image_result.extra
+    assert len(calls) == 1
+    args, kwargs = calls[0]
+    assert args == ("note456", "discovery+token=")
+    assert kwargs == {
+        "work_title": "Discovery 视频",
+        "cover": "https://img.example.com/cover.jpg",
+        "owner_id": "owner84",
+        "total_hint": 64,
+    }
+
+
+def test_xiaohongshu_comment_feed_retries_current_signature_format(tmp_path):
+    class FakeResponse:
+        def __init__(self, status_code, payload):
+            self.status_code = status_code
+            self.content = json.dumps(payload).encode()
+
+    class FakeParser:
+        headers = {"User-Agent": "Mozilla/5.0"}
+        comment_cookie = "a1=test-a1; web_session=test-session"
+        cache_dir = tmp_path
+        _page_cache_ttl = 120
+
+        def __init__(self):
+            self.requests = []
+
+        async def http_get(self, url, **kwargs):
+            self.requests.append((url, kwargs))
+            if len(self.requests) == 1:
+                return FakeResponse(406, {"success": False, "msg": "sign invalid"})
+            return FakeResponse(
+                200,
+                {
+                    "success": True,
+                    "data": {
+                        "comments": [
+                            {
+                                "id": "comment-1",
+                                "content": "评论",
+                                "user_info": {"nickname": "用户"},
+                            }
+                        ],
+                        "has_more": False,
+                        "cursor": "",
+                    },
+                },
+            )
+
+    class FakeSigner:
+        def __init__(self):
+            self.calls = []
+
+        def sign_headers_get(self, **kwargs):
+            self.calls.append(kwargs)
+            return {
+                "x-s": f"{kwargs['sign_format']}-signature",
+                "x-t": "1",
+                "x-s-common": "common",
+            }
+
+    async def run():
+        parser = FakeParser()
+        feed = XiaohongshuCommentFeed(parser, SocialCommentCanvas(), limit=5)
+        signer = FakeSigner()
+        feed._signer = signer
+        result = await feed.fetch("note123", "token+value=")
+        return parser, signer, result
+
+    parser, signer, result = asyncio.run(run())
+    assert [call["sign_format"] for call in signer.calls] == ["xys", "xyw"]
+    assert len(parser.requests) == 2
+    request_url, request_kwargs = parser.requests[-1]
+    assert "xsec_token=token%2Bvalue%3D" in request_url
+    assert request_kwargs["headers"]["Cookie"] == FakeParser.comment_cookie
+    assert request_kwargs["headers"]["x-s"] == "xyw-signature"
+    assert result.total == 1
+    assert result.items[0]["id"] == "comment-1"
+
+
+def test_xiaohongshu_comment_feed_rejects_nonzero_api_code(tmp_path):
+    class FakeResponse:
+        status_code = 200
+        content = json.dumps({"success": True, "code": 300012}).encode()
+
+    class FakeParser:
+        headers = {"User-Agent": "Mozilla/5.0"}
+        comment_cookie = "a1=test-a1; web_session=test-session"
+        cache_dir = tmp_path
+        _page_cache_ttl = 120
+
+        def __init__(self):
+            self.requests = 0
+
+        async def http_get(self, _url, **_kwargs):
+            self.requests += 1
+            return FakeResponse()
+
+    class FakeSigner:
+        @staticmethod
+        def sign_headers_get(**_kwargs):
+            return {"x-s": "signature", "x-t": "1", "x-s-common": "common"}
+
+    async def run():
+        parser = FakeParser()
+        feed = XiaohongshuCommentFeed(parser, SocialCommentCanvas(), limit=5)
+        feed._signer = FakeSigner()
+        with pytest.raises(RuntimeError, match="错误码 300012"):
+            await feed.fetch("note123", "token")
+        return parser.requests
+
+    assert asyncio.run(run()) == 1
+
+
+def test_xiaohongshu_comment_normalization_covers_visible_fields(tmp_path):
+    parser = SimpleNamespace(
+        headers={},
+        cache_dir=tmp_path,
+        comment_cookie="a1=test",
+        _page_cache_ttl=120,
+    )
+    feed = XiaohongshuCommentFeed(parser, SocialCommentCanvas(), limit=5)
+    normalized = feed.adapt_comment(
+        {
+            "id": "comment-1",
+            "content": "@朋友 [笑]\n#旅行#",
+            "user_info": {
+                "user_id": "owner42",
+                "nickname": "作者",
+                "image": "https://img.example.com/avatar.jpg",
+            },
+            "show_tags": ["is_author", "user_top"],
+            "create_time": 1_700_000_000_000,
+            "ip_location": "IP属地：上海",
+            "like_count": "12500",
+            "sub_comment_count": "2",
+            "pictures": {"url_default": "https://img.example.com/comment.jpg"},
+            "sub_comments": {
+                "comments": [
+                    {
+                        "id": "reply-1",
+                        "content": "楼中楼回复",
+                        "user_info": {"nickname": "回复者"},
+                        "target_comment": {
+                            "user_info": {"nickname": "作者"},
+                        },
+                    }
+                ]
+            },
+        },
+        "owner42",
+    )
+
+    assert normalized is not None
+    assert normalized.author.badges[0].text == "作者"
+    assert normalized.author.avatar == "https://img.example.com/avatar.jpg"
+    assert {part.kind for part in normalized.content} >= {
+        "highlight",
+        "emoji-text",
+        "line-break",
+    }
+    assert normalized.images == ["https://img.example.com/comment.jpg"]
+    assert normalized.location == "上海"
+    assert normalized.like_text == "1.2万"
+    assert normalized.reply_text == "回复 2"
+    assert normalized.pinned is True
+    assert normalized.first_reply is not None
+    assert normalized.first_reply.content[0].kind == "highlight"
+    assert normalized.first_reply.content[0].text == "回复 @作者："
+    assert normalized.author.nickname_color == XIAOHONGSHU_THEME.accent
+
+
 def test_image_post_parsers_use_shared_cards_and_keep_canonical_urls(tmp_path):
     from core.parsers.kuaishou import CdnUrl, Photo
 
@@ -490,8 +1006,8 @@ def test_image_post_parsers_use_shared_cards_and_keep_canonical_urls(tmp_path):
         douyin = DouyinParser(
             {
                 "cache_dir": str(tmp_path),
-                "cookies": {},
-                "comments": {"douyin": False},
+                "cookies": {"douyin_ck": "sessionid=test"},
+                "comments": {"douyin": True},
             },
             downloader,
         )
@@ -546,6 +1062,7 @@ def test_image_post_parsers_use_shared_cards_and_keep_canonical_urls(tmp_path):
     for result in (douyin_result, xhs_result):
         assert result.extra["text_card_media"] == ""
         assert result.extra["image_post_card_in_forward"] is True
+        assert "comment_image_task_factory" not in result.extra
 
 
 def test_video_post_parsers_and_ytdlp_use_shared_cards(tmp_path):
@@ -655,6 +1172,7 @@ def test_video_post_parsers_and_ytdlp_use_shared_cards(tmp_path):
         assert result.extra["render_text_card"] is True
         assert result.extra["video_separate_from_card"] is True
         assert "视频" in result.extra["card_kind"]
+    assert "comment_image_task_factory" not in results[2].extra
 
 
 def test_xiaoheihe_api_share_route_uses_redirect_metadata(tmp_path):
@@ -1080,7 +1598,7 @@ def test_xiaoheihe_api_preserves_rich_body_order_and_native_delivery(tmp_path):
     assert isinstance(body.parts[3], ImageContent)
     assert isinstance(body.parts[4], ImageContent)
     assert "comment_document_task_factory" not in result.extra
-    assert callable(result.extra["comment_image_task_factory"])
+    assert "comment_image_task_factory" not in result.extra
 
 
 def test_xiaoheihe_game_uses_signed_api_without_cookie(tmp_path):
@@ -2426,6 +2944,14 @@ def test_native_parsers_attach_comment_factories(tmp_path):
 
             return asyncio.create_task(finish())
 
+        def download_video(self, *_args, **_kwargs):
+            async def finish():
+                output = tmp_path / "video.mp4"
+                output.write_bytes(b"video")
+                return output
+
+            return asyncio.create_task(finish())
+
     config = {
         "cache_dir": str(tmp_path),
         "cookies": {"douyin_ck": "sessionid=test", "weibo_cookie": ""},
@@ -2454,7 +2980,15 @@ def test_native_parsers_attach_comment_factories(tmp_path):
                         },
                     }
                 ],
-                "images": [{"url_list": ["https://p3.douyinpic.com/image"]}],
+                "video": {
+                    "play_addr": {
+                        "url_list": ["https://v3.douyinvod.com/video.mp4"]
+                    },
+                    "cover": {
+                        "url_list": ["https://p3.douyinpic.com/cover.jpg"]
+                    },
+                    "duration": 12,
+                },
             },
             "7414051930047106342",
         )
@@ -2533,7 +3067,7 @@ def test_weibo_media_result_keeps_body_before_single_image_reply(tmp_path):
             {
                 "cache_dir": str(tmp_path),
                 "cookies": {},
-                "comments": {"weibo": False},
+                "comments": {"weibo": True},
             },
             FakeDownloader(),
         )
@@ -2562,6 +3096,7 @@ def test_weibo_media_result_keeps_body_before_single_image_reply(tmp_path):
     assert result.delivery.batches[1].reply_original is True
     assert result.extra["text_card_media"] == ""
     assert result.extra["image_post_card_in_forward"] is True
+    assert "comment_image_task_factory" not in result.extra
 
 
 def test_weibo_long_post_fetches_complete_body(tmp_path):
@@ -3053,6 +3588,12 @@ def test_comment_feed_footers_use_repository_brand(tmp_path):
         headers = {}
         cache_dir = tmp_path
 
+    class XiaohongshuParserStub:
+        headers = {}
+        comment_cookie = "a1=test; web_session=test"
+        cache_dir = tmp_path
+        _page_cache_ttl = 120
+
     class FakeCanvas:
         def __init__(self):
             self.documents = []
@@ -3168,6 +3709,28 @@ def test_comment_feed_footers_use_repository_brand(tmp_path):
 
         miyoushe_feed.fetch = miyoushe_fetch
 
+        xiaohongshu_canvas = FakeCanvas()
+        xiaohongshu_feed = XiaohongshuCommentFeed(
+            XiaohongshuParserStub(),
+            xiaohongshu_canvas,
+            limit=1,
+        )
+
+        async def xiaohongshu_fetch(_note_id, _xsec_token):
+            return SimpleNamespace(
+                items=[
+                    {
+                        "id": "1",
+                        "content": "评论",
+                        "user_info": {"user_id": "1", "nickname": "用户"},
+                    }
+                ],
+                total=2,
+                has_more=False,
+            )
+
+        xiaohongshu_feed.fetch = xiaohongshu_fetch
+
         results = await asyncio.gather(
             bili_feed.build_images(2, 1, video_title="标题", video_cover=""),
             douyin_feed.build_images("3", work_title="标题", cover=""),
@@ -3175,6 +3738,13 @@ def test_comment_feed_footers_use_repository_brand(tmp_path):
             asyncio.sleep(0, result=xiaoheihe_contents),
             miyoushe_feed.build_images(
                 "6",
+                work_title="标题",
+                cover="",
+                owner_id="",
+            ),
+            xiaohongshu_feed.build_images(
+                "7",
+                "token",
                 work_title="标题",
                 cover="",
                 owner_id="",
@@ -3189,6 +3759,7 @@ def test_comment_feed_footers_use_repository_brand(tmp_path):
             weibo_canvas,
             xiaoheihe_canvas,
             miyoushe_canvas,
+            xiaohongshu_canvas,
         )
 
     canvases = asyncio.run(run())
@@ -3203,6 +3774,7 @@ def test_comment_layout_cache_versions_invalidate_pre_fix_images():
     assert WeiboCommentFeed.CACHE_VERSION == "weibo_comment_v10_unified_clean"
     assert XiaoheiheCommentFeed.CACHE_VERSION == "xiaoheihe_comment_v4_unified_clean"
     assert MiyousheCommentFeed.CACHE_VERSION == "miyoushe_comment_v4_unified_clean"
+    assert XiaohongshuCommentFeed.CACHE_VERSION == "xiaohongshu_comment_v1"
 
 
 def test_manifest_has_a_reviewable_upstream_baseline():
@@ -5001,6 +5573,7 @@ def test_plugin_initializes_and_registers_aiocqhttp_parsers(tmp_path):
                 weibo = plugin.parser_map["weibo.com"]
                 miyoushe = plugin.parser_map["miyoushe.com"]
                 xiaoheihe = plugin.parser_map["xiaoheihe.cn"]
+                xiaohongshu = plugin.parser_map["xhslink.com"]
                 assert bili.render_service is plugin.render_service
                 assert bili.comment_canvas.render_service is plugin.render_service
                 assert not hasattr(bili, "dynamic_renderer")
@@ -5012,6 +5585,8 @@ def test_plugin_initializes_and_registers_aiocqhttp_parsers(tmp_path):
                 assert miyoushe.comment_canvas.render_service is plugin.render_service
                 assert xiaoheihe.render_service is plugin.render_service
                 assert xiaoheihe.comment_canvas.render_service is plugin.render_service
+                assert xiaohongshu.render_service is plugin.render_service
+                assert xiaohongshu.comment_canvas.render_service is plugin.render_service
                 assert {route for route, *_ in context.web_apis} == {
                     "/astrbot_plugin_parser_x/debug/status",
                     "/astrbot_plugin_parser_x/debug/start",

@@ -22,7 +22,8 @@ Parser X 是面向 AstrBot `aiocqhttp`（OneBot v11）的国内平台分享链�
   楼中楼；正文及评论中的微博表情均可正确解析。
 - 小红书：视频、图片和图文笔记；视频直接发送，图文单图引用原消息，多图使用合并转发；
   发布时间兼容秒和毫秒时间戳，空正文不会回填分享链接，平台内部的 `[话题]` 标记会清理
-  为标准 `#话题#`。
+  为标准 `#话题#`。配置完整网页 Cookie 后，视频笔记可附带热门评论、作者/置顶标识、
+  IP 属地、点赞数、评论图片和首条楼中楼；图文笔记不会抓取或发送评论区。
 - 米游社：文章正文、封面、正文配图和官方表情按富文本原始顺序合成为一张图片；含视频时可
   并发发送源视频与独立评论图，用户自定义评论表情会按图片渲染。
 - 小黑盒：帖子概要、富文本正文、配图和平台表情合成为一张图片，不再拆分或重复发送节点；
@@ -83,10 +84,13 @@ Dashboard 用户通过该插件 Page 发起调试；关闭开关并完成插件�
 - `performance.video_codec`：B站编码偏好。
 - `cookies.douyin_ck`、`cookies.bili_ck`：原生解析器 Cookie。
 - `cookies.weibo_cookie`：可选微博登录态；公开热门评论通常无需配置。
+- `cookies.xiaohongshu_cookie`：小红书视频评论区登录态，必须包含 `a1`，通常还需要
+  `web_session`；建议使用专用小号。
 - `cookies.ytdlp_cookie_file`：Netscape 格式 Cookie 文件，用于需要登录的平台。
 - `cookies.xiaoheihe_cookie`：可选的小黑盒登录态；公开内容未配置时也会先尝试签名接口。
-- `comments.bilibili`、`comments.douyin`、`comments.weibo`、`comments.xiaoheihe`、
-  `comments.miyoushe`：各平台评论区开关。
+- `comments.bilibili`、`comments.douyin`、`comments.weibo`、`comments.xiaohongshu`、
+  `comments.xiaoheihe`、`comments.miyoushe`：各平台视频评论区开关；所有平台的纯图文、图集和
+  纯文字作品都不会抓取或发送评论，小红书评论默认关闭。
 - `comments.display_count`：最多展示的热门评论总数。
 - `comments.timeout`：评论抓取、独立评论图渲染和缓存生成的总超时。
 - `rendering.timeout`：单次 `html_render` 截图超时。
@@ -94,12 +98,12 @@ Dashboard 用户通过该插件 Page 发起调试；关闭开关并完成插件�
 - `behavior.show_download_fail_tip`：是否在聊天中提示下载失败或超限。
 - `behavior.disabled_sessions`：已关闭解析的会话列表，通常通过命令自动维护。
 
-启用评论区时，插件只为视频作品与主内容并发准备热门评论。评论使用独立合并转发，第一节点为
-平台评论标题，后续每张评论图各占一个节点；转发失败时降级逐条发送，评论抓取或渲染失败不会
-阻塞视频。B站、抖音、小红书与微博纯图文单图直接引用原图，多图只发送原图合并转发；小黑盒
-与米游社使用图文一体图片。评论渲染使用 AstrBot 官方 `html_render`。快手和小红书评论
-接口依赖频繁变化的私有签名与
-完整登录态，因此没有用易碎网页抓取方式勉强加入。
+启用评论区时，插件只为含视频的作品与主内容并发准备热门评论；纯图文、图集和纯文字作品不会
+挂载评论任务，也不会请求或发送评论区。评论使用独立合并转发，第一节点为平台评论标题，后续
+每张评论图各占一个节点；转发失败时降级逐条发送，评论抓取或渲染失败不会阻塞视频。B站、
+抖音、小红书与微博纯图文单图直接引用原图，多图只发送原图合并转发；小黑盒与米游社使用
+图文一体图片。评论渲染使用 AstrBot 官方 `html_render`。小红书视频评论使用完整登录态与
+网页签名接口；Cookie、`xsec_token` 或签名不可用时自动跳过评论。
 
 缓存只写入 AstrBot 官方约定的 `data/plugin_data/astrbot_plugin_parser_x/`，默认每天清理一次。
 

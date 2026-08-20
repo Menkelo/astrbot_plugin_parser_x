@@ -516,7 +516,8 @@ def serialize_parse_result(result: ParseResult) -> dict[str, Any]:
             _delivery_batch_summary(batch)
             for batch in (result.delivery.batches if result.delivery else [])
         ],
-        "has_comments": callable(result.extra.get("comment_image_task_factory")),
+        "has_comments": result.has_video
+        and callable(result.extra.get("comment_image_task_factory")),
         "native_delivery": bool(result.extra.get("native_delivery")),
         "repost": (
             {

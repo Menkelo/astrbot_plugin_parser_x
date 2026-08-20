@@ -2,7 +2,7 @@ name: astrbot_plugin_parser_x
 display_name: Parser X
 short_desc: 面向 OneBot v11 的国内平台分享链接解析器
 desc: 基于 rconsole-plugin 功能版图设计的 AstrBot 国内平台链接解析插件，采用原生 Python 解析器与 yt-dlp 兼容层。
-version: 0.5.16
+version: 0.5.17
 author: Menkelo
 support_platforms:
   - aiocqhttp

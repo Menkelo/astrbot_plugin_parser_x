@@ -869,7 +869,11 @@ class ParserXPlugin(Star):
                 return None
             return Reply(id=message_id)
 
-        comment_factory = result.extra.get("comment_image_task_factory")
+        comment_factory = (
+            result.extra.get("comment_image_task_factory")
+            if result.has_video
+            else None
+        )
         comment_task: asyncio.Task[object] | None = None
         comment_started_at: float | None = None
         comment_timeout = self._bounded_timeout(
@@ -1750,7 +1754,7 @@ class ParserXPlugin(Star):
                 ]
 
             comment_factory = result.extra.get("comment_image_task_factory")
-            if video_contents and callable(comment_factory):
+            if result.has_video and video_contents and callable(comment_factory):
                 comment_timeout = self._bounded_timeout(
                     result.extra.get("comment_timeout", 90),
                     90,
@@ -1788,7 +1792,7 @@ class ParserXPlugin(Star):
             ]
 
             comment_factory = result.extra.get("comment_image_task_factory")
-            if callable(comment_factory):
+            if result.has_video and callable(comment_factory):
                 comment_timeout = self._bounded_timeout(
                     result.extra.get("comment_timeout", 90),
                     90,
@@ -1937,6 +1941,7 @@ class ParserXPlugin(Star):
                         "bilibili",
                         "douyin",
                         "weibo",
+                        "xiaohongshu",
                         "xiaoheihe",
                         "miyoushe",
                     }

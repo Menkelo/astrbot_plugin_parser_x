@@ -20,16 +20,22 @@
     "hint": "热门评论仅用于视频作品，使用独立评论区图片并放入合并转发；失败或超时不影响主内容和媒体。",
     "type": "object",
     "items": {
-      "bilibili": {"description": "B站评论区", "type": "bool", "default": true},
+      "bilibili": {"description": "B站视频评论区", "type": "bool", "default": true},
       "douyin": {
-        "description": "抖音评论区",
-        "hint": "需要在“平台登录态”中配置抖音 Cookie；未配置时自动跳过。",
+        "description": "抖音视频评论区",
+        "hint": "仅视频作品启用；需要在“平台登录态”中配置抖音 Cookie，未配置时自动跳过。",
         "type": "bool",
         "default": true
       },
-      "weibo": {"description": "微博评论区", "type": "bool", "default": true},
-      "xiaoheihe": {"description": "小黑盒评论区", "type": "bool", "default": true},
-      "miyoushe": {"description": "米游社评论区", "type": "bool", "default": true},
+      "weibo": {"description": "微博视频评论区", "type": "bool", "default": true},
+      "xiaohongshu": {
+        "description": "小红书视频评论区",
+        "hint": "仅视频笔记启用；需要在“平台登录态”中配置完整小红书 Cookie，图文笔记不会抓取评论。",
+        "type": "bool",
+        "default": false
+      },
+      "xiaoheihe": {"description": "小黑盒视频评论区", "type": "bool", "default": true},
+      "miyoushe": {"description": "米游社视频评论区", "type": "bool", "default": true},
       "display_count": {
         "description": "热门评论数量",
         "hint": "按平台热门顺序最多展示多少条主评论，楼中楼首条回复不计入此数量。",
@@ -97,7 +103,7 @@
     "items": {
       "douyin_ck": {
         "description": "抖音 Cookie",
-        "hint": "用于抖音解析、图文和评论区。请粘贴完整 Cookie 字符串。",
+        "hint": "用于抖音解析和视频评论区。请粘贴完整 Cookie 字符串。",
         "type": "text",
         "default": ""
       },
@@ -110,6 +116,12 @@
       "weibo_cookie": {
         "description": "微博 Cookie",
         "hint": "可选；公开微博和热门评论通常无需登录，受限内容可使用该登录态。",
+        "type": "text",
+        "default": ""
+      },
+      "xiaohongshu_cookie": {
+        "description": "小红书 Cookie",
+        "hint": "仅用于小红书视频笔记评论区，请粘贴网页端完整 Cookie（必须包含 a1，通常还需要 web_session）。建议使用专用小号。",
         "type": "text",
         "default": ""
       },

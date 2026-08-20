@@ -93,7 +93,10 @@ def test_debug_mode_blocks_adapter_message_before_it_is_inspected():
 
 def test_debug_page_status_is_available_but_start_is_rejected_when_disabled():
     plugin = object.__new__(ParserXPlugin)
-    plugin.config = {"debug": {"enabled": False}, "comments": {}}
+    plugin.config = {
+        "debug": {"enabled": False},
+        "comments": {"xiaohongshu": True},
+    }
     plugin.parser_map = {}
     plugin.debug_sessions = DebugSessionManager()
 
@@ -115,7 +118,9 @@ def test_debug_page_status_is_available_but_start_is_rejected_when_disabled():
     status, start = asyncio.run(run())
 
     assert status.status_code == 200
-    assert _response_json(status)["enabled"] is False
+    status_payload = _response_json(status)
+    assert status_payload["enabled"] is False
+    assert status_payload["comments"] == {"xiaohongshu": True}
     assert start.status_code == 403
     start_payload = _response_json(start)
     assert start_payload["message"].startswith("无法启动解析：Parser X 的调试模式尚未开启。")

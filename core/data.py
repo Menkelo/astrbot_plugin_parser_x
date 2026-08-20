@@ -173,6 +173,23 @@ class ParseResult:
     extra: dict[str, Any] = field(default_factory=dict)
     repost: "ParseResult | None" = None
 
+    def __post_init__(self) -> None:
+        if self.has_video:
+            return
+        for key in (
+            "comment_image_task_factory",
+            "comment_document_task_factory",
+            "comment_timeout",
+        ):
+            self.extra.pop(key, None)
+
+    @property
+    def has_video(self) -> bool:
+        media = list(self.contents)
+        if self.delivery is not None:
+            media.extend(self.delivery.media_contents())
+        return any(isinstance(content, VideoContent) for content in media)
+
     @property
     def header(self) -> str | None:
         header = self.platform.display_name
