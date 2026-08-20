@@ -379,6 +379,10 @@ class WeiboParser(BaseParser):
         images: list[ImageContent],
         videos: list[VideoContent],
     ) -> DeliveryPlan:
+        if images and videos:
+            parts = [*([summary] if summary else []), *images, *videos]
+            return DeliveryPlan([DeliveryBatch(parts, mode="forward")])
+
         batches = []
         if summary:
             batches.append(DeliveryBatch([summary]))
@@ -500,13 +504,15 @@ class WeiboParser(BaseParser):
                 "text_card_avatar": author_avatar,
                 "text_card_media": (
                     ""
-                    if image_contents and not video_contents
+                    if image_contents
                     else static_pic_urls[0]
                     if static_pic_urls
                     else ""
                 ),
                 "card_kind": (
-                    "微博 · 图文"
+                    "微博 · 图文视频"
+                    if image_contents and video_contents
+                    else "微博 · 图文"
                     if image_contents
                     else "微博 · 视频"
                     if video_contents
@@ -528,6 +534,11 @@ class WeiboParser(BaseParser):
                     *(
                         ["单图引用原消息"]
                         if len(image_contents) == 1 and not video_contents
+                        else []
+                    ),
+                    *(
+                        ["图片与视频合并转发"]
+                        if image_contents and video_contents
                         else []
                     ),
                     *([f"媒体 {len(contents)} 项"] if len(contents) > 1 else []),

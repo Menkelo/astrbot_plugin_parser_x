@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import re
 import time
@@ -22,6 +23,11 @@ from ..comment_canvas import (
 )
 from ..constants import COMMENT_FOOTER_BRAND
 from ..data import ImageContent
+from ..platform_emotes import (
+    fallback_emote_map,
+    iter_emote_matches,
+    load_platform_emotes,
+)
 from ..utils import normalize_image_url
 from .social_comment_feed import SocialCommentFeedBase
 
@@ -36,7 +42,7 @@ class _RawXiaohongshuFeed:
 class XiaohongshuCommentFeed(SocialCommentFeedBase):
     COMMENT_HOST = "https://edith.xiaohongshu.com"
     COMMENT_PATH = "/api/sns/web/v2/comment/page"
-    CACHE_VERSION = "xiaohongshu_comment_v1"
+    CACHE_VERSION = "xiaohongshu_comment_v2_emotes"
     PLATFORM_SLUG = "xiaohongshu"
     AVATAR_REFERER = "https://www.xiaohongshu.com/"
 
@@ -84,9 +90,7 @@ class XiaohongshuCommentFeed(SocialCommentFeedBase):
                 value_text = ""
             else:
                 value_text = str(value)
-            parts.append(
-                f"{key}={urllib.parse.quote(value_text, safe=',')}"
-            )
+            parts.append(f"{key}={urllib.parse.quote(value_text, safe=',')}")
         return "&".join(parts)
 
     def _sign_headers(
@@ -353,7 +357,11 @@ class XiaohongshuCommentFeed(SocialCommentFeedBase):
                 parts.append(CommentRichPart("line-break"))
 
     @classmethod
-    def _rich_text(cls, value: object) -> list[CommentRichPart]:
+    def _rich_text(
+        cls,
+        value: object,
+        emote_map: dict[str, str] | None = None,
+    ) -> list[CommentRichPart]:
         text = unescape(str(value or ""))
         text = text.replace("\r\n", "\n").replace("\r", "\n")
         text = re.sub(r"\n{3,}", "\n\n", text).strip()
@@ -361,15 +369,130 @@ class XiaohongshuCommentFeed(SocialCommentFeedBase):
             return []
 
         parts: list[CommentRichPart] = []
+        catalog = emote_map or fallback_emote_map("xiaohongshu")
         cursor = 0
-        for match in re.finditer(r"\[[^\]\n]{1,32}\]", text):
-            if match.start() > cursor:
-                cls._append_plain(parts, text[cursor : match.start()])
-            parts.append(CommentRichPart("emoji-text", match.group(0)))
-            cursor = match.end()
+        for start, end, token, url in iter_emote_matches(
+            text,
+            "xiaohongshu",
+            catalog,
+        ):
+            if start > cursor:
+                cls._append_plain(parts, text[cursor:start])
+            parts.append(
+                CommentRichPart(
+                    "emote" if url else "emoji-text",
+                    text=token,
+                    url=url,
+                )
+            )
+            cursor = end
         if cursor < len(text):
             cls._append_plain(parts, text[cursor:])
         return parts
+
+    @classmethod
+    def _local_emote_map(
+        cls,
+        item: dict,
+        global_map: dict[str, str],
+    ) -> dict[str, str]:
+        """Merge emoji objects embedded in a comment with the public catalog.
+
+        Some Xiaohongshu responses include the image URL next to the comment
+        instead of only returning a ``[name]`` token in ``content``.  The web
+        API has used several names for that field, so inspect only known emoji
+        containers and keep the traversal deliberately shallow.
+        """
+        output = dict(global_map)
+
+        def register(name: object, url: object) -> None:
+            name_text = str(name or "").strip()
+            url_text = normalize_image_url(str(url or "")) or ""
+            if not name_text or not url_text:
+                return
+            token = (
+                name_text
+                if name_text.startswith("[") and name_text.endswith("]")
+                else f"[{name_text}]"
+            )
+            output[token] = url_text
+            output.setdefault(name_text, url_text)
+
+        def walk(value: object, depth: int = 0) -> None:
+            if depth > 2:
+                return
+            if isinstance(value, list):
+                for child in value:
+                    walk(child, depth + 1)
+                return
+            if not isinstance(value, dict):
+                return
+
+            name = next(
+                (
+                    value.get(key)
+                    for key in (
+                        "image_name",
+                        "imageName",
+                        "display_name",
+                        "displayName",
+                        "emoji_name",
+                        "emojiName",
+                        "emoticon_name",
+                        "name",
+                        "text",
+                    )
+                    if value.get(key)
+                ),
+                "",
+            )
+            url = next(
+                (
+                    value.get(key)
+                    for key in (
+                        "image",
+                        "url",
+                        "src",
+                        "image_url",
+                        "imageUrl",
+                        "url_default",
+                        "urlDefault",
+                    )
+                    if value.get(key)
+                ),
+                "",
+            )
+            if isinstance(url, dict):
+                url = cls._image_from_object(url)
+            register(name, url)
+            for key in (
+                "emoji",
+                "emojis",
+                "emoticon",
+                "emoticons",
+                "redmoji",
+                "emoji_info",
+                "emojiInfo",
+                "content_emojis",
+                "contentEmojis",
+            ):
+                if key in value:
+                    walk(value.get(key), depth + 1)
+
+        for key in (
+            "emoji",
+            "emojis",
+            "emoticon",
+            "emoticons",
+            "redmoji",
+            "emoji_info",
+            "emojiInfo",
+            "content_emojis",
+            "contentEmojis",
+        ):
+            if key in item:
+                walk(item.get(key))
+        return output
 
     @staticmethod
     def _image_from_object(value: object) -> str:
@@ -450,8 +573,13 @@ class XiaohongshuCommentFeed(SocialCommentFeedBase):
         owner_id: str,
         *,
         nested: bool = False,
+        emote_map: dict[str, str] | None = None,
     ) -> CommentEntry | None:
-        content = self._rich_text(item.get("content") or item.get("text"))
+        local_emotes = self._local_emote_map(item, emote_map or {})
+        content = self._rich_text(
+            item.get("content") or item.get("text"),
+            local_emotes,
+        )
         images = self._images(item)
         if not content and not images:
             return None
@@ -489,6 +617,7 @@ class XiaohongshuCommentFeed(SocialCommentFeedBase):
                         reply,
                         owner_id,
                         nested=True,
+                        emote_map=local_emotes,
                     )
                     if first_reply is not None:
                         break
@@ -529,7 +658,10 @@ class XiaohongshuCommentFeed(SocialCommentFeedBase):
             )
             return None
 
-        raw_feed = await self.fetch(str(note_id), xsec_token)
+        raw_feed, emote_map = await asyncio.gather(
+            self.fetch(str(note_id), xsec_token),
+            load_platform_emotes(self.parser, "xiaohongshu"),
+        )
         if not raw_feed.items:
             return None
 
@@ -537,7 +669,7 @@ class XiaohongshuCommentFeed(SocialCommentFeedBase):
         owner_text = str(owner_id or "")
         candidates = []
         for item in ordered:
-            entry = self.adapt_comment(item, owner_text)
+            entry = self.adapt_comment(item, owner_text, emote_map=emote_map)
             if entry is not None:
                 candidates.append(entry)
         entries = await self.comment_filter.apply(candidates, limit=self.limit)

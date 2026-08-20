@@ -230,8 +230,7 @@ class ParserXPlugin(Star):
         debug: bool = False,
     ) -> None:
         message = (
-            f"[评论区][{result.platform.display_name}] "
-            f"stage={stage} result={outcome}"
+            f"[评论区][{result.platform.display_name}] stage={stage} result={outcome}"
         )
         if error is not None:
             message += f" error={type(error).__name__}"
@@ -888,9 +887,7 @@ class ParserXPlugin(Star):
             return Reply(id=message_id)
 
         comment_factory = (
-            result.extra.get("comment_image_task_factory")
-            if result.has_video
-            else None
+            result.extra.get("comment_image_task_factory") if result.has_video else None
         )
         comment_task: asyncio.Task[object] | None = None
         comment_started_at: float | None = None
@@ -1481,9 +1478,7 @@ class ParserXPlugin(Star):
                     else include_non_videos
                 )
             ]
-            media_parts = [
-                part for part in parts if isinstance(part, MediaContent)
-            ]
+            media_parts = [part for part in parts if isinstance(part, MediaContent)]
             resolved_media = await asyncio.gather(
                 *(resolve_media(content) for content in media_parts)
             )
@@ -1633,10 +1628,76 @@ class ParserXPlugin(Star):
                     logger.warning(f"{failure_label}，降级逐段发送: {exc}")
 
                 for segment in group:
+                    if isinstance(segment, Video):
+                        await self._send_video_segment(event, result, segment)
+                        continue
                     try:
                         await event.send(event.chain_result([segment]))
                     except Exception as exc:
                         logger.warning(f"媒体逐段发送失败: {exc}")
+
+        async def send_direct_segments(
+            segments: list[BaseMessageComponent],
+            *,
+            reply_original: bool,
+            failure_label: str,
+        ) -> None:
+            if not segments:
+                return
+            chain: list[BaseMessageComponent] = []
+            reply = original_message_reply() if reply_original else None
+            if reply is not None:
+                chain.append(reply)
+            chain.extend(segments)
+            try:
+                await event.send(event.chain_result(chain))
+                return
+            except Exception as exc:
+                logger.warning(f"{failure_label}，降级逐段发送: {exc}")
+
+            for index, segment in enumerate(segments):
+                if isinstance(segment, Video):
+                    await self._send_video_segment(event, result, segment)
+                    continue
+                fallback_chain: list[BaseMessageComponent] = []
+                if index == 0 and reply is not None:
+                    fallback_chain.append(reply)
+                fallback_chain.append(segment)
+                try:
+                    await event.send(event.chain_result(fallback_chain))
+                except Exception as exc:
+                    logger.warning(f"媒体逐段发送失败: {exc}")
+
+        async def prepare_media_segments(
+            contents: list[MediaContent],
+        ) -> tuple[list[BaseMessageComponent], list[str]]:
+            download_results = await asyncio.gather(
+                *(self._download_content(content) for content in contents)
+            )
+            segments: list[BaseMessageComponent] = []
+            errors: list[str] = []
+            for content, path, error in download_results:
+                if error:
+                    errors.append(error.strip())
+                    continue
+                if path and (segment := self._convert_to_seg(content, path)):
+                    segments.append(segment)
+            return segments, errors
+
+        async def prepare_body_card_segment() -> BaseMessageComponent | None:
+            try:
+                card = await self._build_text_card_content(result, None)
+            except Exception as exc:
+                logger.warning(f"正文卡渲染失败: {exc}")
+                return None
+            if card is None:
+                return None
+            _, path, error = await self._download_content(card)
+            if error or path is None:
+                if error:
+                    logger.warning(f"正文卡准备失败: {error}")
+                return None
+            return self._convert_to_seg(card, path)
 
         async def prepare_comment_segments(
             comment_task: asyncio.Task[object],
@@ -1712,6 +1773,8 @@ class ParserXPlugin(Star):
             comment_task: asyncio.Task[object],
             started_at: float,
             timeout: float,
+            *,
+            send_after: tuple[asyncio.Task[None], ...] = (),
         ) -> None:
             segments = await prepare_comment_segments(
                 comment_task,
@@ -1720,6 +1783,9 @@ class ParserXPlugin(Star):
             )
             if not segments:
                 return
+
+            if send_after:
+                await asyncio.gather(*send_after, return_exceptions=True)
 
             comment_label = f"{result.platform.display_name} · 热门评论"
             for offset in range(0, len(segments), 19):
@@ -1843,12 +1909,14 @@ class ParserXPlugin(Star):
                     comment_factory(),
                     name="parser_x_comment_image_build",
                 )
+                main_delivery_tasks = tuple(concurrent_tasks)
                 concurrent_tasks.append(
                     asyncio.create_task(
                         process_comment_content(
                             comment_task,
                             comment_started_at,
                             comment_timeout,
+                            send_after=main_delivery_tasks,
                         ),
                         name="parser_x_comment_send",
                     )
@@ -1865,110 +1933,175 @@ class ParserXPlugin(Star):
                             error=error,
                         )
                     else:
-                        logger.warning(
-                            "原生投递并发发送失败: "
-                            f"{type(error).__name__}"
-                        )
+                        logger.warning(f"原生投递并发发送失败: {type(error).__name__}")
             return
 
-        if video_contents:
-            concurrent_tasks: list[asyncio.Task[None]] = [
+        card_requested = bool(result.extra.get("render_text_card"))
+        if result.delivery is not None and not card_requested:
+            await self._send_delivery_plan(
+                event,
+                result,
+                node_uin=node_uin,
+                node_name=node_name,
+                original_message_reply=original_message_reply,
+            )
+            return
+
+        async def process_main_content() -> None:
+            if not media_contents:
+                if card_requested:
+                    card_sent = await self._render_and_send_text_card(
+                        event,
+                        result,
+                        original_message_reply=original_message_reply,
+                    )
+                    if card_sent:
+                        return
+                    fallback = self._format_text_fallback(result)
+                else:
+                    fallback = (
+                        str(result.text or result.title or result.extra_info or "")
+                        .strip()
+                        .replace("@", "@\u200b")
+                    )
+                if fallback:
+                    await event.send(event.plain_result(fallback))
+                return
+
+            combine_in_forward = bool(
+                image_contents
+                and (video_contents or other_contents or len(image_contents) > 1)
+            )
+            if combine_in_forward:
+                card_task = (
+                    asyncio.create_task(
+                        prepare_body_card_segment(),
+                        name="parser_x_main_forward_card",
+                    )
+                    if card_requested
+                    else None
+                )
+                media_segments, errors = await prepare_media_segments(media_contents)
+                card_segment = await card_task if card_task is not None else None
+                segments: list[BaseMessageComponent] = []
+                if card_segment is not None:
+                    segments.append(card_segment)
+                elif card_requested and (summary := self._format_media_summary(result)):
+                    segments.append(Plain(summary))
+                segments.extend(media_segments)
+                if show_download_fail_tip:
+                    segments.extend(Plain(error) for error in errors if error)
+                if segments:
+                    await send_forward_segments(
+                        segments,
+                        failure_label="正文与混合媒体合并转发发送失败",
+                    )
+                return
+
+            if image_contents:
+                card_task = (
+                    asyncio.create_task(
+                        prepare_body_card_segment(),
+                        name="parser_x_single_image_card",
+                    )
+                    if card_requested
+                    else None
+                )
+                media_segments, errors = await prepare_media_segments(image_contents)
+                card_segment = await card_task if card_task is not None else None
+                segments: list[BaseMessageComponent] = []
+                if card_segment is not None:
+                    segments.append(card_segment)
+                elif card_requested and (summary := self._format_media_summary(result)):
+                    segments.append(Plain(summary))
+                segments.extend(media_segments)
+                if show_download_fail_tip:
+                    segments.extend(Plain(error) for error in errors if error)
+                await send_direct_segments(
+                    segments,
+                    reply_original=True,
+                    failure_label="正文卡与单图引用发送失败",
+                )
+                return
+
+            async def send_card_with_fallback() -> None:
+                if not card_requested:
+                    return
+                card_sent = await self._render_and_send_text_card(
+                    event,
+                    result,
+                    original_message_reply=original_message_reply,
+                )
+                if card_sent:
+                    return
+                summary = self._format_media_summary(result)
+                if summary:
+                    await event.send(event.plain_result(summary))
+
+            tasks: list[asyncio.Task[None]] = []
+            if card_requested:
+                tasks.append(
+                    asyncio.create_task(
+                        send_card_with_fallback(),
+                        name="parser_x_body_card_send",
+                    )
+                )
+            tasks.extend(
                 asyncio.create_task(
                     send_media_content(content),
-                    name=f"parser_x_video_send_{index}",
+                    name=f"parser_x_media_send_{index}",
                 )
-                for index, content in enumerate(video_contents)
-            ]
-
-            comment_factory = result.extra.get("comment_image_task_factory")
-            if result.has_video and callable(comment_factory):
-                comment_timeout = self._bounded_timeout(
-                    result.extra.get("comment_timeout", 90),
-                    90,
-                    180,
-                )
-                comment_started_at = asyncio.get_running_loop().time()
-                comment_task = asyncio.create_task(
-                    comment_factory(),
-                    name="parser_x_comment_image_build",
-                )
-                concurrent_tasks.append(
-                    asyncio.create_task(
-                        process_comment_content(
-                            comment_task,
-                            comment_started_at,
-                            comment_timeout,
-                        ),
-                        name="parser_x_comment_send",
-                    )
-                )
-
-            results = await asyncio.gather(*concurrent_tasks, return_exceptions=True)
-            for task, error in zip(concurrent_tasks, results, strict=True):
-                if isinstance(error, BaseException):
-                    if task.get_name() == "parser_x_comment_send":
-                        self._log_comment_event(
-                            result,
-                            stage="send",
-                            outcome="failed",
-                            error=error,
-                        )
-                    else:
-                        logger.warning(
-                            "视频并发发送失败: "
-                            f"{type(error).__name__}"
-                        )
-            return
-
-        if other_contents:
-            results = await asyncio.gather(
-                *(send_media_content(content) for content in other_contents),
-                return_exceptions=True,
+                for index, content in enumerate(media_contents)
             )
+            results = await asyncio.gather(*tasks, return_exceptions=True)
             for error in results:
                 if isinstance(error, BaseException):
-                    logger.warning(f"非图文媒体发送失败: {error}")
-            return
+                    logger.warning(f"正文卡或媒体并发发送失败: {type(error).__name__}")
 
-        if image_contents:
-            download_results = await asyncio.gather(
-                *(self._download_content(content) for content in image_contents)
+        concurrent_tasks: list[asyncio.Task[None]] = [
+            asyncio.create_task(
+                process_main_content(),
+                name="parser_x_main_content_send",
             )
-            segments: list[BaseMessageComponent] = []
-            errors: list[str] = []
-            for content, path, error in download_results:
-                if error:
-                    errors.append(error.strip())
-                    continue
-                if path and (segment := self._convert_to_seg(content, path)):
-                    segments.append(segment)
-
-            if len(image_contents) == 1 and segments:
-                chain: list[BaseMessageComponent] = []
-                if (reply := original_message_reply()) is not None:
-                    chain.append(reply)
-                chain.append(segments[0])
-                try:
-                    await event.send(event.chain_result(chain))
-                except Exception as exc:
-                    logger.warning(f"单图引用发送失败，降级直接发送: {exc}")
-                    await event.send(event.chain_result([segments[0]]))
-            elif segments:
-                await send_forward_segments(
-                    segments,
-                    failure_label="多图合并转发发送失败",
+        ]
+        comment_factory = result.extra.get("comment_image_task_factory")
+        if result.has_video and video_contents and callable(comment_factory):
+            comment_timeout = self._bounded_timeout(
+                result.extra.get("comment_timeout", 90),
+                90,
+                180,
+            )
+            comment_started_at = asyncio.get_running_loop().time()
+            comment_task = asyncio.create_task(
+                comment_factory(),
+                name="parser_x_comment_image_build",
+            )
+            main_delivery_tasks = tuple(concurrent_tasks)
+            concurrent_tasks.append(
+                asyncio.create_task(
+                    process_comment_content(
+                        comment_task,
+                        comment_started_at,
+                        comment_timeout,
+                        send_after=main_delivery_tasks,
+                    ),
+                    name="parser_x_comment_send",
                 )
+            )
 
-            if errors and show_download_fail_tip:
-                try:
-                    await event.send(event.plain_result("\n".join(errors)))
-                except Exception as exc:
-                    logger.warning(f"图片下载错误提示发送失败: {exc}")
-            return
-
-        text = str(result.text or result.title or result.extra_info or "").strip()
-        if text:
-            await event.send(event.plain_result(text.replace("@", "@\u200b")))
+        results = await asyncio.gather(*concurrent_tasks, return_exceptions=True)
+        for task, error in zip(concurrent_tasks, results, strict=True):
+            if not isinstance(error, BaseException):
+                continue
+            if task.get_name() == "parser_x_comment_send":
+                self._log_comment_event(
+                    result,
+                    stage="send",
+                    outcome="failed",
+                    error=error,
+                )
+            else:
+                logger.warning(f"主内容发送失败: {type(error).__name__}")
 
     # endregion
 
@@ -2327,8 +2460,7 @@ class ParserXPlugin(Star):
                     "event": "parsed",
                     "platform": platform_name,
                     "parse_ms": round(
-                        (asyncio.get_running_loop().time() - parse_started_at)
-                        * 1000
+                        (asyncio.get_running_loop().time() - parse_started_at) * 1000
                     ),
                     "result": serialize_parse_result(result),
                 }

@@ -12,6 +12,7 @@ from ...comment_style import (
 )
 from ...constants import COMMENT_FOOTER_BRAND
 from ...html_renderer import HtmlRenderService
+from ...unicode_emoji import render_unicode_emoji_html
 
 _REPLY_ICON = (
     '<svg class="reply-icon action-icon" viewBox="0 0 24 24" aria-hidden="true">'
@@ -179,7 +180,10 @@ class BiliCommentCanvas:
             if part.kind == "line-break":
                 output.append("<br>")
             elif part.kind == "highlight":
-                output.append(f'<span class="highlight">{self._text(part.text)}</span>')
+                output.append(
+                    '<span class="highlight">'
+                    f"{self._render_unicode_text(part.text)}</span>"
+                )
             elif part.kind == "emote" and part.url:
                 output.append(
                     f'<img class="emote" src="{self._url(part.url)}" '
@@ -187,8 +191,15 @@ class BiliCommentCanvas:
                     'onerror="this.replaceWith(document.createTextNode(this.alt))">'
                 )
             else:
-                output.append(f"<span>{self._text(part.text)}</span>")
+                output.append(f"<span>{self._render_unicode_text(part.text)}</span>")
         return "".join(output)
+
+    def _render_unicode_text(self, value: object) -> str:
+        return render_unicode_emoji_html(
+            str(value or ""),
+            escape_text=self._text,
+            escape_url=self._url,
+        )
 
     def _render_images(self, images: list[str]) -> str:
         return "".join(

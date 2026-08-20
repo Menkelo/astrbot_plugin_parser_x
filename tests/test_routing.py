@@ -62,10 +62,12 @@ from core.platform_emotes import (
     build_bilibili_emote_map,
     build_miyoushe_emote_map,
     build_xiaoheihe_emote_map,
+    build_xiaohongshu_emote_map,
     load_platform_emotes,
 )
 from core.rendered_image import save_rendered_image
 from core.text_renderer import TextCardRenderer
+from core.unicode_emoji import iter_unicode_emoji
 from core.utils import extract_json_url, generate_file_name
 
 
@@ -313,23 +315,22 @@ def test_tieba_is_fully_removed_from_routes_and_configuration():
 
 def test_retired_ytdlp_platforms_are_fully_removed():
     classes = BaseParser.get_all_subclass()
-    keywords = {
-        keyword for parser in classes for keyword, _ in parser._key_patterns
-    }
+    keywords = {keyword for parser in classes for keyword, _ in parser._key_patterns}
     schema = json.loads(
         (Path(__file__).parents[1] / "_conf_schema.json").read_text(encoding="utf-8")
     )
 
-    assert not {
-        "ixigua.com",
-        "pipix.com",
-        "pipigx.com",
-        "weishi.qq.com",
-        "xsj.qq.com",
-    } & keywords
-    assert not {"xigua", "pipixia", "weishi"} & set(
-        schema["platforms"]["items"]
+    assert (
+        not {
+            "ixigua.com",
+            "pipix.com",
+            "pipigx.com",
+            "weishi.qq.com",
+            "xsj.qq.com",
+        }
+        & keywords
     )
+    assert not {"xigua", "pipixia", "weishi"} & set(schema["platforms"]["items"])
     assert not {"XiguaParser", "PipixiaParser", "WeishiParser"} & {
         parser.__name__ for parser in classes
     }
@@ -609,9 +610,7 @@ def test_xiaohongshu_attaches_comments_only_to_video_notes(tmp_path):
 
     config = {
         "cache_dir": str(tmp_path),
-        "cookies": {
-            "xiaohongshu_cookie": "a1=test-a1; web_session=test-session"
-        },
+        "cookies": {"xiaohongshu_cookie": "a1=test-a1; web_session=test-session"},
         "comments": {
             "xiaohongshu": True,
             "display_count": 7,
@@ -646,9 +645,7 @@ def test_xiaohongshu_attaches_comments_only_to_video_notes(tmp_path):
             "imageList": [{"urlDefault": "https://img.example.com/cover.jpg"}],
             "video": {
                 "media": {
-                    "stream": {
-                        "h264": [{"url": "https://video.example.com/video.mp4"}]
-                    }
+                    "stream": {"h264": [{"url": "https://video.example.com/video.mp4"}]}
                 }
             },
         }
@@ -704,9 +701,7 @@ def test_xiaohongshu_comments_require_explicit_opt_in_even_with_cookie(tmp_path)
 
     config = {
         "cache_dir": str(tmp_path),
-        "cookies": {
-            "xiaohongshu_cookie": "a1=test-a1; web_session=test-session"
-        },
+        "cookies": {"xiaohongshu_cookie": "a1=test-a1; web_session=test-session"},
         "comments": {
             "display_count": 7,
             "timeout": 45,
@@ -724,9 +719,7 @@ def test_xiaohongshu_comments_require_explicit_opt_in_even_with_cookie(tmp_path)
                 "video": {
                     "media": {
                         "stream": {
-                            "h264": [
-                                {"url": "https://video.example.com/video.mp4"}
-                            ]
+                            "h264": [{"url": "https://video.example.com/video.mp4"}]
                         }
                     }
                 },
@@ -760,9 +753,7 @@ def test_xiaohongshu_discovery_comments_are_video_only(tmp_path):
 
     config = {
         "cache_dir": str(tmp_path),
-        "cookies": {
-            "xiaohongshu_cookie": "a1=test-a1; web_session=test-session"
-        },
+        "cookies": {"xiaohongshu_cookie": "a1=test-a1; web_session=test-session"},
         "comments": {
             "xiaohongshu": True,
             "display_count": 7,
@@ -799,9 +790,7 @@ def test_xiaohongshu_discovery_comments_are_video_only(tmp_path):
             ],
             "video": {
                 "media": {
-                    "stream": {
-                        "h264": [{"url": "https://video.example.com/video.mp4"}]
-                    }
+                    "stream": {"h264": [{"url": "https://video.example.com/video.mp4"}]}
                 }
             },
         }
@@ -809,14 +798,10 @@ def test_xiaohongshu_discovery_comments_are_video_only(tmp_path):
             **video_data,
             "type": "normal",
             "video": None,
-            "imageList": [
-                {"urlSizeLarge": "https://img.example.com/image.jpg"}
-            ],
+            "imageList": [{"urlSizeLarge": "https://img.example.com/image.jpg"}],
         }
         preload_data = {
-            "imagesList": [
-                {"urlSizeLarge": "https://img.example.com/cover.jpg"}
-            ]
+            "imagesList": [{"urlSizeLarge": "https://img.example.com/cover.jpg"}]
         }
 
         video_result = parser._process_discovery_data(
@@ -1096,8 +1081,7 @@ def test_image_post_parsers_use_shared_cards_and_keep_canonical_urls(tmp_path):
     for result in (kuaishou_result, douyin_result, xhs_result):
         assert result.contents
         assert result.extra["render_text_card"] is True
-    assert kuaishou_result.extra["text_card_media"]
-    for result in (douyin_result, xhs_result):
+    for result in (kuaishou_result, douyin_result, xhs_result):
         assert result.extra["text_card_media"] == ""
         assert result.extra["image_post_card_in_forward"] is True
         assert "comment_image_task_factory" not in result.extra
@@ -1421,6 +1405,110 @@ def test_platform_emotes_render_in_cards_and_comment_rich_text():
         )
         == "https://img.example.com/custom.gif"
     )
+
+
+def test_xiaohongshu_comment_emotes_use_current_catalog_and_inline_fields():
+    catalog = build_xiaohongshu_emote_map(
+        {
+            "data": {
+                "emoji": {
+                    "tabs": [
+                        {
+                            "collection": [
+                                {
+                                    "emoji": [
+                                        {
+                                            "image_name": "[生气R]",
+                                            "image": "https://picasso-static.xiaohongshu.com/angry.png",
+                                        }
+                                    ]
+                                }
+                            ]
+                        }
+                    ]
+                }
+            }
+        }
+    )
+    assert catalog["[生气R]"].endswith("angry.png")
+    assert catalog["生气R"].endswith("angry.png")
+
+    parts = XiaohongshuCommentFeed._rich_text("真的会谢[生气R]", catalog)
+    assert any(
+        part.kind == "emote" and part.text == "[生气R]" and part.url for part in parts
+    )
+
+    embedded = XiaohongshuCommentFeed._local_emote_map(
+        {
+            "emoji_info": [
+                {
+                    "display_name": "[新表情R]",
+                    "image_url": "https://picasso-static.xiaohongshu.com/new.png",
+                }
+            ]
+        },
+        catalog,
+    )
+    embedded_parts = XiaohongshuCommentFeed._rich_text("[新表情R]", embedded)
+    assert embedded_parts == [
+        CommentRichPart(
+            "emote",
+            text="[新表情R]",
+            url="https://picasso-static.xiaohongshu.com/new.png",
+        )
+    ]
+
+
+def test_unicode_emoji_render_as_images_in_shared_and_bilibili_comment_cards():
+    matches = list(iter_unicode_emoji("生气😡 得意😏 点赞👍🏻 程序员👩‍💻"))
+    assert [url.rsplit("/", 1)[-1] for *_, url in matches] == [
+        "1f621.svg",
+        "1f60f.svg",
+        "1f44d-1f3fb.svg",
+        "1f469-200d-1f4bb.svg",
+    ]
+
+    shared_html = SocialCommentCanvas().build_html(
+        CommentDocument(
+            theme=DOUYIN_THEME,
+            work_title="视频",
+            cover="",
+            total_text="1 条评论",
+            entries=[
+                CommentEntry(
+                    author=CommentAuthor("用户"),
+                    content=[CommentRichPart("text", "😡😏")],
+                )
+            ],
+        )
+    )
+    assert shared_html.count('class="unicode-emoji"') == 2
+    assert "1f621.svg" in shared_html
+    assert "1f60f.svg" in shared_html
+
+    bilibili_html = BiliCommentCanvas().build_html(
+        BiliCommentDocument(
+            work_title="视频",
+            cover="",
+            total_text="1 条评论",
+            entries=[
+                BiliCommentEntry(
+                    author=BiliAuthorBadge("用户"),
+                    content=[BiliRichPart("text", "😡😏")],
+                )
+            ],
+        )
+    )
+    assert bilibili_html.count('class="unicode-emoji"') == 2
+
+    body_html = TextCardRenderer(HtmlRenderService()).build_html(
+        platform_key="weibo",
+        platform_name="微博",
+        author_name="作者",
+        title="标题😏",
+        text="正文😡",
+    )
+    assert body_html.count('class="inline-unicode-emoji"') == 2
 
 
 def test_bilibili_emote_loader_merges_public_and_owned_packages():
@@ -3019,12 +3107,8 @@ def test_native_parsers_attach_comment_factories(tmp_path):
                     }
                 ],
                 "video": {
-                    "play_addr": {
-                        "url_list": ["https://v3.douyinvod.com/video.mp4"]
-                    },
-                    "cover": {
-                        "url_list": ["https://p3.douyinpic.com/cover.jpg"]
-                    },
+                    "play_addr": {"url_list": ["https://v3.douyinvod.com/video.mp4"]},
+                    "cover": {"url_list": ["https://p3.douyinpic.com/cover.jpg"]},
                     "duration": 12,
                 },
             },
@@ -3135,6 +3219,147 @@ def test_weibo_media_result_keeps_body_before_single_image_reply(tmp_path):
     assert result.extra["text_card_media"] == ""
     assert result.extra["image_post_card_in_forward"] is True
     assert "comment_image_task_factory" not in result.extra
+
+
+def test_weibo_mixed_image_video_is_parsed_and_sent_in_one_forward(tmp_path):
+    from astrbot_plugin_parser_x.core.data import (
+        ImageContent as PluginImageContent,
+    )
+    from astrbot_plugin_parser_x.core.data import (
+        VideoContent as PluginVideoContent,
+    )
+    from astrbot_plugin_parser_x.core.parsers import WeiboParser as PluginWeiboParser
+    from astrbot_plugin_parser_x.main import ParserXPlugin
+
+    class FakeDownloader:
+        def download_img(self, _url, **_kwargs):
+            async def done():
+                path = tmp_path / "weibo-image.jpg"
+                path.write_bytes(b"image")
+                return path
+
+            return asyncio.create_task(done())
+
+        def download_video(self, _url, **_kwargs):
+            async def done():
+                path = tmp_path / "weibo-video.mp4"
+                path.write_bytes(b"video")
+                return path
+
+            return asyncio.create_task(done())
+
+    class FakeResponse:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {
+                "ok": 1,
+                "data": {
+                    "id": "4461526582968019",
+                    "mid": "4461526582968019",
+                    "text": "<p>同时包含图片和视频的微博</p>",
+                    "user": {
+                        "id": "1088413295",
+                        "screen_name": "Easy",
+                        "avatar_large": "https://wx1.sinaimg.cn/avatar.jpg",
+                    },
+                    "pics": [
+                        {
+                            "pid": "static-picture",
+                            "large": {"url": "https://wx1.sinaimg.cn/large/demo.jpg"},
+                        }
+                    ],
+                    "page_info": {
+                        "type": "video",
+                        "media_info": {
+                            "mp4_hd_url": "https://f.video.weibocdn.com/demo.mp4",
+                            "duration": 12,
+                        },
+                    },
+                },
+            }
+
+    class FakeClient:
+        async def get(self, _url, **_kwargs):
+            return FakeResponse()
+
+        async def close(self):
+            return None
+
+    class FakeTextRenderer:
+        async def render_text_card(self, out_path, **_kwargs):
+            _save_render_fixture(out_path, size=(760, 320))
+
+    class Event:
+        message_obj = SimpleNamespace(message_id=9755)
+
+        def __init__(self):
+            self.sent = []
+
+        @staticmethod
+        def get_sender_id():
+            return "42"
+
+        @staticmethod
+        def get_sender_name():
+            return "用户"
+
+        @staticmethod
+        def chain_result(chain):
+            return chain
+
+        @staticmethod
+        def plain_result(text):
+            return [Plain(text)]
+
+        async def send(self, result):
+            self.sent.append(result)
+
+    async def run():
+        parser = PluginWeiboParser(
+            {
+                "cache_dir": str(tmp_path),
+                "cookies": {},
+                "comments": {"weibo": False},
+            },
+            FakeDownloader(),
+        )
+        parser._session = FakeClient()
+        plugin = object.__new__(ParserXPlugin)
+        plugin.config = {"behavior": {"show_download_fail_tip": True}}
+        plugin.cache_dir = tmp_path
+        plugin.text_renderer = FakeTextRenderer()
+        event = Event()
+        try:
+            keyword, searched = parser.search_url(
+                "https://weibo.com/1088413295/IpOAqcs7h"
+            )
+            result = await parser.parse(keyword, searched)
+            await plugin._send_parse_result(event, result)
+            return result, event
+        finally:
+            await parser.close_session()
+
+    result, event = asyncio.run(run())
+    assert len(result.contents) == 2
+    assert isinstance(result.contents[0], PluginImageContent)
+    assert isinstance(result.contents[1], PluginVideoContent)
+    assert result.delivery is not None
+    assert len(result.delivery.batches) == 1
+    assert result.delivery.batches[0].mode == "forward"
+    assert result.delivery.batches[0].parts[1:] == result.contents
+    assert result.extra["text_card_media"] == ""
+    assert result.extra["card_kind"] == "微博 · 图文视频"
+
+    assert len(event.sent) == 1
+    assert isinstance(event.sent[0][0], Nodes)
+    node_contents = [node.content[0] for node in event.sent[0][0].nodes]
+    assert len(node_contents) == 3
+    assert isinstance(node_contents[0], MessageImage)
+    assert Path(node_contents[0].file).name.startswith("text_card_weibo_")
+    assert isinstance(node_contents[1], MessageImage)
+    assert isinstance(node_contents[2], MessageVideo)
 
 
 def test_weibo_long_post_fetches_complete_body(tmp_path):
@@ -3812,7 +4037,7 @@ def test_comment_layout_cache_versions_invalidate_pre_fix_images():
     assert WeiboCommentFeed.CACHE_VERSION == "weibo_comment_v10_unified_clean"
     assert XiaoheiheCommentFeed.CACHE_VERSION == "xiaoheihe_comment_v4_unified_clean"
     assert MiyousheCommentFeed.CACHE_VERSION == "miyoushe_comment_v4_unified_clean"
-    assert XiaohongshuCommentFeed.CACHE_VERSION == "xiaohongshu_comment_v1"
+    assert XiaohongshuCommentFeed.CACHE_VERSION == "xiaohongshu_comment_v2_emotes"
 
 
 def test_manifest_has_a_reviewable_upstream_baseline():
@@ -3912,7 +4137,7 @@ def test_single_image_result_only_replies_with_source_image(tmp_path):
     assert len(event.sent[0]) == 2
 
 
-def test_weibo_single_image_ignores_obsolete_body_delivery_batch(tmp_path):
+def test_weibo_single_image_sends_body_card_and_source_image(tmp_path):
     from astrbot_plugin_parser_x.core.data import (
         Author,
         DeliveryBatch,
@@ -3929,9 +4154,13 @@ def test_weibo_single_image_ignores_obsolete_body_delivery_batch(tmp_path):
     image_path.write_bytes(b"image")
     plugin = object.__new__(ParserXPlugin)
     plugin.config = {"behavior": {"show_download_fail_tip": True}}
+    plugin.cache_dir = tmp_path
 
-    async def fake_download_content(_self, content):
-        return content, image_path, None
+    class FakeTextRenderer:
+        async def render_text_card(self, out_path, **_kwargs):
+            _save_render_fixture(out_path, size=(760, 260))
+
+    plugin.text_renderer = FakeTextRenderer()
 
     class Event:
         message_obj = SimpleNamespace(message_id=9753)
@@ -3972,25 +4201,25 @@ def test_weibo_single_image_ignores_obsolete_body_delivery_batch(tmp_path):
             ]
         ),
         url="https://weibo.com/example",
+        extra={
+            "render_text_card": True,
+            "text_card_media": "",
+            "image_post_card_in_forward": True,
+        },
     )
 
-    with (
-        patch.object(ParserXPlugin, "_download_content", fake_download_content),
-        patch.object(
-            ParserXPlugin,
-            "_convert_to_seg",
-            return_value=MessageImage(str(image_path)),
-        ),
-    ):
-        asyncio.run(plugin._send_parse_result(event, result))
+    asyncio.run(plugin._send_parse_result(event, result))
 
     assert len(event.sent) == 1
     assert isinstance(event.sent[0][0], Reply)
     assert event.sent[0][0].id == 9753
     assert isinstance(event.sent[0][1], MessageImage)
+    assert Path(event.sent[0][1].file).name.startswith("text_card_weibo_")
+    assert isinstance(event.sent[0][2], MessageImage)
+    assert event.sent[0][2].file == str(image_path)
 
 
-def test_obsolete_body_card_flags_do_not_replace_source_image(tmp_path):
+def test_body_card_media_never_replaces_single_source_image(tmp_path):
     from astrbot_plugin_parser_x.core.data import (
         Author,
         DeliveryBatch,
@@ -4066,12 +4295,14 @@ def test_obsolete_body_card_flags_do_not_replace_source_image(tmp_path):
     event = Event()
     asyncio.run(plugin._send_parse_result(event, result))
 
-    assert plugin.text_renderer.kwargs is None
+    assert plugin.text_renderer.kwargs is not None
     assert len(event.sent) == 1
-    assert len(event.sent[0]) == 2
+    assert len(event.sent[0]) == 3
     assert isinstance(event.sent[0][0], Reply)
     assert isinstance(event.sent[0][1], MessageImage)
-    assert event.sent[0][1].file == str(source_path)
+    assert Path(event.sent[0][1].file).name.startswith("text_card_weibo_")
+    assert isinstance(event.sent[0][2], MessageImage)
+    assert event.sent[0][2].file == str(source_path)
 
 
 @pytest.mark.parametrize(
@@ -4141,9 +4372,7 @@ def test_native_graphic_posts_render_as_one_direct_image(
         title="图文标题",
         text="图文正文",
         contents=[source],
-        delivery=DeliveryPlan(
-            [DeliveryBatch(["图文正文", source], mode="forward")]
-        ),
+        delivery=DeliveryPlan([DeliveryBatch(["图文正文", source], mode="forward")]),
         extra={
             "render_text_card": True,
             "text_card_flow": [
@@ -4259,9 +4488,13 @@ def test_native_one_image_flow_keeps_video_separate(tmp_path):
         {"type": "image", "url": "https://img.example.com/body.png"},
     ]
     assert len(event.sent) == 2
-    assert not any(isinstance(segment, Nodes) for chain in event.sent for segment in chain)
+    assert not any(
+        isinstance(segment, Nodes) for chain in event.sent for segment in chain
+    )
     card_chain = next(
-        chain for chain in event.sent if any(isinstance(segment, Reply) for segment in chain)
+        chain
+        for chain in event.sent
+        if any(isinstance(segment, Reply) for segment in chain)
     )
     assert len(card_chain) == 2
     assert isinstance(card_chain[0], Reply)
@@ -4271,7 +4504,7 @@ def test_native_one_image_flow_keeps_video_separate(tmp_path):
 
 
 @pytest.mark.parametrize("image_count", [1, 2])
-def test_split_image_posts_only_send_original_images(
+def test_split_image_posts_send_body_card_with_original_images(
     tmp_path,
     image_count,
 ):
@@ -4362,24 +4595,29 @@ def test_split_image_posts_only_send_original_images(
     event = Event()
     asyncio.run(plugin._send_parse_result(event, result))
 
-    assert plugin.text_renderer.kwargs is None
+    assert plugin.text_renderer.kwargs is not None
     assert comment_builds == []
     if image_count == 1:
         assert len(event.sent) == 1
         assert isinstance(event.sent[0][0], Reply)
         assert isinstance(event.sent[0][1], MessageImage)
-        assert event.sent[0][1].file == str(source_paths[0])
+        assert Path(event.sent[0][1].file).name.startswith("text_card_weibo_")
+        assert isinstance(event.sent[0][2], MessageImage)
+        assert event.sent[0][2].file == str(source_paths[0])
     else:
         assert len(event.sent) == 1
         forward = event.sent[0][0]
         assert isinstance(forward, Nodes)
         assert all(len(node.content) == 1 for node in forward.nodes)
-        assert [node.content[0].file for node in forward.nodes] == [
+        assert Path(forward.nodes[0].content[0].file).name.startswith(
+            "text_card_weibo_"
+        )
+        assert [node.content[0].file for node in forward.nodes[1:]] == [
             str(path) for path in source_paths
         ]
 
 
-def test_split_single_image_ignores_body_card_renderer_and_keeps_original(tmp_path):
+def test_split_single_image_card_failure_keeps_text_and_original(tmp_path):
     from astrbot_plugin_parser_x.core.data import (
         ImageContent as PluginImageContent,
     )
@@ -4440,8 +4678,10 @@ def test_split_single_image_ignores_body_card_renderer_and_keeps_original(tmp_pa
 
     assert len(event.sent) == 1
     assert isinstance(event.sent[0][0], Reply)
-    assert isinstance(event.sent[0][1], MessageImage)
-    assert event.sent[0][1].file == str(source_path)
+    assert isinstance(event.sent[0][1], Plain)
+    assert "渲染失败也不能丢失的正文" in event.sent[0][1].text
+    assert isinstance(event.sent[0][2], MessageImage)
+    assert event.sent[0][2].file == str(source_path)
 
 
 def test_one_flow_card_failure_restores_native_text_and_images(tmp_path):
@@ -4525,7 +4765,7 @@ def test_one_flow_card_failure_restores_native_text_and_images(tmp_path):
     assert isinstance(event.sent[1][0].nodes[1].content[0], MessageImage)
 
 
-def test_video_comments_are_forwarded_separately_without_body_card(tmp_path):
+def test_video_comments_wait_until_main_video_send_finishes(tmp_path):
     from astrbot_plugin_parser_x.core.data import (
         ImageContent as PluginImageContent,
     )
@@ -4558,6 +4798,8 @@ def test_video_comments_are_forwarded_separately_without_body_card(tmp_path):
 
         def __init__(self):
             self.sent = []
+            self.video_send_started = asyncio.Event()
+            self.release_video_send = asyncio.Event()
 
         @staticmethod
         def get_sender_id():
@@ -4576,6 +4818,9 @@ def test_video_comments_are_forwarded_separately_without_body_card(tmp_path):
             return [Plain(text)]
 
         async def send(self, result):
+            if result and isinstance(result[0], MessageVideo):
+                self.video_send_started.set()
+                await self.release_video_send.wait()
             self.sent.append(result)
 
     async def fake_download_content(_self, content):
@@ -4593,19 +4838,125 @@ def test_video_comments_are_forwarded_separately_without_body_card(tmp_path):
         },
     )
     event = Event()
-    with patch.object(ParserXPlugin, "_download_content", fake_download_content):
-        asyncio.run(plugin._send_parse_result(event, result))
 
-    assert plugin.text_renderer.documents == []
-    assert len(event.sent) == 2
-    assert any(isinstance(chain[0], MessageVideo) for chain in event.sent)
-    forward = next(chain[0] for chain in event.sent if isinstance(chain[0], Nodes))
+    async def run():
+        with patch.object(ParserXPlugin, "_download_content", fake_download_content):
+            send_task = asyncio.create_task(plugin._send_parse_result(event, result))
+            await asyncio.wait_for(event.video_send_started.wait(), timeout=1)
+            await asyncio.sleep(0)
+            assert not any(
+                isinstance(segment, Nodes) for chain in event.sent for segment in chain
+            )
+            event.release_video_send.set()
+            await send_task
+
+    asyncio.run(run())
+
+    assert plugin.text_renderer.documents == [None]
+    assert len(event.sent) == 3
+    video_index = next(
+        index
+        for index, chain in enumerate(event.sent)
+        if isinstance(chain[0], MessageVideo)
+    )
+    comment_index = next(
+        index for index, chain in enumerate(event.sent) if isinstance(chain[0], Nodes)
+    )
+    assert video_index < comment_index
+    assert comment_index == len(event.sent) - 1
+    assert any(
+        isinstance(chain[0], Reply) and isinstance(chain[1], MessageImage)
+        for chain in event.sent
+    )
+    forward = event.sent[comment_index][0]
     nodes = forward.nodes
     assert len(nodes) == 2
     assert isinstance(nodes[0].content[0], Plain)
     assert nodes[0].content[0].text == "抖音 · 热门评论"
     assert isinstance(nodes[1].content[0], MessageImage)
     assert nodes[1].content[0].file == str(comment_path)
+
+
+def test_native_video_comments_also_wait_until_video_send_finishes(tmp_path):
+    from astrbot_plugin_parser_x.core.data import (
+        DeliveryBatch,
+        DeliveryPlan,
+        ParseResult,
+        Platform,
+        VideoContent,
+    )
+    from astrbot_plugin_parser_x.core.data import (
+        ImageContent as PluginImageContent,
+    )
+    from astrbot_plugin_parser_x.main import ParserXPlugin
+
+    comment_path = tmp_path / "native-comment.jpg"
+    video_path = tmp_path / "native-video.mp4"
+    comment_path.write_bytes(b"comment")
+    video_path.write_bytes(b"video")
+    plugin = object.__new__(ParserXPlugin)
+    plugin.config = {"behavior": {"show_download_fail_tip": True}}
+
+    async def build_comment_images():
+        return [PluginImageContent(comment_path)]
+
+    class Event:
+        message_obj = SimpleNamespace(message_id=9759)
+
+        def __init__(self):
+            self.sent = []
+            self.video_send_started = asyncio.Event()
+            self.release_video_send = asyncio.Event()
+
+        @staticmethod
+        def get_sender_id():
+            return "42"
+
+        @staticmethod
+        def get_sender_name():
+            return "用户"
+
+        @staticmethod
+        def chain_result(chain):
+            return chain
+
+        @staticmethod
+        def plain_result(text):
+            return [Plain(text)]
+
+        async def send(self, result):
+            if result and isinstance(result[0], MessageVideo):
+                self.video_send_started.set()
+                await self.release_video_send.wait()
+            self.sent.append(result)
+
+    video = VideoContent(video_path)
+    result = ParseResult(
+        platform=Platform(name="miyoushe", display_name="米游社"),
+        contents=[video],
+        delivery=DeliveryPlan([DeliveryBatch([video])]),
+        extra={
+            "native_delivery": True,
+            "comment_image_task_factory": build_comment_images,
+            "comment_timeout": 5,
+        },
+    )
+    event = Event()
+
+    async def run():
+        send_task = asyncio.create_task(plugin._send_parse_result(event, result))
+        await asyncio.wait_for(event.video_send_started.wait(), timeout=1)
+        await asyncio.sleep(0)
+        assert event.sent == []
+        event.release_video_send.set()
+        await send_task
+
+    asyncio.run(run())
+
+    assert len(event.sent) == 2
+    assert isinstance(event.sent[0][0], MessageVideo)
+    assert isinstance(event.sent[1][0], Nodes)
+    assert event.sent[1][0].nodes[0].content[0].text == "米游社 · 热门评论"
 
 
 def test_comment_failure_does_not_block_video(tmp_path):
@@ -4680,9 +5031,13 @@ def test_comment_failure_does_not_block_video(tmp_path):
     with patch.object(ParserXPlugin, "_download_content", fake_download_content):
         asyncio.run(plugin._send_parse_result(event, result))
 
-    assert plugin.text_renderer.documents == []
-    assert len(event.sent) == 1
-    assert isinstance(event.sent[0][0], MessageVideo)
+    assert plugin.text_renderer.documents == [None]
+    assert len(event.sent) == 2
+    assert any(isinstance(chain[0], MessageVideo) for chain in event.sent)
+    assert any(
+        isinstance(chain[0], Reply) and isinstance(chain[1], MessageImage)
+        for chain in event.sent
+    )
     assert not any(isinstance(chain[0], Nodes) for chain in event.sent)
 
 
@@ -4813,7 +5168,7 @@ def test_delivery_card_failure_keeps_plain_summary(tmp_path):
     assert "渲染失败仍要保留正文" in event.sent[0][0].text
 
 
-def test_plain_weibo_without_media_falls_back_to_body_text():
+def test_plain_weibo_without_media_sends_body_card(tmp_path):
     from astrbot_plugin_parser_x.core.data import (
         DeliveryBatch,
         DeliveryPlan,
@@ -4824,6 +5179,13 @@ def test_plain_weibo_without_media_falls_back_to_body_text():
 
     plugin = object.__new__(ParserXPlugin)
     plugin.config = {"behavior": {"show_download_fail_tip": True}}
+    plugin.cache_dir = tmp_path
+
+    class FakeTextRenderer:
+        async def render_text_card(self, out_path, **_kwargs):
+            _save_render_fixture(out_path, size=(760, 260))
+
+    plugin.text_renderer = FakeTextRenderer()
 
     class Event:
         message_obj = SimpleNamespace(message_id=9754)
@@ -4854,16 +5216,18 @@ def test_plain_weibo_without_media_falls_back_to_body_text():
         platform=Platform(name="weibo", display_name="微博"),
         text="必须补回的微博正文",
         delivery=DeliveryPlan([DeliveryBatch(["识别：微博"])]),
+        extra={"render_text_card": True},
     )
     event = Event()
     asyncio.run(plugin._send_parse_result(event, result))
 
     assert len(event.sent) == 1
-    assert isinstance(event.sent[0][0], Plain)
-    assert event.sent[0][0].text == "必须补回的微博正文"
+    assert isinstance(event.sent[0][0], Reply)
+    assert isinstance(event.sent[0][1], MessageImage)
+    assert Path(event.sent[0][1].file).name.startswith("text_card_weibo_")
 
 
-def test_single_image_waits_for_media_without_sending_obsolete_body(tmp_path):
+def test_single_image_waits_for_card_and_source_before_combined_send(tmp_path):
     from astrbot_plugin_parser_x.core.data import (
         DeliveryBatch,
         DeliveryPlan,
@@ -4879,6 +5243,13 @@ def test_single_image_waits_for_media_without_sending_obsolete_body(tmp_path):
     image_path.write_bytes(b"image")
     plugin = object.__new__(ParserXPlugin)
     plugin.config = {"behavior": {"show_download_fail_tip": True}}
+    plugin.cache_dir = tmp_path
+
+    class FakeTextRenderer:
+        async def render_text_card(self, out_path, **_kwargs):
+            _save_render_fixture(out_path, size=(760, 260))
+
+    plugin.text_renderer = FakeTextRenderer()
 
     class Event:
         message_obj = SimpleNamespace(message_id=8642)
@@ -4918,6 +5289,11 @@ def test_single_image_waits_for_media_without_sending_obsolete_body(tmp_path):
             ]
         ),
         url="https://weibo.com/example",
+        extra={
+            "render_text_card": True,
+            "text_card_media": "",
+            "image_post_card_in_forward": True,
+        },
     )
 
     async def run():
@@ -4940,9 +5316,10 @@ def test_single_image_waits_for_media_without_sending_obsolete_body(tmp_path):
     assert len(event.sent) == 1
     assert isinstance(event.sent[0][0], Reply)
     assert isinstance(event.sent[0][1], MessageImage)
+    assert isinstance(event.sent[0][2], MessageImage)
 
 
-def test_generic_video_result_does_not_send_obsolete_body_or_cover_images(tmp_path):
+def test_generic_delivery_plan_preserves_text_images_and_video(tmp_path):
     from astrbot_plugin_parser_x.core.data import (
         DeliveryBatch,
         DeliveryPlan,
@@ -5009,8 +5386,12 @@ def test_generic_video_result_does_not_send_obsolete_body_or_cover_images(tmp_pa
     event = Event()
     asyncio.run(plugin._send_parse_result(event, result))
 
-    assert len(event.sent) == 1
-    assert isinstance(event.sent[0][0], MessageVideo)
+    assert len(event.sent) == 3
+    assert isinstance(event.sent[0][0], Plain)
+    assert event.sent[0][0].text == "正文"
+    assert all(isinstance(segment, MessageImage) for segment in event.sent[1])
+    assert len(event.sent[1]) == 2
+    assert isinstance(event.sent[2][0], MessageVideo)
 
 
 def test_delivery_plan_forward_failure_falls_back_in_original_order(tmp_path):
@@ -5079,7 +5460,7 @@ def test_delivery_plan_forward_failure_falls_back_in_original_order(tmp_path):
     assert event.sent[2][0].text == "后文"
 
 
-def test_single_image_card_embeds_source_without_resending_it(tmp_path):
+def test_single_image_card_keeps_original_source_image(tmp_path):
     from astrbot_plugin_parser_x.core.data import (
         Author,
         ParseResult,
@@ -5145,8 +5526,11 @@ def test_single_image_card_embeds_source_without_resending_it(tmp_path):
     assert len(event.sent) == 1
     assert isinstance(event.sent[0][0], Reply)
     assert event.sent[0][0].id == 1357
-    assert len(event.sent[0]) == 2
+    assert len(event.sent[0]) == 3
     assert isinstance(event.sent[0][1], MessageImage)
+    assert Path(event.sent[0][1].file).name.startswith("text_card_weibo_")
+    assert isinstance(event.sent[0][2], MessageImage)
+    assert event.sent[0][2].file == str(image_path)
 
 
 def test_unified_card_is_not_sent_standalone_without_original_message_id(tmp_path):
@@ -5201,7 +5585,7 @@ def test_unified_card_is_not_sent_standalone_without_original_message_id(tmp_pat
     assert "缺少引用目标时必须保留的正文" in event.sent[0][0].text
 
 
-def test_multi_image_result_sends_only_source_image_forward(tmp_path):
+def test_multi_image_result_sends_card_and_all_source_images_in_forward(tmp_path):
     from astrbot_plugin_parser_x.core.data import (
         ImageContent as PluginImageContent,
     )
@@ -5268,14 +5652,21 @@ def test_multi_image_result_sends_only_source_image_forward(tmp_path):
 
     assert len(event.sent) == 1
     assert isinstance(event.sent[0][0], Nodes)
-    assert len(event.sent[0][0].nodes) == 2
+    assert len(event.sent[0][0].nodes) == 3
     assert all(len(node.content) == 1 for node in event.sent[0][0].nodes)
     assert all(
         isinstance(node.content[0], MessageImage) for node in event.sent[0][0].nodes
     )
+    assert Path(event.sent[0][0].nodes[0].content[0].file).name.startswith(
+        "text_card_xiaohongshu_"
+    )
+    assert [node.content[0].file for node in event.sent[0][0].nodes[1:]] == [
+        str(first_path),
+        str(second_path),
+    ]
 
 
-def test_video_result_sends_video_without_obsolete_body_card(tmp_path):
+def test_video_result_sends_body_card_and_video(tmp_path):
     from astrbot_plugin_parser_x.core.data import (
         ImageContent as PluginImageContent,
     )
@@ -5351,14 +5742,18 @@ def test_video_result_sends_video_without_obsolete_body_card(tmp_path):
     ):
         asyncio.run(plugin._send_parse_result(event, result))
 
-    assert len(event.sent) == 1
-    assert isinstance(event.sent[0][0], MessageVideo)
+    assert len(event.sent) == 2
+    assert any(isinstance(chain[0], MessageVideo) for chain in event.sent)
+    assert any(
+        isinstance(chain[0], Reply) and isinstance(chain[1], MessageImage)
+        for chain in event.sent
+    )
     assert not any(
         isinstance(segment, Nodes) for chain in event.sent for segment in chain
     )
 
 
-def test_video_delivery_does_not_start_obsolete_body_card_renderer(tmp_path):
+def test_video_delivery_sends_body_card_and_video(tmp_path):
     from astrbot_plugin_parser_x.core.data import ParseResult, Platform, VideoContent
     from astrbot_plugin_parser_x.main import ParserXPlugin
 
@@ -5366,12 +5761,13 @@ def test_video_delivery_does_not_start_obsolete_body_card_renderer(tmp_path):
     video_path.write_bytes(b"video")
     plugin = object.__new__(ParserXPlugin)
     plugin.config = {"behavior": {"show_download_fail_tip": True}}
+    plugin.cache_dir = tmp_path
 
-    class FailingTextRenderer:
-        async def render_text_card(self, *_args, **_kwargs):
-            raise AssertionError("body card renderer must not be called")
+    class FakeTextRenderer:
+        async def render_text_card(self, out_path, **_kwargs):
+            _save_render_fixture(out_path, size=(760, 320))
 
-    plugin.text_renderer = FailingTextRenderer()
+    plugin.text_renderer = FakeTextRenderer()
 
     class Event:
         message_obj = SimpleNamespace(message_id=4101)
@@ -5408,8 +5804,12 @@ def test_video_delivery_does_not_start_obsolete_body_card_renderer(tmp_path):
     event = Event()
     asyncio.run(plugin._send_parse_result(event, result))
 
-    assert len(event.sent) == 1
-    assert isinstance(event.sent[0][0], MessageVideo)
+    assert len(event.sent) == 2
+    assert any(isinstance(chain[0], MessageVideo) for chain in event.sent)
+    assert any(
+        isinstance(chain[0], Reply) and isinstance(chain[1], MessageImage)
+        for chain in event.sent
+    )
 
 
 def test_native_video_delivery_keeps_text_and_video_without_body_card(tmp_path):
@@ -5428,6 +5828,7 @@ def test_native_video_delivery_keeps_text_and_video_without_body_card(tmp_path):
     video_path.write_bytes(b"video")
     plugin = object.__new__(ParserXPlugin)
     plugin.config = {"behavior": {"show_download_fail_tip": True}}
+
     class FailingTextRenderer:
         async def render_text_card(self, *_args, **_kwargs):
             raise AssertionError("body card renderer must not be called")
@@ -5482,7 +5883,7 @@ def test_native_video_delivery_keeps_text_and_video_without_body_card(tmp_path):
     assert isinstance(event.sent[1][0], MessageVideo)
 
 
-def test_obsolete_media_card_renderer_is_not_called_for_video(tmp_path):
+def test_video_body_card_renderer_failure_keeps_text_and_video(tmp_path):
     from astrbot_plugin_parser_x.core.data import (
         Author,
         ParseResult,
@@ -5540,8 +5941,10 @@ def test_obsolete_media_card_renderer_is_not_called_for_video(tmp_path):
 
     asyncio.run(plugin._send_parse_result(event, result))
 
-    assert len(event.sent) == 1
-    assert isinstance(event.sent[0][0], MessageVideo)
+    assert len(event.sent) == 2
+    assert any(isinstance(chain[0], MessageVideo) for chain in event.sent)
+    fallback_chain = next(chain for chain in event.sent if isinstance(chain[0], Plain))
+    assert "渲染失败也必须发送正文" in fallback_chain[0].text
 
 
 def test_plugin_initializes_and_registers_aiocqhttp_parsers(tmp_path):
@@ -5624,7 +6027,9 @@ def test_plugin_initializes_and_registers_aiocqhttp_parsers(tmp_path):
                 assert xiaoheihe.render_service is plugin.render_service
                 assert xiaoheihe.comment_canvas.render_service is plugin.render_service
                 assert xiaohongshu.render_service is plugin.render_service
-                assert xiaohongshu.comment_canvas.render_service is plugin.render_service
+                assert (
+                    xiaohongshu.comment_canvas.render_service is plugin.render_service
+                )
                 assert {route for route, *_ in context.web_apis} == {
                     "/astrbot_plugin_parser_x/debug/status",
                     "/astrbot_plugin_parser_x/debug/start",

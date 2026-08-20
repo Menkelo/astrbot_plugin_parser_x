@@ -10,6 +10,7 @@ from .comment_style import UNIFIED_COMMENT_STYLE
 from .constants import COMMENT_FOOTER_BRAND
 from .html_renderer import HtmlRenderService
 from .platform_emotes import iter_emote_matches
+from .unicode_emoji import render_unicode_emoji_html
 
 RICH_TEXT_RE = re.compile(
     r"(?P<topic>#[^#\s\r\n][^#\r\n]{0,60}?#)"
@@ -41,14 +42,24 @@ class TextCardRenderer:
         last = 0
 
         for match in RICH_TEXT_RE.finditer(text or ""):
-            parts.append(cls._safe_text(text[last : match.start()]))
+            parts.append(cls._render_unicode_text(text[last : match.start()]))
             parts.append(
-                f'<span class="text-link">{cls._safe_text(match.group(0))}</span>'
+                '<span class="text-link">'
+                f"{cls._render_unicode_text(match.group(0))}</span>"
             )
             last = match.end()
 
-        parts.append(cls._safe_text(text[last:]))
+        parts.append(cls._render_unicode_text(text[last:]))
         return "".join(parts)
+
+    @classmethod
+    def _render_unicode_text(cls, text: str) -> str:
+        return render_unicode_emoji_html(
+            text or "",
+            escape_text=cls._safe_text,
+            escape_url=cls._safe_url,
+            class_name="inline-unicode-emoji",
+        )
 
     @classmethod
     def _render_text_html(
@@ -377,21 +388,21 @@ class TextCardRenderer:
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <style id="parser-x-content-card-styles">
 *{{box-sizing:border-box}}html,body{{margin:0;width:760px;background:{theme.background};color:{theme.text}}}html{{overflow-x:hidden;scrollbar-width:none}}html::-webkit-scrollbar{{width:0;height:0}}
-body{{padding:18px 22px 20px;overflow-x:hidden;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}}
+body{{padding:18px 22px 20px;overflow-x:hidden;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei","Noto Color Emoji","Apple Color Emoji","Segoe UI Emoji","Noto Emoji",sans-serif;font-variant-emoji:emoji}}
 .card{{width:716px;overflow:hidden;border:1px solid {theme.border};border-radius:14px;background:{theme.surface}}}
 .brand-bar{{display:flex;min-height:58px;align-items:center;justify-content:space-between;gap:16px;padding:14px 20px;border-bottom:1px solid {accent_dark};background:{theme.accent};color:#fff}}
 .brand-copy{{display:flex;min-width:0;align-items:center}}.brand-name{{overflow:hidden;font-size:19px;font-weight:700;letter-spacing:.02em;text-overflow:ellipsis;white-space:nowrap}}.product-name{{font-size:13px;opacity:.88;white-space:nowrap}}
 .hero{{width:100%;max-height:760px;overflow:hidden;border-bottom:1px solid {theme.border};background:{theme.subtle}}}.hero-image{{display:block;width:100%;min-height:240px;max-height:430px;object-fit:cover}}.hero-image.media-contain{{max-height:760px;object-fit:contain}}
-.primary-block{{display:grid;gap:10px;padding:19px 20px 17px}}.primary-block h1{{margin:0;overflow-wrap:anywhere;color:{theme.text};font-size:25px;font-weight:700;line-height:1.42}}.primary-block h1 .inline-emote{{width:32px;height:32px;vertical-align:-8px}}.meta{{color:{theme.muted};font-size:13px;line-height:1.45}}
+.primary-block{{display:grid;gap:10px;padding:19px 20px 17px}}.primary-block h1{{margin:0;overflow-wrap:anywhere;color:{theme.text};font-size:25px;font-weight:700;line-height:1.42}}.primary-block h1 .inline-emote,.primary-block h1 .inline-unicode-emoji{{width:32px;height:32px;vertical-align:-8px}}.meta{{color:{theme.muted};font-size:13px;line-height:1.45}}
 .metrics,.info-chips{{display:flex;align-items:center;gap:7px;flex-wrap:wrap}}.metric,.info-chip{{display:inline-flex;align-items:center;gap:5px;padding:5px 9px;border-radius:999px;background:{theme.subtle};color:{theme.muted};font-size:13px;line-height:1.45}}.metric strong{{color:{theme.text};font-size:14px}}
 .profile-block,.copy-block,.content-flow,.info-block,.comments-block,.footer{{border-top:1px solid {theme.border}}}.profile-block{{padding:15px 20px}}.profile{{display:flex;align-items:center;gap:10px}}.profile-avatar{{position:relative;display:grid;width:40px;height:40px;place-items:center;flex:0 0 40px;overflow:hidden;border:1px solid {theme.border};border-radius:50%;background:{theme.accent_soft};color:{theme.accent};font-size:14px;font-weight:800}}
 .profile-avatar img{{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}}.profile-copy{{display:grid;min-width:0;gap:2px}}.profile-name{{display:flex;min-width:0;align-items:center;gap:7px;flex-wrap:wrap}}.author{{max-width:440px;overflow:hidden;color:{theme.text};font-size:16px;font-weight:650;text-overflow:ellipsis;white-space:nowrap}}.profile-badge{{padding:1px 7px;border-radius:999px;background:{theme.accent_soft};color:{theme.accent};font-size:11px;font-weight:700;line-height:18px}}.profile-meta{{color:{theme.muted};font-size:12px}}
-.copy-block{{padding:17px 20px 18px}}.text{{color:{theme.text};font-size:18px;line-height:1.72;white-space:pre-wrap;word-break:break-word}}.text-link{{color:{theme.accent};font-weight:650}}.inline-emote{{display:inline-block;width:30px;height:30px;margin:0 2px;object-fit:contain;vertical-align:-8px}}
+.copy-block{{padding:17px 20px 18px}}.text{{color:{theme.text};font-size:18px;line-height:1.72;white-space:pre-wrap;word-break:break-word}}.text-link{{color:{theme.accent};font-weight:650}}.inline-emote,.inline-unicode-emoji{{display:inline-block;width:30px;height:30px;margin:0 2px;object-fit:contain;vertical-align:-8px}}
 .content-flow{{display:grid;gap:15px;padding:17px 20px 18px}}.flow-text{{color:{theme.text};font-size:18px;line-height:1.72;white-space:pre-wrap;word-break:break-word}}.flow-image-wrap{{width:100%;margin:0;overflow:hidden;border:1px solid {theme.border};border-radius:10px;background:{theme.subtle}}}.flow-image{{display:block;width:100%;height:auto;object-fit:contain}}
 .info-block,.comments-block{{padding:17px 20px}}.section-head{{display:flex;align-items:center;justify-content:space-between;gap:10px}}.section-head h2{{margin:0;color:{theme.text};font-size:19px;line-height:1.45}}.section-head>span{{color:{theme.muted};font-size:12px}}.info-chips{{margin-top:11px}}.info-chip{{border:1px solid {theme.border}}}
 .comment-list{{margin-top:4px}}.comment-card{{position:relative;display:grid;grid-template-columns:42px 1fr;gap:11px;padding:15px 0}}.comment-card+.comment-card{{border-top:1px solid {comment_style.border}}}.avatar-shell{{position:relative;display:grid;place-items:center;overflow:hidden;border:2px solid {comment_style.surface};border-radius:50%;background:{comment_style.accent_soft};color:{comment_style.accent};font-weight:800;box-shadow:0 0 0 1px {comment_style.border}}}.avatar-shell img{{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}}.avatar{{width:42px;height:42px;font-size:16px}}.reply-avatar{{width:28px;height:28px;font-size:12px}}.comment-body,.reply-body{{min-width:0}}.comment-head{{display:flex;min-height:22px;align-items:flex-start;justify-content:space-between;gap:10px}}.comment-aside{{display:grid;justify-items:end;gap:2px}}.comment-meta{{margin-left:auto;color:{comment_style.muted};font-size:11px;line-height:1.45;white-space:nowrap}}
 .author-row{{display:flex;min-height:21px;min-width:0;align-items:center;gap:5px;flex-wrap:wrap}}.nickname,.reply-name{{max-width:310px;overflow:hidden;color:{comment_style.text};font-size:16px;font-weight:650;text-overflow:ellipsis;white-space:nowrap}}.reply-name{{max-width:250px;font-size:14px}}.author-badge,.up-badge{{display:inline-flex;align-items:center;padding:1px 6px;border:1px solid transparent;border-radius:5px;background:{comment_style.accent_soft};color:{comment_style.accent};font-size:11px;font-weight:700;line-height:16px}}
-.comment-content,.reply-content{{margin-top:6px;color:{comment_style.text};font-size:17px;line-height:1.62;word-break:break-word}}.reply-content{{font-size:15px}}.highlight{{color:{comment_style.accent}}}.emoji-text{{display:inline-block;margin:0 2px;padding:0 4px;border-radius:5px;background:{comment_style.accent_soft};color:{comment_style.muted}}}.emote{{display:inline-block;width:23px;height:23px;margin:0 2px;object-fit:contain;vertical-align:-5px}}.pinned{{display:inline-block;margin-right:7px;padding:0 6px;border-radius:5px;background:{comment_style.accent_soft};color:{comment_style.accent};font-size:12px;line-height:21px;vertical-align:2px}}
+.comment-content,.reply-content{{margin-top:6px;color:{comment_style.text};font-size:17px;line-height:1.62;word-break:break-word;font-family:inherit}}.reply-content{{font-size:15px}}.highlight{{color:{comment_style.accent}}}.emoji-text{{display:inline-block;margin:0 2px;padding:0 4px;border-radius:5px;background:{comment_style.accent_soft};color:{comment_style.muted};font-family:"Noto Color Emoji","Apple Color Emoji","Segoe UI Emoji","Noto Emoji",sans-serif;font-variant-emoji:emoji}}.emote,.unicode-emoji{{display:inline-block;width:23px;height:23px;margin:0 2px;object-fit:contain;vertical-align:-5px}}.pinned{{display:inline-block;margin-right:7px;padding:0 6px;border-radius:5px;background:{comment_style.accent_soft};color:{comment_style.accent};font-size:12px;line-height:21px;vertical-align:2px}}
 .comment-image-wrap,.sticker-image-wrap{{display:block;width:fit-content;max-width:100%;margin:9px 0 0;overflow:hidden;border:1px solid {comment_style.border};border-radius:8px;background:{comment_style.nested_surface}}}.comment-image{{display:block;width:auto;height:auto;max-width:520px;object-fit:contain}}.sticker-image{{display:block;width:auto;height:auto;max-width:170px;max-height:170px;object-fit:contain}}
 .actions{{display:flex;align-items:center;justify-content:flex-end;gap:14px;margin-top:7px;color:{comment_style.muted};font-size:13px;line-height:20px;flex-wrap:wrap}}.action{{display:inline-flex;align-items:center;gap:4px}}.action-icon{{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}}.creator-liked{{margin-right:auto}}.creator-liked,.up-liked{{display:inline-block;padding:1px 6px;border-radius:5px;background:{comment_style.accent_soft};color:{comment_style.accent};font-size:12px}}.reply-card{{display:grid;grid-template-columns:28px 1fr;gap:9px;max-width:590px;margin-top:11px;padding:10px 11px;border-left:3px solid {comment_style.accent};border-radius:0 10px 10px 0;background:{comment_style.nested_surface}}}.reply-card .actions{{gap:12px}}
 .level{{height:17px;padding:0 4px;border-radius:3px;background:#c9ccd0;color:#fff;font-size:11px;font-weight:700;line-height:17px}}.level-2{{background:#8cd49c}}.level-3{{background:#7cccec}}.level-4{{background:#fbbc8c}}.level-5{{background:#ec642c}}.level-6{{background:#f34c4c}}.senior-flash{{font-size:10px}}.fan-medal{{display:inline-flex;height:18px;max-width:120px;overflow:hidden;border:1px solid var(--medal-border,#ff6699);border-radius:3px;font-size:11px;line-height:16px}}.fan-name{{max-width:88px;overflow:hidden;padding:0 4px;background:var(--medal-bg,#ff6699);color:var(--medal-fg,#fff);text-overflow:ellipsis;white-space:nowrap}}.fan-level{{min-width:18px;padding:0 3px;background:var(--medal-level-bg,#fff);color:var(--medal-level-fg,#ff6699);text-align:center}}.decor{{display:flex;max-width:115px;align-items:center;justify-content:flex-end;gap:3px;color:{comment_style.accent};font-size:10px;font-weight:700}}.decor-image{{width:34px;height:28px;overflow:hidden}}.decor-image img{{width:auto;height:38px;transform:translate(-55%,-5px)}}

@@ -11,10 +11,17 @@ BILIBILI_EMOTE_URL = "https://api.bilibili.com/x/emote/package"
 BILIBILI_EMOTE_PANEL_URL = "https://api.bilibili.com/x/emote/user/panel/web"
 MIYOUSHE_EMOTE_URL = "https://bbs-api.miyoushe.com/misc/api/emoticon_set"
 XIAOHEIHE_EMOTE_URL = "https://api.xiaoheihe.cn/bbs/app/api/emojis/list"
+XIAOHONGSHU_EMOTE_URL = "https://edith.xiaohongshu.com/api/im/redmoji/detail"
 
 _MIYOUSHE_TOKEN_RE = re.compile(r"_\([^()\n]{1,64}\)")
 _SQUARE_TOKEN_RE = re.compile(r"\[[^\[\]\n]{1,64}\]")
-_SQUARE_TOKEN_PLATFORMS = {"bilibili", "douyin", "weibo", "xiaoheihe"}
+_SQUARE_TOKEN_PLATFORMS = {
+    "bilibili",
+    "douyin",
+    "weibo",
+    "xiaoheihe",
+    "xiaohongshu",
+}
 
 # The official catalog APIs are the primary source. These small fallbacks keep the
 # most common expressions usable during a transient API failure.
@@ -59,6 +66,29 @@ _XIAOHEIHE_FALLBACK = {
     "cube_赞": "https://imgheybox.max-c.com/heybox/emoji/cube_41.png",
 }
 
+_XIAOHONGSHU_FALLBACK = {
+    "[微笑R]": (
+        "https://picasso-static.xiaohongshu.com/fe-platform/"
+        "9366d16631e3e208689cbc95eefb7cfb0901001e.png"
+    ),
+    "[生气R]": (
+        "https://picasso-static.xiaohongshu.com/fe-platform/"
+        "91515ae9718d8cce4f8de909683011b538d35327.png"
+    ),
+    "[哭惹R]": (
+        "https://picasso-static.xiaohongshu.com/fe-platform/"
+        "14b005f7afd5f7c88620478b610bf1de90c4ceab.png"
+    ),
+    "[斜眼R]": (
+        "https://picasso-static.xiaohongshu.com/fe-platform/"
+        "6062be312a922da7998f99fb773e06cea0a640df.png"
+    ),
+    "[doge]": (
+        "https://picasso-static.xiaohongshu.com/fe-platform/"
+        "b7c0498189d449e8f22946be494d6bad48eda5ab.png"
+    ),
+}
+
 
 def _normalise_miyoushe_name(value: str) -> str:
     value = value.strip()
@@ -86,6 +116,8 @@ def fallback_emote_map(platform_key: str) -> dict[str, str]:
         return dict(_MIYOUSHE_FALLBACK)
     if platform_key == "xiaoheihe":
         return dict(_XIAOHEIHE_FALLBACK)
+    if platform_key == "xiaohongshu":
+        return dict(_XIAOHONGSHU_FALLBACK)
     return {}
 
 
@@ -180,6 +212,60 @@ def build_xiaoheihe_emote_map(payload: object) -> dict[str, str]:
                 image,
                 overwrite=False,
             )
+    return output
+
+
+def build_xiaohongshu_emote_map(payload: object) -> dict[str, str]:
+    """Build a token -> image map from Xiaohongshu's redmoji catalog.
+
+    The endpoint has changed its envelope a few times.  Current responses put
+    ``tabs[].collection[].emoji[]`` below ``data.emoji``; accepting the direct
+    ``emoji``/``tabs`` forms as well keeps old cached fixtures and future minor
+    envelope changes compatible.
+    """
+    if not isinstance(payload, dict):
+        return {}
+
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        data = payload
+    emoji = data.get("emoji") if isinstance(data, dict) else None
+    if not isinstance(emoji, dict):
+        emoji = data if isinstance(data, dict) else {}
+    tabs = emoji.get("tabs") if isinstance(emoji, dict) else None
+    if not isinstance(tabs, list):
+        tabs = data.get("tabs") if isinstance(data, dict) else []
+
+    output: dict[str, str] = {}
+    for tab in tabs or []:
+        if not isinstance(tab, dict):
+            continue
+        collections = tab.get("collection") or tab.get("collections") or []
+        if isinstance(collections, dict):
+            collections = [collections]
+        for collection in collections:
+            if not isinstance(collection, dict):
+                continue
+            items = collection.get("emoji") or collection.get("emojis") or []
+            if isinstance(items, dict):
+                items = [items]
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                name = (
+                    item.get("image_name")
+                    or item.get("imageName")
+                    or item.get("display_name")
+                    or item.get("name")
+                    or item.get("text")
+                )
+                image = (
+                    item.get("image")
+                    or item.get("url")
+                    or item.get("src")
+                    or item.get("image_url")
+                )
+                _register(output, "xiaohongshu", name, image)
     return output
 
 
@@ -336,6 +422,14 @@ async def load_platform_emotes(
                 retries=1,
             )
             parsed = build_xiaoheihe_emote_map(response.json())
+        elif platform_key == "xiaohongshu":
+            response = await http_get(
+                XIAOHONGSHU_EMOTE_URL,
+                headers=getattr(parser, "headers", None),
+                timeout=8,
+                retries=1,
+            )
+            parsed = build_xiaohongshu_emote_map(response.json())
         else:
             parsed = {}
 
@@ -356,6 +450,7 @@ __all__ = [
     "build_bilibili_emote_map",
     "build_miyoushe_emote_map",
     "build_xiaoheihe_emote_map",
+    "build_xiaohongshu_emote_map",
     "clean_emote_token",
     "contains_platform_emotes",
     "fallback_emote_map",

@@ -36,3 +36,12 @@
 - License: Apache License 2.0
 - Use in this project: detect QR codes in user-supplied comment images before rendering video comment cards.
   Detection is local, bounded by image size and timeouts, and fails open when an image cannot be decoded.
+
+## Twemoji
+
+- Repository: https://github.com/jdecked/twemoji
+- Code license: MIT License
+- Graphics license: Creative Commons Attribution 4.0 International (CC BY 4.0)
+- Use in this project: render Unicode Emoji in body and video-comment cards through the Twemoji 15.1 SVG
+  assets served by jsDelivr. Parser X does not bundle the graphics; image load failures replace the image with
+  its original Unicode character. Twemoji graphics are provided by Twitter and project contributors.
