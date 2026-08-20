@@ -7,19 +7,12 @@ const elements = {
   runButton: document.getElementById("run-button"),
   cancelButton: document.getElementById("cancel-button"),
   clearButton: document.getElementById("clear-button"),
-  refreshStatus: document.getElementById("refresh-status"),
   modeStatus: document.getElementById("mode-status"),
   modeStatusText: document.getElementById("mode-status-text"),
-  modeNotice: document.getElementById("mode-notice"),
-  platformList: document.getElementById("platform-list"),
   runSubtitle: document.getElementById("run-subtitle"),
-  runMetrics: document.getElementById("run-metrics"),
-  metricMessage: document.getElementById("metric-message"),
-  metricTime: document.getElementById("metric-time"),
   emptyState: document.getElementById("empty-state"),
   chatBody: document.getElementById("qq-chat-body"),
   timeline: document.getElementById("message-timeline"),
-  details: document.getElementById("parse-details"),
   toast: document.getElementById("toast"),
 };
 
@@ -29,6 +22,7 @@ let activeSessionId = null;
 let activeSubscriptionId = null;
 let messageCount = 0;
 let latestElapsedMs = 0;
+let progressRow = null;
 let toastTimer = null;
 
 function setText(element, value) {
@@ -44,64 +38,87 @@ function formatBytes(value) {
   return `${(size / 1024 ** 2).toFixed(1)} MB`;
 }
 
+function formatTime(date = new Date()) {
+  return date.toLocaleTimeString("zh-CN", {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
 function showToast(message) {
   clearTimeout(toastTimer);
   setText(elements.toast, message);
   elements.toast.hidden = false;
   toastTimer = setTimeout(() => {
     elements.toast.hidden = true;
-  }, 5200);
+  }, 4200);
 }
 
-function updateButtons() {
+function scrollToLatest() {
+  requestAnimationFrame(() => {
+    elements.chatBody.scrollTo({
+      top: elements.chatBody.scrollHeight,
+      behavior: "smooth",
+    });
+  });
+}
+
+function updateControls() {
   const hasText = elements.text.value.trim().length > 0;
-  elements.text.disabled = !debugEnabled || busy;
+  elements.text.disabled = busy;
   elements.runButton.disabled = !debugEnabled || busy || !hasText;
-  elements.cancelButton.disabled = !busy;
-  elements.refreshStatus.disabled = busy;
+  elements.cancelButton.disabled = !busy || !activeSessionId;
+  elements.cancelButton.hidden = !busy;
+  elements.clearButton.disabled = busy;
 }
 
 function setBusy(nextBusy) {
   busy = Boolean(nextBusy);
-  updateButtons();
+  updateControls();
 }
 
-function updateMetrics() {
-  elements.runMetrics.hidden = messageCount === 0 && latestElapsedMs === 0;
-  setText(elements.metricMessage, `${messageCount} 条消息`);
-  setText(elements.metricTime, `${latestElapsedMs} ms`);
-}
-
-function resetOutput() {
+function resetConversation() {
   messageCount = 0;
   latestElapsedMs = 0;
-  elements.emptyState.hidden = false;
+  progressRow = null;
   elements.timeline.replaceChildren();
-  elements.details.replaceChildren();
+  elements.emptyState.hidden = false;
   elements.chatBody.scrollTop = 0;
-  setText(elements.runSubtitle, "等待一次解析任务");
-  updateMetrics();
-}
-
-function appendEvent(message, kind = "normal") {
-  elements.emptyState.hidden = true;
-  const row = document.createElement("div");
-  row.className = "event-row";
-  if (kind === "error") row.classList.add("is-error");
-  if (kind === "success") row.classList.add("is-success");
-  setText(row, message);
-  elements.timeline.append(row);
-  row.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  setText(
+    elements.runSubtitle,
+    debugEnabled ? "在线 · 等待测试" : "请在插件配置中开启调试模式",
+  );
 }
 
 function appendTimeDivider(date = new Date()) {
   const row = document.createElement("div");
-  row.className = "qq-time-divider";
-  setText(
-    row,
-    date.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" }),
-  );
+  row.className = "time-divider";
+  setText(row, formatTime(date));
   elements.timeline.append(row);
+}
+
+function setProgress(message, kind = "loading") {
+  elements.emptyState.hidden = true;
+  if (!progressRow || !progressRow.isConnected) {
+    progressRow = document.createElement("div");
+    elements.timeline.append(progressRow);
+  }
+  progressRow.className = `system-message is-${kind}`;
+  setText(progressRow, message);
+  scrollToLatest();
+}
+
+function appendSystem(message, kind = "normal") {
+  const row = document.createElement("div");
+  row.className = `system-message is-${kind}`;
+  setText(row, message);
+  if (progressRow?.isConnected) {
+    elements.timeline.insertBefore(row, progressRow);
+  } else {
+    elements.timeline.append(row);
+  }
+  scrollToLatest();
+  return row;
 }
 
 function platformInitial(platform) {
@@ -109,7 +126,7 @@ function platformInitial(platform) {
   return value.slice(0, 2).toUpperCase() || "PX";
 }
 
-function createDownloadButton(media, label = "下载") {
+function createDownloadButton(media, label = "保存") {
   const button = document.createElement("button");
   button.type = "button";
   button.className = "download-button";
@@ -159,17 +176,16 @@ async function loadMediaPreview(card, type, media, placeholder) {
   let dataUrl = media?.data_url || media?.url || "";
   if (!dataUrl && media?.token && media?.previewable) {
     try {
-      const payload = await bridge.apiGet(
-        `debug/media/${media.token}/preview`,
-      );
+      const payload = await bridge.apiGet(`debug/media/${media.token}/preview`);
       dataUrl = payload?.data_url || "";
     } catch (error) {
-      setText(placeholder, error?.message || "预览加载失败，可下载查看");
+      placeholder.classList.add("is-error");
+      setText(placeholder, error?.message || "预览加载失败，可保存后查看");
       return;
     }
   }
   if (!dataUrl) {
-    setText(placeholder, media?.missing ? "媒体文件不存在" : "该媒体仅提供下载");
+    setText(placeholder, media?.missing ? "媒体文件不存在" : "该媒体仅提供保存");
     return;
   }
 
@@ -177,24 +193,39 @@ async function loadMediaPreview(card, type, media, placeholder) {
   if (!mediaElement) return;
   placeholder.replaceWith(mediaElement);
   card.classList.add("has-preview");
+  mediaElement.addEventListener("load", scrollToLatest, { once: true });
+}
+
+function mediaTypeLabel(type) {
+  return { image: "图片", video: "视频", audio: "音频" }[type] || "媒体";
 }
 
 function createMediaCard(type, media = {}) {
-  const card = document.createElement("div");
+  const card = document.createElement("figure");
   card.className = `media-card is-${type}`;
 
+  const preview = document.createElement("div");
+  preview.className = "media-preview";
   const placeholder = document.createElement("div");
   placeholder.className = "media-placeholder";
-  const label = type === "image" ? "图片预览加载中" : `${type} 媒体`;
-  setText(placeholder, label);
-  card.append(placeholder);
+  setText(placeholder, `${mediaTypeLabel(type)}加载中…`);
+  preview.append(placeholder);
 
-  const footer = document.createElement("div");
+  const footer = document.createElement("figcaption");
   footer.className = "media-footer";
   const copy = document.createElement("span");
-  setText(copy, `${media.name || type} · ${formatBytes(media.size)}`);
+  copy.className = "media-copy";
+  const kind = document.createElement("strong");
+  setText(kind, mediaTypeLabel(type));
+  const name = document.createElement("span");
+  name.className = "media-name";
+  setText(name, media.name || `未命名${mediaTypeLabel(type)}`);
+  const size = document.createElement("span");
+  size.className = "media-size";
+  setText(size, formatBytes(media.size));
+  copy.append(kind, name, size);
   footer.append(copy, createDownloadButton(media));
-  card.append(footer);
+  card.append(preview, footer);
 
   void loadMediaPreview(card, type, media, placeholder);
   return card;
@@ -203,22 +234,19 @@ function createMediaCard(type, media = {}) {
 function createFileCard(media = {}) {
   const card = document.createElement("div");
   card.className = "file-card";
-
   const icon = document.createElement("span");
   icon.className = "file-icon";
   setText(icon, "FILE");
-
   const body = document.createElement("span");
   body.className = "file-body";
   const copy = document.createElement("strong");
   copy.className = "file-copy";
-  setText(copy, media.name || "文件");
+  setText(copy, media.name || "未命名文件");
   const meta = document.createElement("span");
   meta.className = "file-meta";
-  setText(meta, formatBytes(media.size));
+  setText(meta, `文件 · ${formatBytes(media.size)}`);
   body.append(copy, meta);
-
-  card.append(icon, body, createDownloadButton(media, "接收"));
+  card.append(icon, body, createDownloadButton(media));
   return card;
 }
 
@@ -231,75 +259,68 @@ function componentPreview(component) {
   if (type === "reply") return "[回复消息]";
   if (type === "image") return "[图片]";
   if (type === "video") return "[视频]";
-  if (type === "audio") return "[语音]";
+  if (type === "audio") return "[音频]";
   if (type === "file") return `[文件] ${component.media?.name || ""}`.trim();
   if (type === "forward") return "[聊天记录]";
   return `[${component.label || type}]`;
 }
 
-function renderComponent(component) {
+function renderComponent(component, compact = false) {
   const type = component?.type || "unknown";
   if (type === "text") {
     const bubble = document.createElement("div");
-    bubble.className = "text-bubble";
+    bubble.className = compact ? "node-text" : "message-text";
     return setText(bubble, component.text || "");
   }
   if (type === "reply") {
-    const reply = document.createElement("div");
-    reply.className = "reply-strip";
-    return setText(reply, `回复了一条消息 · ${component.id || "unknown"}`);
+    const reply = document.createElement("blockquote");
+    reply.className = "reply-card";
+    const label = document.createElement("strong");
+    setText(label, "回复消息");
+    const id = document.createElement("span");
+    setText(id, component.id || "原消息");
+    reply.append(label, id);
+    return reply;
   }
   if (type === "image" || type === "video" || type === "audio") {
     return createMediaCard(type, component.media || {});
   }
-  if (type === "file") {
-    return createFileCard(component.media || {});
-  }
-  if (type === "forward") {
-    return renderForward(component);
-  }
+  if (type === "file") return createFileCard(component.media || {});
+  if (type === "forward") return renderForward(component);
 
   const unknown = document.createElement("div");
   unknown.className = "unknown-card";
-  unknown.style.padding = "10px 12px";
   return setText(unknown, component.label || type);
 }
 
 function renderForward(component) {
   const details = document.createElement("details");
   details.className = "forward-card";
-
   const nodes = Array.isArray(component.nodes) ? component.nodes : [];
+
   const summary = document.createElement("summary");
   const summaryCopy = document.createElement("span");
   summaryCopy.className = "forward-summary-copy";
   const title = document.createElement("strong");
   setText(title, "聊天记录");
-  const previewList = document.createElement("span");
-  previewList.className = "forward-preview-list";
-  if (nodes.length) {
-    nodes.slice(0, 2).forEach((node) => {
+  const previews = document.createElement("span");
+  previews.className = "forward-preview-list";
+  const previewNodes = nodes.slice(0, 2);
+  (previewNodes.length ? previewNodes : [{ name: "Parser X", content: [] }]).forEach(
+    (node) => {
       const line = document.createElement("span");
-      line.className = "forward-preview-line";
-      const preview = (node.content || []).map(componentPreview).find(Boolean) || "[空消息]";
-      setText(line, `${node.name || "Parser X"}: ${preview}`);
-      previewList.append(line);
-    });
-  } else {
-    const line = document.createElement("span");
-    line.className = "forward-preview-line";
-    setText(line, "暂无消息");
-    previewList.append(line);
-  }
-  const count = document.createElement("span");
-  count.className = "forward-preview-count";
-  setText(count, `查看 ${nodes.length} 条转发消息`);
-  summaryCopy.append(title, previewList, count);
+      const preview = (node.content || []).map(componentPreview).find(Boolean) || "暂无内容";
+      setText(line, `${node.name || "Parser X"}：${preview}`);
+      previews.append(line);
+    },
+  );
+  const count = document.createElement("small");
+  setText(count, `${nodes.length} 条消息`);
+  summaryCopy.append(title, previews, count);
   const arrow = document.createElement("span");
   arrow.className = "forward-arrow";
   setText(arrow, "›");
   summary.append(summaryCopy, arrow);
-  details.append(summary);
 
   const nodeList = document.createElement("div");
   nodeList.className = "forward-nodes";
@@ -309,40 +330,33 @@ function renderForward(component) {
     const avatar = document.createElement("div");
     avatar.className = "node-avatar";
     setText(avatar, platformInitial(node.name));
-
     const copy = document.createElement("div");
     copy.className = "node-copy";
-    const name = document.createElement("div");
+    const name = document.createElement("strong");
     name.className = "node-name";
-    setText(name, node.name || "Parser X 调试台");
-    const components = document.createElement("div");
-    components.className = "node-components";
-    (node.content || []).forEach((item) => {
-      components.append(renderComponent(item));
-    });
-    copy.append(name, components);
+    setText(name, node.name || "Parser X");
+    const content = document.createElement("div");
+    content.className = "node-components";
+    (node.content || []).forEach((item) => content.append(renderComponent(item, true)));
+    copy.append(name, content);
     row.append(avatar, copy);
     nodeList.append(row);
   });
-  details.append(nodeList);
+
+  details.append(summary, nodeList);
   return details;
 }
 
 function renderMessage(payload, platform) {
   elements.emptyState.hidden = true;
   messageCount += 1;
-  latestElapsedMs = Math.max(
-    latestElapsedMs,
-    Number(payload?.elapsed_ms || 0),
-  );
-  updateMetrics();
+  latestElapsedMs = Math.max(latestElapsedMs, Number(payload?.elapsed_ms || 0));
 
   const entry = document.createElement("article");
   entry.className = "message-entry is-incoming";
   const avatar = document.createElement("div");
   avatar.className = "message-avatar";
   setText(avatar, "PX");
-
   const main = document.createElement("div");
   main.className = "message-main";
   const meta = document.createElement("div");
@@ -350,109 +364,93 @@ function renderMessage(payload, platform) {
   const name = document.createElement("strong");
   setText(name, "Parser X");
   const platformBadge = document.createElement("span");
-  platformBadge.className = "message-platform";
+  platformBadge.className = "platform-badge";
   setText(platformBadge, platform || "解析结果");
-  const sequence = document.createElement("span");
-  setText(sequence, `#${payload?.index || messageCount}`);
-  const elapsed = document.createElement("span");
-  setText(elapsed, `+${payload?.elapsed_ms || 0} ms`);
-  meta.append(name, platformBadge, sequence, elapsed);
+  const time = document.createElement("time");
+  setText(time, formatTime());
+  meta.append(name, platformBadge, time);
 
   const stack = document.createElement("div");
   stack.className = "component-stack";
   (payload?.components || []).forEach((component) => {
     stack.append(renderComponent(component));
   });
+  if (!stack.childElementCount) {
+    const empty = document.createElement("div");
+    empty.className = "message-text";
+    setText(empty, "这条消息没有可预览的内容");
+    stack.append(empty);
+  }
   main.append(meta, stack);
   entry.append(avatar, main);
-  elements.timeline.append(entry);
-  entry.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  if (progressRow?.isConnected) {
+    elements.timeline.insertBefore(entry, progressRow);
+  } else {
+    elements.timeline.append(entry);
+  }
+  scrollToLatest();
 }
 
 function renderUserMessage(text) {
   elements.emptyState.hidden = true;
   const entry = document.createElement("article");
   entry.className = "message-entry is-self";
-
+  const bubble = document.createElement("div");
+  bubble.className = "user-bubble";
+  setText(bubble, text);
   const avatar = document.createElement("div");
   avatar.className = "message-avatar user-avatar";
   setText(avatar, "我");
-
-  const main = document.createElement("div");
-  main.className = "message-main";
-
-  const stack = document.createElement("div");
-  stack.className = "component-stack";
-  const bubble = document.createElement("div");
-  bubble.className = "text-bubble";
-  setText(bubble, text);
-  stack.append(bubble);
-  main.append(stack);
-  entry.append(main, avatar);
+  entry.append(bubble, avatar);
   elements.timeline.append(entry);
-  entry.scrollIntoView({ behavior: "smooth", block: "nearest" });
-}
-
-function renderParseDetail(event) {
-  const details = document.createElement("details");
-  details.className = "detail-card";
-  const summary = document.createElement("summary");
-  setText(summary, `${event.platform || "平台"} · 解析数据 · ${event.parse_ms || 0} ms`);
-  const pre = document.createElement("pre");
-  setText(pre, JSON.stringify(event.result || {}, null, 2));
-  details.append(summary, pre);
-  elements.details.append(details);
+  scrollToLatest();
 }
 
 function finishRun(subtitle) {
   setBusy(false);
   activeSessionId = null;
   setText(elements.runSubtitle, subtitle);
+  elements.text.focus();
 }
 
 function handleDebugEvent(event) {
   if (!event || typeof event !== "object") return;
   switch (event.event) {
     case "started":
-      appendEvent(`开始处理 ${event.match_count || 0} 个匹配链接`);
+      setProgress(`正在处理 ${event.match_count || 0} 个链接…`);
       break;
     case "match":
-      appendEvent(`${event.platform || "平台"}：已命中 ${event.url || "链接"}`);
+      setProgress(`正在解析 ${event.platform || "分享链接"}…`);
       break;
     case "parsed":
-      appendEvent(`${event.platform || "平台"}：解析完成（${event.parse_ms || 0} ms）`);
-      renderParseDetail(event);
+      setProgress(`${event.platform || "内容"}已解析，正在生成消息…`);
       break;
     case "message":
       renderMessage(event.message || {}, event.platform);
       break;
     case "delivered":
       latestElapsedMs = Math.max(latestElapsedMs, Number(event.elapsed_ms || 0));
-      updateMetrics();
-      appendEvent(`${event.platform || "平台"}：模拟投递完成`, "success");
       break;
     case "skipped":
-      appendEvent(`${event.platform || "平台"}：${event.message || "已跳过"}`);
+      appendSystem(`${event.platform || "平台"}：${event.message || "已跳过"}`);
       break;
     case "error":
-      appendEvent(
-        `${event.platform ? `${event.platform}：` : ""}${event.message || "发生错误"}`,
+      appendSystem(
+        `${event.platform ? `${event.platform}：` : ""}${event.message || "解析失败"}`,
         "error",
       );
       break;
     case "cancelled":
-      appendEvent(event.message || "调试任务已取消", "error");
+      setProgress(event.message || "已取消解析", "error");
       finishRun("任务已取消");
       break;
-    case "done":
+    case "done": {
       latestElapsedMs = Math.max(latestElapsedMs, Number(event.elapsed_ms || 0));
-      updateMetrics();
-      appendEvent(
-        `完成 ${event.completed || 0} / ${event.match_count || 0} 个解析任务`,
-        "success",
-      );
-      finishRun(`解析完成 · ${event.elapsed_ms || 0} ms`);
+      const seconds = (latestElapsedMs / 1000).toFixed(latestElapsedMs >= 1000 ? 1 : 2);
+      setProgress(`解析完成 · ${messageCount} 条消息 · ${seconds} 秒`, "success");
+      finishRun(`在线 · 上次解析 ${seconds} 秒`);
       break;
+    }
     case "session_end":
       activeSubscriptionId = null;
       if (busy) finishRun("调试会话已结束");
@@ -464,48 +462,26 @@ function handleDebugEvent(event) {
 
 async function refreshStatus() {
   elements.modeStatus.className = "mode-status is-loading";
-  setText(elements.modeStatusText, "正在读取插件状态");
+  setText(elements.modeStatusText, "读取状态");
   try {
     const status = await bridge.apiGet("debug/status");
     debugEnabled = Boolean(status?.enabled);
     elements.modeStatus.className = debugEnabled
       ? "mode-status is-enabled"
       : "mode-status is-disabled";
+    setText(elements.modeStatusText, debugEnabled ? "调试已开启" : "调试未开启");
     setText(
-      elements.modeStatusText,
-      debugEnabled ? "独占调试已开启" : "调试模式已关闭",
+      elements.runSubtitle,
+      debugEnabled ? "在线 · 仅接收本页面请求" : "请在插件配置中开启调试模式",
     );
-
-    elements.modeNotice.className = debugEnabled
-      ? "mode-notice is-enabled"
-      : "mode-notice is-disabled";
-    elements.modeNotice.replaceChildren();
-    const title = document.createElement("strong");
-    const description = document.createElement("span");
-    if (debugEnabled) {
-      setText(title, "当前仅接受本页面的解析请求");
-      setText(description, "QQ 与其他消息适配器已暂停触发 Parser X。关闭调试开关后自动恢复。 ");
-    } else {
-      setText(title, "请先在插件配置中开启调试开关");
-      setText(description, "开关默认关闭；未开启时本页不会执行任何解析任务。 ");
-    }
-    elements.modeNotice.append(title, description);
-
-    elements.platformList.replaceChildren();
-    const platforms = Array.isArray(status?.platforms) ? status.platforms : [];
-    (platforms.length ? platforms : ["暂无平台"]).forEach((platform) => {
-      const chip = document.createElement("span");
-      chip.className = "platform-chip";
-      setText(chip, platform);
-      elements.platformList.append(chip);
-    });
   } catch (error) {
     debugEnabled = false;
     elements.modeStatus.className = "mode-status is-disabled";
-    setText(elements.modeStatusText, "调试接口不可用");
+    setText(elements.modeStatusText, "接口不可用");
+    setText(elements.runSubtitle, "无法连接插件调试接口");
     showToast(error?.message || "读取调试状态失败");
   } finally {
-    updateButtons();
+    updateControls();
   }
 }
 
@@ -526,49 +502,52 @@ async function cancelRun() {
   }
   activeSubscriptionId = null;
   activeSessionId = null;
+  setProgress("已取消解析", "error");
   finishRun("任务已取消");
 }
 
 async function startRun() {
   const text = elements.text.value.trim();
   if (!text || busy) return;
+  setBusy(true);
   await refreshStatus();
   if (!debugEnabled) {
+    setBusy(false);
     showToast("请先在 Parser X 插件配置中开启调试模式");
     return;
   }
 
-  resetOutput();
-  elements.emptyState.hidden = true;
-  appendTimeDivider();
+  if (!elements.timeline.childElementCount) appendTimeDivider();
+  progressRow = null;
   renderUserMessage(text);
-  setBusy(true);
-  setText(elements.runSubtitle, "正在启动真实解析流程");
+  elements.text.value = "";
+  setText(elements.charCount, "0 / 20000");
+  setText(elements.runSubtitle, "正在启动解析");
 
   try {
     const start = await bridge.apiPost("debug/start", { text });
     activeSessionId = start?.session_id || null;
     if (!activeSessionId) throw new Error("服务端未返回调试会话 ID");
-    setText(elements.runSubtitle, `解析中 · ${start.match_count || 0} 个匹配链接`);
+    updateControls();
+    setProgress(`正在处理 ${start.match_count || 0} 个链接…`);
+    setText(elements.runSubtitle, `解析中 · ${start.match_count || 0} 个链接`);
 
     activeSubscriptionId = await bridge.subscribeSSE(
       "debug/events",
       {
-        onOpen() {
-          appendEvent("实时消息通道已连接");
-        },
+        onOpen() {},
         onMessage(event) {
           handleDebugEvent(event.parsed);
         },
         onError() {
-          appendEvent("实时消息通道异常中断", "error");
+          setProgress("消息通道已中断", "error");
           finishRun("连接已中断");
         },
       },
       { session_id: activeSessionId },
     );
   } catch (error) {
-    appendEvent(error?.message || "启动调试任务失败", "error");
+    setProgress(error?.message || "启动调试任务失败", "error");
     finishRun("启动失败");
     showToast(error?.message || "启动调试任务失败");
   }
@@ -576,7 +555,7 @@ async function startRun() {
 
 elements.text.addEventListener("input", () => {
   setText(elements.charCount, `${elements.text.value.length} / 20000`);
-  updateButtons();
+  updateControls();
 });
 
 elements.text.addEventListener("keydown", (event) => {
@@ -596,12 +575,7 @@ elements.cancelButton.addEventListener("click", () => {
 });
 
 elements.clearButton.addEventListener("click", () => {
-  if (busy) void cancelRun();
-  resetOutput();
-});
-
-elements.refreshStatus.addEventListener("click", () => {
-  void refreshStatus();
+  resetConversation();
 });
 
 window.addEventListener("focus", () => {
@@ -609,11 +583,9 @@ window.addEventListener("focus", () => {
 });
 
 window.addEventListener("beforeunload", () => {
-  if (activeSubscriptionId) {
-    void bridge.unsubscribeSSE(activeSubscriptionId);
-  }
+  if (activeSubscriptionId) void bridge.unsubscribeSSE(activeSubscriptionId);
 });
 
 await bridge.ready();
 await refreshStatus();
-resetOutput();
+resetConversation();

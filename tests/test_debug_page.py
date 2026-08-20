@@ -27,11 +27,25 @@ def _response_json(response) -> dict:
 def test_debug_switch_defaults_to_disabled_and_page_assets_exist():
     root = Path(__file__).parents[1]
     schema = json.loads((root / "_conf_schema.json").read_text(encoding="utf-8"))
+    debug_html = (root / "pages" / "debug" / "index.html").read_text(
+        encoding="utf-8"
+    )
+    debug_app = (root / "pages" / "debug" / "app.js").read_text(encoding="utf-8")
+    debug_css = (root / "pages" / "debug" / "style.css").read_text(
+        encoding="utf-8"
+    )
 
     assert schema["debug"]["items"]["enabled"]["default"] is False
     assert (root / "pages" / "debug" / "index.html").is_file()
     assert (root / "pages" / "debug" / "app.js").is_file()
     assert (root / "pages" / "debug" / "style.css").is_file()
+    assert 'class="qq-window"' in debug_html
+    assert 'id="share-text"' in debug_html
+    assert "composer-panel" not in debug_html
+    assert "parse-details" not in debug_html
+    assert 'entry.className = "message-entry is-self"' in debug_app
+    assert "elements.clearButton.disabled = busy" in debug_app
+    assert "[hidden] { display: none !important; }" in debug_css
 
 
 def test_debug_mode_blocks_adapter_message_before_it_is_inspected():
