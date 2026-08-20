@@ -218,7 +218,8 @@ class XiaoHongShuParser(BaseParser):
         xsec_token = self._xsec_token(note_data, final_url)
         if not resolved_note_id or not xsec_token:
             logger.debug(
-                "[XHS] 视频链接缺少 note_id 或 xsec_token，跳过评论区"
+                "[评论区][小红书] stage=attach result=skipped "
+                "reason=missing_note_context"
             )
             return {}
 

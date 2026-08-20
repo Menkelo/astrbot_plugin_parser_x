@@ -14,6 +14,8 @@ from pathlib import Path
 from astrbot.api import logger
 from msgspec import json as msgjson
 
+from ...comment_filter import CommentFilter
+from ...comment_settings import CommentFilterSettings
 from ...constants import COMMENT_FOOTER_BRAND
 from ...data import ImageContent
 from ...utils import cached_image_to_data_uri
@@ -121,16 +123,23 @@ class BiliCommentFeed:
         self._mixin_key_deadline = 0.0
         self._mixin_key_lock = asyncio.Lock()
         self._avatar_data_uri_cache: dict[str, str | None] = {}
+        self.comment_filter = CommentFilter(
+            parser,
+            CommentFilterSettings.from_config(getattr(parser, "config", {})),
+            platform="B站",
+            headers=self._headers("https://www.bilibili.com/"),
+            referer="https://www.bilibili.com/",
+        )
 
     @property
     def cache_dir(self) -> Path:
         return self.parser.cache_dir
 
     def _headers(self, referer: str) -> dict[str, str]:
-        headers = self.parser.headers.copy()
+        headers = dict(getattr(self.parser, "headers", {}))
         headers["Referer"] = referer
-        if self.parser.bili_ck:
-            headers["Cookie"] = self.parser.bili_ck
+        if bili_ck := getattr(self.parser, "bili_ck", ""):
+            headers["Cookie"] = bili_ck
         return headers
 
     @staticmethod
@@ -162,7 +171,10 @@ class BiliCommentFeed:
                 self._mixin_key_deadline = now + 12 * 60 * 60
                 return self._mixin_key
             except Exception as exc:
-                logger.debug(f"[Bilibili] 评论 WBI 密钥获取失败: {exc}")
+                logger.debug(
+                    "[评论区][B站] stage=fetch result=wbi_key_failed "
+                    f"error={type(exc).__name__}"
+                )
                 return ""
 
     @staticmethod
@@ -238,7 +250,7 @@ class BiliCommentFeed:
     async def fetch(self, oid: int, type_: int) -> _RawCommentFeed:
         referer = f"https://www.bilibili.com/video/av{oid}"
         page_size = 20
-        candidate_target = max(20, min(60, self.limit * 2))
+        candidate_target = max(30, min(60, self.limit * 3))
         base_params: dict[str, object] = {
             "type": type_,
             "oid": oid,
@@ -264,9 +276,8 @@ class BiliCommentFeed:
                     )
                     if payload.get("code") != 0:
                         logger.debug(
-                            "[Bilibili] 评论 WBI 接口拒绝请求: "
-                            f"code={payload.get('code')} "
-                            f"message={payload.get('message')}"
+                            "[评论区][B站] stage=fetch result=rejected source=wbi "
+                            f"code={payload.get('code')}"
                         )
                         break
                     feed = self._to_raw_feed(payload)
@@ -287,7 +298,10 @@ class BiliCommentFeed:
                 if items:
                     return _RawCommentFeed(items, owner_mid, total or len(items))
             except Exception as exc:
-                logger.debug(f"[Bilibili] 评论 WBI 接口异常: {exc}")
+                logger.debug(
+                    "[评论区][B站] stage=fetch result=failed source=wbi "
+                    f"error={type(exc).__name__}"
+                )
 
         try:
             items = []
@@ -308,9 +322,8 @@ class BiliCommentFeed:
                 )
                 if payload.get("code") != 0:
                     logger.debug(
-                        "[Bilibili] 评论经典接口拒绝请求: "
-                        f"code={payload.get('code')} "
-                        f"message={payload.get('message')}"
+                        "[评论区][B站] stage=fetch result=rejected source=classic "
+                        f"code={payload.get('code')}"
                     )
                     break
                 feed = self._to_raw_feed(payload)
@@ -322,7 +335,10 @@ class BiliCommentFeed:
             if items:
                 return _RawCommentFeed(items, owner_mid, total or len(items))
         except Exception as exc:
-            logger.debug(f"[Bilibili] 评论经典接口异常: {exc}")
+            logger.debug(
+                "[评论区][B站] stage=fetch result=failed source=classic "
+                f"error={type(exc).__name__}"
+            )
 
         return _RawCommentFeed([], "", 0)
 
@@ -716,13 +732,12 @@ class BiliCommentFeed:
     ) -> BiliCommentDocument | None:
         raw_feed = await self.fetch(oid, type_)
         effective_owner_mid = owner_mid or raw_feed.owner_mid
-        entries = []
+        candidates = []
         for item in raw_feed.items:
             entry = self.adapt_comment(item, effective_owner_mid)
             if entry is not None:
-                entries.append(entry)
-            if len(entries) >= self.limit:
-                break
+                candidates.append(entry)
+        entries = await self.comment_filter.apply(candidates, limit=self.limit)
         if not entries:
             return None
 

@@ -214,10 +214,28 @@ class ParserXPlugin(Star):
         )
 
     def _debug_mode_enabled(self) -> bool:
-        debug = self.config.get("debug", {})
+        config = getattr(self, "config", {})
+        debug = config.get("debug", {}) if hasattr(config, "get") else {}
         if not isinstance(debug, dict):
             return False
         return parse_bool(debug.get("enabled", False), False)
+
+    @staticmethod
+    def _log_comment_event(
+        result: ParseResult,
+        *,
+        stage: str,
+        outcome: str,
+        error: BaseException | None = None,
+        debug: bool = False,
+    ) -> None:
+        message = (
+            f"[评论区][{result.platform.display_name}] "
+            f"stage={stage} result={outcome}"
+        )
+        if error is not None:
+            message += f" error={type(error).__name__}"
+        (logger.debug if debug else logger.warning)(message)
 
     def _register_debug_page_apis(self) -> None:
         routes = (
@@ -902,14 +920,19 @@ class ParserXPlugin(Star):
                     timeout=remaining_timeout(),
                 )
             except asyncio.TimeoutError:
-                logger.warning("评论区生成超时，已跳过发送")
+                self._log_comment_event(result, stage="build", outcome="timeout")
                 return []
             except Exception as exc:
-                logger.warning(f"评论区生成失败: {exc}")
+                self._log_comment_event(
+                    result,
+                    stage="build",
+                    outcome="failed",
+                    error=exc,
+                )
                 return []
 
             if not isinstance(raw_contents, (list, tuple)):
-                logger.warning("评论区生成结果格式无效，已跳过发送")
+                self._log_comment_event(result, stage="build", outcome="invalid")
                 return []
             comment_contents = [
                 content for content in raw_contents if isinstance(content, MediaContent)
@@ -928,16 +951,25 @@ class ParserXPlugin(Star):
                     timeout=remaining_timeout(),
                 )
             except asyncio.TimeoutError:
-                logger.warning("评论区图片渲染超时，已跳过发送")
+                self._log_comment_event(result, stage="prepare", outcome="timeout")
                 return []
             except Exception as exc:
-                logger.warning(f"评论区图片准备失败: {exc}")
+                self._log_comment_event(
+                    result,
+                    stage="prepare",
+                    outcome="failed",
+                    error=exc,
+                )
                 return []
 
             segments: list[BaseMessageComponent] = []
             for content, path, error in download_results:
                 if error:
-                    logger.warning(f"评论区图片下载失败: {error}")
+                    self._log_comment_event(
+                        result,
+                        stage="prepare",
+                        outcome="media_failed",
+                    )
                     continue
                 if path and (segment := self._convert_to_seg(content, path)):
                     segments.append(segment)
@@ -968,17 +1000,33 @@ class ParserXPlugin(Star):
                     await event.send(event.chain_result([nodes]))
                     continue
                 except Exception as exc:
-                    logger.warning(f"评论区合并转发失败，降级逐张发送: {exc}")
+                    self._log_comment_event(
+                        result,
+                        stage="send",
+                        outcome="forward_failed",
+                        error=exc,
+                    )
 
                 try:
                     await event.send(event.chain_result([Plain(comment_label)]))
                 except Exception as exc:
-                    logger.debug(f"评论区标题发送失败: {exc}")
+                    self._log_comment_event(
+                        result,
+                        stage="send",
+                        outcome="label_failed",
+                        error=exc,
+                        debug=True,
+                    )
                 for segment in group:
                     try:
                         await event.send(event.chain_result([segment]))
                     except Exception as exc:
-                        logger.warning(f"评论区图片逐张发送失败: {exc}")
+                        self._log_comment_event(
+                            result,
+                            stage="send",
+                            outcome="image_failed",
+                            error=exc,
+                        )
 
         async def prepare_body_card_segment() -> BaseMessageComponent | None:
             try:
@@ -1605,14 +1653,19 @@ class ParserXPlugin(Star):
                     timeout=remaining_timeout(),
                 )
             except asyncio.TimeoutError:
-                logger.warning("评论区生成超时，已跳过发送")
+                self._log_comment_event(result, stage="build", outcome="timeout")
                 return []
             except Exception as exc:
-                logger.warning(f"评论区生成失败: {exc}")
+                self._log_comment_event(
+                    result,
+                    stage="build",
+                    outcome="failed",
+                    error=exc,
+                )
                 return []
 
             if not isinstance(raw_contents, (list, tuple)):
-                logger.warning("评论区生成结果格式无效，已跳过发送")
+                self._log_comment_event(result, stage="build", outcome="invalid")
                 return []
             comment_contents = [
                 content for content in raw_contents if isinstance(content, MediaContent)
@@ -1631,16 +1684,25 @@ class ParserXPlugin(Star):
                     timeout=remaining_timeout(),
                 )
             except asyncio.TimeoutError:
-                logger.warning("评论区图片准备超时，已跳过发送")
+                self._log_comment_event(result, stage="prepare", outcome="timeout")
                 return []
             except Exception as exc:
-                logger.warning(f"评论区图片准备失败: {exc}")
+                self._log_comment_event(
+                    result,
+                    stage="prepare",
+                    outcome="failed",
+                    error=exc,
+                )
                 return []
 
             segments: list[BaseMessageComponent] = []
             for content, path, error in download_results:
                 if error:
-                    logger.warning(f"评论区图片下载失败: {error}")
+                    self._log_comment_event(
+                        result,
+                        stage="prepare",
+                        outcome="media_failed",
+                    )
                     continue
                 if path and (segment := self._convert_to_seg(content, path)):
                     segments.append(segment)
@@ -1679,17 +1741,33 @@ class ParserXPlugin(Star):
                     await event.send(event.chain_result([nodes]))
                     continue
                 except Exception as exc:
-                    logger.warning(f"评论区合并转发失败，降级逐张发送: {exc}")
+                    self._log_comment_event(
+                        result,
+                        stage="send",
+                        outcome="forward_failed",
+                        error=exc,
+                    )
 
                 try:
                     await event.send(event.chain_result([Plain(comment_label)]))
                 except Exception as exc:
-                    logger.debug(f"评论区标题发送失败: {exc}")
+                    self._log_comment_event(
+                        result,
+                        stage="send",
+                        outcome="label_failed",
+                        error=exc,
+                        debug=True,
+                    )
                 for segment in group:
                     try:
                         await event.send(event.chain_result([segment]))
                     except Exception as exc:
-                        logger.warning(f"评论区图片逐张发送失败: {exc}")
+                        self._log_comment_event(
+                            result,
+                            stage="send",
+                            outcome="image_failed",
+                            error=exc,
+                        )
 
         native_delivery = bool(result.extra.get("native_delivery")) or (
             result.platform.name in {"xiaoheihe", "miyoushe"}
@@ -1777,9 +1855,20 @@ class ParserXPlugin(Star):
                 )
 
             results = await asyncio.gather(*concurrent_tasks, return_exceptions=True)
-            for error in results:
+            for task, error in zip(concurrent_tasks, results, strict=True):
                 if isinstance(error, BaseException):
-                    logger.warning(f"原生投递或评论区并发发送失败: {error}")
+                    if task.get_name() == "parser_x_comment_send":
+                        self._log_comment_event(
+                            result,
+                            stage="send",
+                            outcome="failed",
+                            error=error,
+                        )
+                    else:
+                        logger.warning(
+                            "原生投递并发发送失败: "
+                            f"{type(error).__name__}"
+                        )
             return
 
         if video_contents:
@@ -1815,9 +1904,20 @@ class ParserXPlugin(Star):
                 )
 
             results = await asyncio.gather(*concurrent_tasks, return_exceptions=True)
-            for error in results:
+            for task, error in zip(concurrent_tasks, results, strict=True):
                 if isinstance(error, BaseException):
-                    logger.warning(f"视频或评论区并发发送失败: {error}")
+                    if task.get_name() == "parser_x_comment_send":
+                        self._log_comment_event(
+                            result,
+                            stage="send",
+                            outcome="failed",
+                            error=error,
+                        )
+                    else:
+                        logger.warning(
+                            "视频并发发送失败: "
+                            f"{type(error).__name__}"
+                        )
             return
 
         if other_contents:
@@ -1929,6 +2029,7 @@ class ParserXPlugin(Star):
         enabled = self._debug_mode_enabled()
         return json_response(
             {
+                "available": True,
                 "enabled": enabled,
                 "exclusive": enabled,
                 "active_sessions": self.debug_sessions.active_count,
@@ -1960,16 +2061,6 @@ class ParserXPlugin(Star):
                 action="请返回 AstrBot 插件详情页并重新打开解析调试台。",
                 status_code=403,
             )
-        if not self._debug_mode_enabled():
-            return self._debug_page_error_response(
-                code="debug_mode_disabled",
-                title="无法启动解析",
-                stage="配置",
-                message="Parser X 的调试模式尚未开启。",
-                action="请在插件配置中开启“Canvas 调试台”，保存后返回本页重试。",
-                status_code=403,
-            )
-
         payload = await request.json(default={})
         if not isinstance(payload, dict):
             return self._debug_page_error_response(
@@ -2033,16 +2124,6 @@ class ParserXPlugin(Star):
                 action="请返回 AstrBot 插件详情页并重新打开解析调试台。",
                 status_code=403,
             )
-        if not self._debug_mode_enabled():
-            return self._debug_page_error_response(
-                code="debug_mode_disabled",
-                title="消息通道不可用",
-                stage="配置",
-                message="Parser X 的调试模式已关闭。",
-                action="请重新开启调试模式，然后发起新的解析任务。",
-                status_code=403,
-            )
-
         session_id = request.query.get("session_id", "")
         session = self.debug_sessions.get(str(session_id or ""), owner=owner)
         if session is None:
@@ -2092,13 +2173,13 @@ class ParserXPlugin(Star):
 
     async def debug_page_media_preview(self, token: str):
         owner = self._debug_page_owner()
-        if owner is None or not self._debug_mode_enabled():
+        if owner is None:
             return self._debug_page_error_response(
                 code="media_access_denied",
                 title="无法预览媒体",
                 stage="媒体",
-                message="当前页面没有访问该调试媒体的权限，或调试模式已经关闭。",
-                action="请重新开启调试模式并再次解析该链接。",
+                message="当前页面没有访问该调试媒体的权限。",
+                action="请返回原调试页面并重新解析该链接。",
                 status_code=403,
             )
         entry = self.debug_media.get(token, owner=owner)
@@ -2134,13 +2215,13 @@ class ParserXPlugin(Star):
 
     async def debug_page_media(self, token: str):
         owner = self._debug_page_owner()
-        if owner is None or not self._debug_mode_enabled():
+        if owner is None:
             return self._debug_page_error_response(
                 code="media_access_denied",
                 title="无法保存媒体",
                 stage="媒体",
-                message="当前页面没有访问该调试媒体的权限，或调试模式已经关闭。",
-                action="请重新开启调试模式并再次解析该链接。",
+                message="当前页面没有访问该调试媒体的权限。",
+                action="请返回原调试页面并重新解析该链接。",
                 status_code=403,
             )
         entry = self.debug_media.get(token, owner=owner)
@@ -2166,7 +2247,7 @@ class ParserXPlugin(Star):
             {
                 "event": "started",
                 "match_count": len(matches),
-                "exclusive": True,
+                "exclusive": self._debug_mode_enabled(),
             }
         )
 

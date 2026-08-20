@@ -8,6 +8,8 @@ from datetime import datetime
 from pathlib import Path
 
 from ..comment_canvas import CommentDocument, CommentEntry, SocialCommentCanvas
+from ..comment_filter import CommentFilter
+from ..comment_settings import CommentFilterSettings
 from ..data import ImageContent
 from ..utils import cached_image_to_data_uri
 
@@ -22,6 +24,13 @@ class SocialCommentFeedBase:
         self.canvas = canvas
         self.limit = max(1, int(limit))
         self._avatar_data_uri_cache: dict[str, str | None] = {}
+        self.comment_filter = CommentFilter(
+            parser,
+            CommentFilterSettings.from_config(getattr(parser, "config", {})),
+            platform=getattr(getattr(parser, "platform", None), "display_name", "评论"),
+            headers=getattr(parser, "headers", {}),
+            referer=self.AVATAR_REFERER or None,
+        )
 
     @property
     def cache_dir(self) -> Path:

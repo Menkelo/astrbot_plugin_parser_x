@@ -217,8 +217,6 @@ class XiaoheiheCommentFeed(SocialCommentFeedBase):
                     entry.first_reply = nested
                     break
             entries.append(entry)
-            if len(entries) >= self.limit:
-                break
 
         if not entries:
             return None
@@ -259,6 +257,17 @@ class XiaoheiheCommentFeed(SocialCommentFeedBase):
             emote_map=emote_map,
         )
         if document is not None:
+            original_count = len(document.entries)
+            document.entries = await self.comment_filter.apply(
+                document.entries,
+                limit=self.limit,
+            )
+            if not document.entries:
+                return None
+            if len(document.entries) < original_count:
+                document.footer_text = (
+                    f"仅展示部分热门评论 · {COMMENT_FOOTER_BRAND}"
+                )
             await self._embed_avatars(document.entries)
         return document
 

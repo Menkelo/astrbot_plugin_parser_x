@@ -23,6 +23,8 @@ from ..comment_canvas import (
     CommentRichPart,
     SocialCommentCanvas,
 )
+from ..comment_filter import CommentFilter
+from ..comment_settings import CommentFilterSettings
 from ..constants import COMMENT_FOOTER_BRAND
 from ..data import ImageContent
 from ..utils import cached_image_to_data_uri, normalize_image_url
@@ -80,15 +82,22 @@ class WeiboCommentFeed:
         self.canvas = canvas
         self.limit = max(1, int(limit))
         self._avatar_data_uri_cache: dict[str, str | None] = {}
+        self.comment_filter = CommentFilter(
+            parser,
+            CommentFilterSettings.from_config(getattr(parser, "config", {})),
+            platform="微博",
+            headers=self._headers(),
+            referer="https://m.weibo.cn/",
+        )
 
     @property
     def cache_dir(self) -> Path:
         return self.parser.cache_dir
 
     def _headers(self) -> dict[str, str]:
-        headers = self.parser.headers.copy()
-        if self.parser.cookie:
-            headers["Cookie"] = self.parser.cookie
+        headers = dict(getattr(self.parser, "headers", {}))
+        if cookie := getattr(self.parser, "cookie", ""):
+            headers["Cookie"] = cookie
         return headers
 
     @staticmethod
@@ -140,7 +149,10 @@ class WeiboCommentFeed:
                         )
                     )
             except Exception as exc:
-                logger.debug(f"[Weibo] 评论接口请求失败: {exc}")
+                logger.debug(
+                    "[评论区][微博] stage=fetch result=failed "
+                    f"error={type(exc).__name__}"
+                )
                 break
 
             block = payload.get("data") or {}
@@ -155,7 +167,7 @@ class WeiboCommentFeed:
             next_max_id = block.get("max_id") or 0
             next_max_id_type = block.get("max_id_type") or 0
             has_more = str(next_max_id).strip() not in {"", "0"}
-            if len(items) >= max(20, self.limit) or not has_more:
+            if len(items) >= max(30, min(60, self.limit * 3)) or not has_more:
                 break
             if str(next_max_id) == str(max_id):
                 break
@@ -389,13 +401,12 @@ class WeiboCommentFeed:
         raw_feed = await self.fetch(str(mid))
         if not raw_feed.items:
             return None
-        entries = []
+        candidates = []
         for item in raw_feed.items:
             entry = self.adapt_comment(item, str(owner_id or ""))
             if entry is not None:
-                entries.append(entry)
-            if len(entries) >= self.limit:
-                break
+                candidates.append(entry)
+        entries = await self.comment_filter.apply(candidates, limit=self.limit)
         if not entries:
             return None
 

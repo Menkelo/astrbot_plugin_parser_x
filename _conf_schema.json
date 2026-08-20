@@ -43,6 +43,57 @@
         "slider": {"min": 1, "max": 20, "step": 1},
         "default": 10
       },
+      "filter": {
+        "description": "评论内容过滤",
+        "hint": "统一应用于六个平台的视频评论区；先过滤候选评论，再按热门顺序补足展示数量。",
+        "type": "object",
+        "items": {
+          "enabled": {
+            "description": "启用评论过滤",
+            "type": "bool",
+            "default": true
+          },
+          "mention_mode": {
+            "description": "@ 提及处理",
+            "hint": "平衡模式会移除单个 @用户名并保留有效正文，过滤纯召唤和多人群发；严格模式过滤任何包含真实 @提及的评论。",
+            "type": "string",
+            "options": ["off", "balanced", "strict"],
+            "labels": ["不处理", "平衡过滤", "严格过滤"],
+            "default": "balanced"
+          },
+          "qrcode": {
+            "description": "过滤二维码图片",
+            "hint": "仅扫描评论配图，不扫描头像、封面和平台表情；识别或下载失败时保留评论。",
+            "type": "bool",
+            "default": true
+          },
+          "ads": {
+            "description": "过滤明显广告",
+            "hint": "按联系方式、引流动作、外链、营销词和收益承诺组合评分，避免单关键词误判。",
+            "type": "bool",
+            "default": true
+          },
+          "duplicates": {
+            "description": "过滤重复评论",
+            "hint": "忽略空白、标点和表情差异后，仅保留第一条重复内容。",
+            "type": "bool",
+            "default": true
+          },
+          "low_information": {
+            "description": "过滤低信息评论",
+            "hint": "过滤纯标点和纯数字评论。默认关闭，以保留“666”等正常热门互动。",
+            "type": "bool",
+            "default": false
+          },
+          "ad_threshold": {
+            "description": "广告判定阈值",
+            "hint": "数值越低过滤越严格；推荐保持默认 4。",
+            "type": "int",
+            "slider": {"min": 3, "max": 8, "step": 1},
+            "default": 4
+          }
+        }
+      },
       "timeout": {
         "description": "评论任务超时（秒）",
         "hint": "包含评论抓取、头像处理、独立评论图渲染和缓存写入；失败或超时不影响主内容和媒体发送。",
@@ -142,12 +193,12 @@
   },
   "debug": {
     "description": "Canvas 调试台",
-    "hint": "用于在 AstrBot 插件 Page 中直接测试真实解析与消息投递结构。",
+    "hint": "调试台始终可用，可在 AstrBot 插件 Page 中直接测试真实解析与消息投递结构。",
     "type": "object",
     "items": {
       "enabled": {
-        "description": "启用独占调试模式",
-        "hint": "默认关闭。开启后仅接受 Parser X 的 Canvas 插件调试页请求，QQ 与其他消息适配器中的分享链接将不再触发解析。",
+        "description": "只响应调试页面",
+        "hint": "默认关闭。关闭时调试台和普通消息均可解析；开启后仅接受 Parser X 调试页请求，QQ 与其他消息适配器中的分享链接不再触发解析。",
         "type": "bool",
         "default": false
       }

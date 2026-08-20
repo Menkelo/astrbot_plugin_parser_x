@@ -63,12 +63,13 @@ https://github.com/Menkelo/astrbot_plugin_parser_x
 
 ### 官方 Plugin Page 调试台
 
-在插件配置中开启 `debug.enabled` 并保存后，从 AstrBot WebUI 的插件详情页打开“解析调试台”。
+从 AstrBot WebUI 的插件详情页打开“解析调试台”即可直接测试，无需先开启独占模式。
 调试台直接复用当前插件实例、平台配置、Cookie、下载器、解析器、评论 Canvas 和发送逻辑，
 可粘贴原本要发到 QQ 的完整分享文本，并通过 SSE 查看真实完成顺序及 QQ 消息组件结构。
 
-调试开关默认关闭。开启期间 Parser X 不接受 QQ 或其他消息适配器中的解析请求，只允许已登录
-Dashboard 用户通过该插件 Page 发起调试；关闭开关并完成插件热重载后，QQ 解析自动恢复。
+`debug.enabled` 默认关闭；关闭时调试台和 QQ 普通消息均可触发解析。开启后 Parser X 进入独占
+调试模式，不接受 QQ 或其他消息适配器中的解析请求，只响应已登录 Dashboard 用户从插件 Page
+发起的调试；关闭并完成插件热重载后，普通消息解析恢复。
 
 会话管理命令：
 
@@ -92,9 +93,11 @@ Dashboard 用户通过该插件 Page 发起调试；关闭开关并完成插件�
   `comments.xiaoheihe`、`comments.miyoushe`：各平台视频评论区开关；所有平台的纯图文、图集和
   纯文字作品都不会抓取或发送评论，小红书评论默认关闭。
 - `comments.display_count`：最多展示的热门评论总数。
+- `comments.filter.*`：视频评论共享过滤。默认使用平衡 `@` 处理、二维码图片过滤、明显广告组合
+  评分和重复评论去重；二维码检测失败时保留评论，低信息评论过滤默认关闭。
 - `comments.timeout`：评论抓取、独立评论图渲染和缓存生成的总超时。
 - `rendering.timeout`：单次 `html_render` 截图超时。
-- `debug.enabled`：独占调试模式；默认关闭，开启后仅插件调试页可触发解析。
+- `debug.enabled`：只响应调试页面；默认关闭，开启后普通消息不再触发解析。
 - `behavior.show_download_fail_tip`：是否在聊天中提示下载失败或超限。
 - `behavior.disabled_sessions`：已关闭解析的会话列表，通常通过命令自动维护。
 
@@ -104,6 +107,11 @@ Dashboard 用户通过该插件 Page 发起调试；关闭开关并完成插件�
 抖音、小红书与微博纯图文单图直接引用原图，多图只发送原图合并转发；小黑盒与米游社使用
 图文一体图片。评论渲染使用 AstrBot 官方 `html_render`。小红书视频评论使用完整登录态与
 网页签名接口；Cookie、`xsec_token` 或签名不可用时自动跳过评论。
+
+评论适配完成后会先经过统一过滤层，再截取 `comments.display_count`：平衡模式会清除单个
+`@用户名` 并保留实际正文，纯召唤、多人群发、联系方式引流、明显广告、二维码配图和重复评论
+会被移除。楼中楼单独判断，过滤楼中楼不会连带删除正常主评论；过滤后会继续使用后续候选评论
+补足展示数量。二维码仅在本地扫描评论配图，不会扫描头像、封面或平台表情。
 
 缓存只写入 AstrBot 官方约定的 `data/plugin_data/astrbot_plugin_parser_x/`，默认每天清理一次。
 

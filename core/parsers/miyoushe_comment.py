@@ -55,7 +55,7 @@ class MiyousheCommentFeed(SocialCommentFeedBase):
                 params={
                     "post_id": post_id,
                     "is_hot": "true",
-                    "size": max(20, self.limit),
+                    "size": max(30, min(60, self.limit * 3)),
                 },
                 headers=self.parser.headers,
                 timeout=10,
@@ -71,7 +71,10 @@ class MiyousheCommentFeed(SocialCommentFeedBase):
                     )
                 )
         except Exception as exc:
-            logger.debug(f"[Miyoushe] 评论接口请求失败: {exc}")
+            logger.debug(
+                "[评论区][米游社] stage=fetch result=failed "
+                f"error={type(exc).__name__}"
+            )
             return _RawMiyousheFeed([], 0, False)
 
         data = payload.get("data") or {}
@@ -301,7 +304,7 @@ class MiyousheCommentFeed(SocialCommentFeedBase):
             return None
 
         owner_text = str(owner_id or "")
-        entries = []
+        candidates = []
         for item in raw_feed.items:
             entry = self.adapt_comment(item, owner_text, emote_map=emote_map)
             if entry is None:
@@ -318,9 +321,8 @@ class MiyousheCommentFeed(SocialCommentFeedBase):
                 if nested is not None:
                     entry.first_reply = nested
                     break
-            entries.append(entry)
-            if len(entries) >= self.limit:
-                break
+            candidates.append(entry)
+        entries = await self.comment_filter.apply(candidates, limit=self.limit)
         if not entries:
             return None
 

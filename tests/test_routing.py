@@ -29,7 +29,7 @@ from core.comment_canvas import (
 )
 from core.comment_settings import CommentSettings
 from core.constants import COMMENT_FOOTER_BRAND
-from core.data import ImageContent, VideoContent
+from core.data import ImageContent, ParseResult, VideoContent
 from core.download import Downloader, VideoInfo
 from core.html_renderer import HtmlRenderService
 from core.parsers import (
@@ -98,6 +98,11 @@ def test_comment_settings_normalize_bool_and_clamp_values():
                 "bilibili": "false",
                 "display_count": "999",
                 "timeout": "invalid",
+                "filter": {
+                    "mention_mode": "STRICT",
+                    "ad_threshold": "99",
+                    "low_information": "true",
+                },
             }
         },
         "bilibili",
@@ -105,6 +110,13 @@ def test_comment_settings_normalize_bool_and_clamp_values():
     assert settings.enabled is False
     assert settings.display_count == 20
     assert settings.timeout == 90
+    assert settings.filter.enabled is True
+    assert settings.filter.mention_mode == "strict"
+    assert settings.filter.qrcode is True
+    assert settings.filter.ads is True
+    assert settings.filter.duplicates is True
+    assert settings.filter.low_information is True
+    assert settings.filter.ad_threshold == 8
 
     legacy = CommentSettings.from_config(
         {"comments": "invalid", "bili_comment": "false"},
@@ -112,6 +124,26 @@ def test_comment_settings_normalize_bool_and_clamp_values():
         legacy_enabled="false",
     )
     assert legacy.enabled is False
+
+
+def test_comment_delivery_logs_use_the_shared_stage_and_result_shape():
+    from astrbot_plugin_parser_x import main as main_module
+    from astrbot_plugin_parser_x.main import ParserXPlugin
+
+    result = ParseResult(platform=BilibiliParser.platform)
+    error = RuntimeError("private detail must not be logged")
+
+    with patch.object(main_module.logger, "warning") as warning:
+        ParserXPlugin._log_comment_event(
+            result,
+            stage="build",
+            outcome="failed",
+            error=error,
+        )
+
+    warning.assert_called_once_with(
+        "[评论区][B站] stage=build result=failed error=RuntimeError"
+    )
 
 
 @pytest.mark.parametrize(
@@ -320,6 +352,12 @@ def test_config_schema_uses_latest_astrbot_panel_features():
     assert schema["comments"]["items"]["xiaoheihe"]["default"] is True
     assert schema["comments"]["items"]["miyoushe"]["default"] is True
     assert schema["comments"]["items"]["xiaohongshu"]["default"] is False
+    assert schema["comments"]["items"]["filter"]["items"]["enabled"]["default"] is True
+    assert (
+        schema["comments"]["items"]["filter"]["items"]["mention_mode"]["default"]
+        == "balanced"
+    )
+    assert schema["comments"]["items"]["filter"]["items"]["qrcode"]["default"] is True
     assert schema["cookies"]["items"]["xiaohongshu_cookie"]["default"] == ""
 
 

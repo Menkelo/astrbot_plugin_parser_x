@@ -29,3 +29,10 @@
 - License: MIT License
 - Use in this project: generate the current Xiaohongshu web request signature headers for the optional,
   Cookie-authenticated video comment feed. Parser X does not start or bundle a browser for this feature.
+
+## zxing-cpp
+
+- Repository: https://github.com/zxing-cpp/zxing-cpp
+- License: Apache License 2.0
+- Use in this project: detect QR codes in user-supplied comment images before rendering video comment cards.
+  Detection is local, bounded by image size and timeouts, and fails open when an image cannot be decoded.

@@ -5,7 +5,7 @@ import json
 import re
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from astrbot.api.message_components import Image, Node, Nodes, Plain
 from astrbot_plugin_parser_x import main as main_module
@@ -49,6 +49,9 @@ def test_debug_switch_defaults_to_disabled_and_page_assets_exist():
     assert "function normalizeIssue" in debug_app
     assert "function appendIssue" in debug_app
     assert 'className = `issue-card is-${issue.level}`' in debug_app
+    assert "elements.runButton.disabled = busy || !hasText" in debug_app
+    assert 'exclusiveMode ? "独占调试" : "普通模式"' in debug_app
+    assert "debug_mode_disabled" not in debug_app
     assert "[hidden] { display: none !important; }" in debug_css
     assert ".issue-card" in debug_css
 
@@ -91,13 +94,19 @@ def test_debug_mode_blocks_adapter_message_before_it_is_inspected():
     asyncio.run(run())
 
 
-def test_debug_page_status_is_available_but_start_is_rejected_when_disabled():
+def test_debug_page_is_available_when_exclusive_mode_is_disabled():
     plugin = object.__new__(ParserXPlugin)
     plugin.config = {
         "debug": {"enabled": False},
         "comments": {"xiaohongshu": True},
     }
-    plugin.parser_map = {}
+    parser = SimpleNamespace(
+        platform=SimpleNamespace(name="bilibili", display_name="B站")
+    )
+    plugin.parser_map = {"b23.tv": parser}
+    plugin.key_pattern_list = [
+        ("b23.tv", re.compile(r"https://b23\.tv/[A-Za-z0-9]+"))
+    ]
     plugin.debug_sessions = DebugSessionManager()
 
     class FakeRequest:
@@ -109,7 +118,14 @@ def test_debug_page_status_is_available_but_start_is_rejected_when_disabled():
             return {"text": "https://b23.tv/example"}
 
     async def run():
-        with patch.object(main_module, "request", FakeRequest()):
+        with (
+            patch.object(main_module, "request", FakeRequest()),
+            patch.object(
+                plugin,
+                "_run_debug_page_parse",
+                new=AsyncMock(),
+            ),
+        ):
             status = await plugin.debug_page_status()
             start = await plugin.debug_page_start()
         await plugin.debug_sessions.close()
@@ -119,20 +135,14 @@ def test_debug_page_status_is_available_but_start_is_rejected_when_disabled():
 
     assert status.status_code == 200
     status_payload = _response_json(status)
+    assert status_payload["available"] is True
     assert status_payload["enabled"] is False
+    assert status_payload["exclusive"] is False
     assert status_payload["comments"] == {"xiaohongshu": True}
-    assert start.status_code == 403
+    assert start.status_code == 200
     start_payload = _response_json(start)
-    assert start_payload["message"].startswith("无法启动解析：Parser X 的调试模式尚未开启。")
-    assert "建议：请在插件配置中开启" in start_payload["message"]
-    assert start_payload["data"] == {
-        "level": "error",
-        "code": "debug_mode_disabled",
-        "title": "无法启动解析",
-        "stage": "配置",
-        "message": "Parser X 的调试模式尚未开启。",
-        "action": "请在插件配置中开启“Canvas 调试台”，保存后返回本页重试。",
-    }
+    assert start_payload["session_id"]
+    assert start_payload["match_count"] == 1
 
 
 def test_debug_page_rejects_a_request_without_dashboard_page_owner():

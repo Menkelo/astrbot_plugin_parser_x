@@ -23,6 +23,8 @@ from ...comment_canvas import (
     CommentRichPart,
     SocialCommentCanvas,
 )
+from ...comment_filter import CommentFilter
+from ...comment_settings import CommentFilterSettings
 from ...constants import COMMENT_FOOTER_BRAND
 from ...data import ImageContent
 from ...utils import cached_image_to_data_uri, ck2dict
@@ -57,6 +59,13 @@ class DouyinCommentFeed:
         self._emoji_deadline = 0.0
         self._emoji_lock = asyncio.Lock()
         self._avatar_data_uri_cache: dict[str, str | None] = {}
+        self.comment_filter = CommentFilter(
+            parser,
+            CommentFilterSettings.from_config(getattr(parser, "config", {})),
+            platform="抖音",
+            headers=self._headers(),
+            referer="https://www.douyin.com/",
+        )
 
     @property
     def cache_dir(self) -> Path:
@@ -100,12 +109,12 @@ class DouyinCommentFeed:
         return ""
 
     def _headers(self) -> dict[str, str]:
-        headers = self.parser.headers.copy()
+        headers = dict(getattr(self.parser, "headers", {}))
         headers.update(
             {
                 "Accept": "application/json, text/plain, */*",
                 "Referer": "https://www.douyin.com/",
-                "Cookie": self.parser.cookies,
+                "Cookie": getattr(self.parser, "cookies", ""),
             }
         )
         return headers
@@ -261,7 +270,10 @@ class DouyinCommentFeed:
             try:
                 payload = await self._request_signed(self.COMMENT_URL, params)
             except Exception as exc:
-                logger.debug(f"[Douyin] 评论接口请求失败: {exc}")
+                logger.debug(
+                    "[评论区][抖音] stage=fetch result=failed "
+                    f"error={type(exc).__name__}"
+                )
                 break
 
             page_items = payload.get("comments") or (payload.get("data") or {}).get(
@@ -283,7 +295,7 @@ class DouyinCommentFeed:
                 next_cursor = cursor
 
             items = self._dedupe(items)
-            if len(items) >= max(20, self.limit) or not has_more:
+            if len(items) >= max(30, min(60, self.limit * 3)) or not has_more:
                 break
             if next_cursor == cursor:
                 break
@@ -328,7 +340,10 @@ class DouyinCommentFeed:
                 self._emoji_map = output
                 self._emoji_deadline = now + 6 * 60 * 60
             except Exception as exc:
-                logger.debug(f"[Douyin] 评论表情列表获取失败: {exc}")
+                logger.debug(
+                    "[评论区][抖音] stage=emoji result=failed "
+                    f"error={type(exc).__name__}"
+                )
                 self._emoji_map = {}
                 self._emoji_deadline = now + 10 * 60
             return self._emoji_map
@@ -580,7 +595,9 @@ class DouyinCommentFeed:
         owner: dict | None = None,
     ) -> CommentDocument | None:
         if not self.parser.cookies:
-            logger.debug("[Douyin] 未配置 douyin_ck，跳过评论区")
+            logger.debug(
+                "[评论区][抖音] stage=fetch result=skipped reason=missing_cookie"
+            )
             return None
 
         raw_feed = await self.fetch(str(aweme_id))
@@ -588,13 +605,12 @@ class DouyinCommentFeed:
             return None
         emoji_map = await self._load_emoji_map()
         ordered = sorted(raw_feed.items, key=self._sort_key, reverse=True)
-        entries = []
+        candidates = []
         for item in ordered:
             entry = self.adapt_comment(item, owner or {}, emoji_map)
             if entry is not None:
-                entries.append(entry)
-            if len(entries) >= self.limit:
-                break
+                candidates.append(entry)
+        entries = await self.comment_filter.apply(candidates, limit=self.limit)
         if not entries:
             return None
 

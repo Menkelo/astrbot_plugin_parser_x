@@ -16,7 +16,7 @@ const elements = {
   toast: document.getElementById("toast"),
 };
 
-let debugEnabled = false;
+let exclusiveMode = false;
 let busy = false;
 let activeSessionId = null;
 let activeSubscriptionId = null;
@@ -68,7 +68,7 @@ function scrollToLatest() {
 function updateControls() {
   const hasText = elements.text.value.trim().length > 0;
   elements.text.disabled = busy;
-  elements.runButton.disabled = !debugEnabled || busy || !hasText;
+  elements.runButton.disabled = busy || !hasText;
   elements.cancelButton.disabled = !busy || !activeSessionId;
   elements.cancelButton.hidden = !busy;
   elements.clearButton.disabled = busy;
@@ -90,7 +90,7 @@ function resetConversation() {
   elements.chatBody.scrollTop = 0;
   setText(
     elements.runSubtitle,
-    debugEnabled ? "在线 · 等待测试" : "请在插件配置中开启调试模式",
+    exclusiveMode ? "在线 · 独占调试模式" : "在线 · 普通消息仍可解析",
   );
 }
 
@@ -244,7 +244,7 @@ function createDownloadButton(media, label = "保存") {
         title: "无法保存媒体",
         stage: "媒体",
         message: "媒体文件保存失败。",
-        action: "请确认调试模式仍然开启，然后重新解析该链接。",
+        action: "请确认调试会话仍然有效，然后重新解析该链接。",
       });
     }
   });
@@ -603,18 +603,18 @@ async function refreshStatus() {
   setText(elements.modeStatusText, "读取状态");
   try {
     const status = await bridge.apiGet("debug/status");
-    debugEnabled = Boolean(status?.enabled);
-    elements.modeStatus.className = debugEnabled
+    exclusiveMode = Boolean(status?.exclusive);
+    elements.modeStatus.className = exclusiveMode
       ? "mode-status is-enabled"
       : "mode-status is-disabled";
-    setText(elements.modeStatusText, debugEnabled ? "调试已开启" : "调试未开启");
+    setText(elements.modeStatusText, exclusiveMode ? "独占调试" : "普通模式");
     setText(
       elements.runSubtitle,
-      debugEnabled ? "在线 · 仅接收本页面请求" : "请在插件配置中开启调试模式",
+      exclusiveMode ? "在线 · 仅接收本页面请求" : "在线 · 调试台和普通消息均可用",
     );
     return true;
   } catch (error) {
-    debugEnabled = false;
+    exclusiveMode = false;
     elements.modeStatus.className = "mode-status is-disabled";
     setText(elements.modeStatusText, "状态读取失败");
     const issue = issueFromError(error, {
@@ -670,20 +670,6 @@ async function startRun() {
     setBusy(false);
     return;
   }
-  if (!debugEnabled) {
-    setBusy(false);
-    showIssueToast(
-      {
-        code: "debug_mode_disabled",
-        title: "无法启动解析",
-        stage: "配置",
-        message: "Parser X 的调试模式尚未开启。",
-        action: "请在插件配置中开启“Canvas 调试台”，保存后返回本页重试。",
-      },
-    );
-    return;
-  }
-
   if (!elements.timeline.childElementCount) appendTimeDivider();
   progressRow = null;
   issueCount = 0;

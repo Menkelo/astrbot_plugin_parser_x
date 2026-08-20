@@ -276,7 +276,7 @@ class XiaohongshuCommentFeed(SocialCommentFeedBase):
             "&xsec_source=pc_feed"
         )
 
-        for _ in range(2):
+        for _ in range(3):
             params: dict[str, object] = {
                 "note_id": note_id,
                 "cursor": cursor,
@@ -301,7 +301,7 @@ class XiaohongshuCommentFeed(SocialCommentFeedBase):
 
             has_more = bool(data.get("has_more", False))
             next_cursor = str(data.get("cursor") or "")
-            if len(items) >= max(20, self.limit) or not has_more:
+            if len(items) >= max(30, min(60, self.limit * 3)) or not has_more:
                 break
             if not next_cursor or next_cursor == cursor:
                 break
@@ -524,7 +524,9 @@ class XiaohongshuCommentFeed(SocialCommentFeedBase):
         total_hint: int | None = None,
     ) -> CommentDocument | None:
         if not self.parser.comment_cookie:
-            logger.debug("[XHS] 未配置 xiaohongshu_cookie，跳过视频评论区")
+            logger.debug(
+                "[评论区][小红书] stage=fetch result=skipped reason=missing_cookie"
+            )
             return None
 
         raw_feed = await self.fetch(str(note_id), xsec_token)
@@ -533,13 +535,12 @@ class XiaohongshuCommentFeed(SocialCommentFeedBase):
 
         ordered = sorted(raw_feed.items, key=self._is_pinned, reverse=True)
         owner_text = str(owner_id or "")
-        entries = []
+        candidates = []
         for item in ordered:
             entry = self.adapt_comment(item, owner_text)
             if entry is not None:
-                entries.append(entry)
-            if len(entries) >= self.limit:
-                break
+                candidates.append(entry)
+        entries = await self.comment_filter.apply(candidates, limit=self.limit)
         if not entries:
             return None
 
