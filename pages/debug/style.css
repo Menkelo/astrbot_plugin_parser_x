@@ -101,8 +101,19 @@ button:disabled { cursor: not-allowed; }
 .time-divider, .system-message { justify-self: center; padding: 4px 9px; border-radius: 5px; background: color-mix(in srgb, var(--muted) 10%, transparent); color: var(--muted); font-size: 10px; line-height: 1.45; text-align: center; }
 .system-message.is-loading::before { display: inline-block; width: 6px; height: 6px; margin-right: 7px; border: 1.5px solid color-mix(in srgb, var(--blue) 28%, transparent); border-top-color: var(--blue); border-radius: 50%; content: ""; animation: spin .8s linear infinite; }
 .system-message.is-success { color: #29945a; }
+.system-message.is-warning { background: color-mix(in srgb, #d68a18 10%, transparent); color: #a96708; }
 .system-message.is-error { background: color-mix(in srgb, var(--red) 10%, transparent); color: var(--red); }
 @keyframes spin { to { transform: rotate(360deg); } }
+
+.issue-card { display: grid; width: min(560px,100%); justify-self: center; gap: 7px; padding: 12px 14px; border: 1px solid color-mix(in srgb, var(--red) 24%, var(--line)); border-left: 4px solid var(--red); border-radius: 7px; background: color-mix(in srgb, var(--red) 6%, var(--incoming)); box-shadow: 0 1px 3px rgba(28,35,47,.06); }
+.issue-card.is-warning { border-color: color-mix(in srgb, #d68a18 28%, var(--line)); border-left-color: #d68a18; background: color-mix(in srgb, #d68a18 7%, var(--incoming)); }
+.issue-card.is-info { border-color: color-mix(in srgb, var(--blue) 24%, var(--line)); border-left-color: var(--blue); background: color-mix(in srgb, var(--blue) 6%, var(--incoming)); }
+.issue-header { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 12px; }
+.issue-header strong { font-size: 12px; font-weight: 650; }
+.issue-header span { flex: 0 0 auto; color: var(--muted); font-size: 9px; }
+.issue-card p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11px; line-height: 1.55; }
+.issue-reason { color: var(--text); }
+.issue-action { color: var(--muted); }
 
 .message-entry { display: grid; width: 100%; min-width: 0; align-items: start; }
 .message-entry.is-incoming { grid-template-columns: 40px minmax(0,1fr); gap: 10px; }

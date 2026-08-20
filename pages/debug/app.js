@@ -22,7 +22,9 @@ let activeSessionId = null;
 let activeSubscriptionId = null;
 let messageCount = 0;
 let latestElapsedMs = 0;
+let issueCount = 0;
 let progressRow = null;
+let cancellationDisplayed = false;
 let toastTimer = null;
 
 function setText(element, value) {
@@ -45,9 +47,9 @@ function formatTime(date = new Date()) {
   });
 }
 
-function showToast(message) {
+function showToast(message, title = "操作失败") {
   clearTimeout(toastTimer);
-  setText(elements.toast, message);
+  setText(elements.toast, `${title}：${message}`);
   elements.toast.hidden = false;
   toastTimer = setTimeout(() => {
     elements.toast.hidden = true;
@@ -80,7 +82,9 @@ function setBusy(nextBusy) {
 function resetConversation() {
   messageCount = 0;
   latestElapsedMs = 0;
+  issueCount = 0;
   progressRow = null;
+  cancellationDisplayed = false;
   elements.timeline.replaceChildren();
   elements.emptyState.hidden = false;
   elements.chatBody.scrollTop = 0;
@@ -108,17 +112,111 @@ function setProgress(message, kind = "loading") {
   scrollToLatest();
 }
 
-function appendSystem(message, kind = "normal") {
-  const row = document.createElement("div");
-  row.className = `system-message is-${kind}`;
-  setText(row, message);
-  if (progressRow?.isConnected) {
-    elements.timeline.insertBefore(row, progressRow);
-  } else {
-    elements.timeline.append(row);
+function cleanIssueText(value, fallback) {
+  const text = String(value ?? "").trim();
+  return text || fallback;
+}
+
+function normalizeIssue(source, defaults = {}) {
+  const issue = source && typeof source === "object" ? source : {};
+  const level = issue.level || defaults.level || "error";
+  return {
+    level,
+    code: cleanIssueText(issue.code, defaults.code || "debug_error"),
+    title: cleanIssueText(issue.title, defaults.title || "操作失败"),
+    stage: cleanIssueText(issue.stage, defaults.stage || "调试"),
+    platform: cleanIssueText(issue.platform, defaults.platform || ""),
+    message: cleanIssueText(
+      issue.message,
+      defaults.message || "未提供具体原因。",
+    ),
+    action: cleanIssueText(
+      issue.action,
+      defaults.action || "请稍后重试；如果问题持续，请查看 AstrBot 日志。",
+    ),
+  };
+}
+
+function issueFromError(error, defaults = {}) {
+  const data = error?.data;
+  const parsed = data && typeof data === "object" ? data : {};
+  const fallbackMessage = error?.message || defaults.message;
+  const fallbackTitle = defaults.title || "操作失败";
+  const fallbackAction = defaults.action || "请稍后重试；如果问题持续，请查看 AstrBot 日志。";
+  if (
+    !Object.keys(parsed).length &&
+    typeof fallbackMessage === "string" &&
+    fallbackMessage.includes("建议：")
+  ) {
+    const [reasonPart, actionPart] = fallbackMessage.split("建议：", 2);
+    const [titlePart, messagePart] = reasonPart.split("：", 2);
+    return normalizeIssue(
+      {
+        ...defaults,
+        title: titlePart || fallbackTitle,
+        message: messagePart || fallbackMessage,
+        action: actionPart || fallbackAction,
+      },
+      defaults,
+    );
   }
+  return normalizeIssue(parsed, {
+    ...defaults,
+    message: fallbackMessage,
+  });
+}
+
+function appendIssue(source, defaults = {}) {
+  const issue = normalizeIssue(source, defaults);
+  const card = document.createElement("article");
+  card.className = `issue-card is-${issue.level}`;
+
+  const header = document.createElement("div");
+  header.className = "issue-header";
+  const title = document.createElement("strong");
+  setText(title, issue.title);
+  const context = document.createElement("span");
+  setText(
+    context,
+    [issue.platform, issue.stage].filter(Boolean).join(" · ") || "调试",
+  );
+  header.append(title, context);
+
+  const reason = document.createElement("p");
+  reason.className = "issue-reason";
+  setText(reason, `原因：${issue.message}`);
+  const action = document.createElement("p");
+  action.className = "issue-action";
+  setText(action, `建议：${issue.action}`);
+  card.append(header, reason, action);
+
+  if (progressRow?.isConnected) {
+    elements.timeline.insertBefore(card, progressRow);
+  } else {
+    elements.timeline.append(card);
+  }
+  elements.emptyState.hidden = true;
   scrollToLatest();
-  return row;
+  return issue;
+}
+
+function showIssueToast(source, defaults = {}) {
+  const issue = normalizeIssue(source, defaults);
+  showToast(`${issue.message} 建议：${issue.action}`, issue.title);
+  return issue;
+}
+
+function showCancellationIssue(source = {}) {
+  if (cancellationDisplayed) return;
+  cancellationDisplayed = true;
+  appendIssue(source, {
+    level: "info",
+    code: "session_cancelled",
+    title: "解析已取消",
+    stage: "任务",
+    message: "调试任务已停止，不会继续生成消息。",
+    action: "可以修改输入内容后重新发送。",
+  });
 }
 
 function platformInitial(platform) {
@@ -141,7 +239,13 @@ function createDownloadButton(media, label = "保存") {
         media.name || "parser-x-media",
       );
     } catch (error) {
-      showToast(error?.message || "媒体下载失败");
+      showIssueToast(issueFromError(error), {
+        code: "media_download_failed",
+        title: "无法保存媒体",
+        stage: "媒体",
+        message: "媒体文件保存失败。",
+        action: "请确认调试模式仍然开启，然后重新解析该链接。",
+      });
     }
   });
   return button;
@@ -179,8 +283,15 @@ async function loadMediaPreview(card, type, media, placeholder) {
       const payload = await bridge.apiGet(`debug/media/${media.token}/preview`);
       dataUrl = payload?.data_url || "";
     } catch (error) {
+      const issue = issueFromError(error, {
+        code: "media_preview_failed",
+        title: "无法预览媒体",
+        stage: "媒体",
+        message: "媒体预览加载失败。",
+        action: "可以尝试使用“保存”按钮，或重新解析该链接。",
+      });
       placeholder.classList.add("is-error");
-      setText(placeholder, error?.message || "预览加载失败，可保存后查看");
+      setText(placeholder, `${issue.title}：${issue.message} 建议：${issue.action}`);
       return;
     }
   }
@@ -432,23 +543,50 @@ function handleDebugEvent(event) {
       latestElapsedMs = Math.max(latestElapsedMs, Number(event.elapsed_ms || 0));
       break;
     case "skipped":
-      appendSystem(`${event.platform || "平台"}：${event.message || "已跳过"}`);
+      issueCount += 1;
+      appendIssue(event, {
+        level: "warning",
+        code: "parser_skipped",
+        title: "已跳过该链接",
+        stage: "解析",
+        message: "该分享没有继续处理。",
+        action: "请检查链接内容和平台配置后重试。",
+      });
       break;
     case "error":
-      appendSystem(
-        `${event.platform ? `${event.platform}：` : ""}${event.message || "解析失败"}`,
-        "error",
-      );
+      issueCount += 1;
+      appendIssue(event, {
+        code: "debug_error",
+        title: "解析失败",
+        stage: "解析",
+        message: "调试任务未能完成。",
+        action: "请检查插件配置和 AstrBot 日志后重试。",
+      });
       break;
     case "cancelled":
-      setProgress(event.message || "已取消解析", "error");
-      finishRun("任务已取消");
+      if (progressRow?.isConnected) progressRow.remove();
+      progressRow = null;
+      showCancellationIssue(event);
+      finishRun("在线 · 上次任务已取消");
       break;
     case "done": {
       latestElapsedMs = Math.max(latestElapsedMs, Number(event.elapsed_ms || 0));
       const seconds = (latestElapsedMs / 1000).toFixed(latestElapsedMs >= 1000 ? 1 : 2);
-      setProgress(`解析完成 · ${messageCount} 条消息 · ${seconds} 秒`, "success");
-      finishRun(`在线 · 上次解析 ${seconds} 秒`);
+      const totalIssues = Math.max(issueCount, Number(event.issue_count || 0));
+      const completed = Number(event.completed || 0);
+      if (completed === 0 && totalIssues > 0) {
+        setProgress(`解析失败 · ${totalIssues} 个问题 · ${seconds} 秒`, "error");
+        finishRun(`在线 · 上次解析失败`);
+      } else if (totalIssues > 0) {
+        setProgress(
+          `解析完成但有问题 · ${messageCount} 条消息 · ${totalIssues} 个问题 · ${seconds} 秒`,
+          "warning",
+        );
+        finishRun(`在线 · 上次解析有 ${totalIssues} 个问题`);
+      } else {
+        setProgress(`解析完成 · ${messageCount} 条消息 · ${seconds} 秒`, "success");
+        finishRun(`在线 · 上次解析 ${seconds} 秒`);
+      }
       break;
     }
     case "session_end":
@@ -474,12 +612,21 @@ async function refreshStatus() {
       elements.runSubtitle,
       debugEnabled ? "在线 · 仅接收本页面请求" : "请在插件配置中开启调试模式",
     );
+    return true;
   } catch (error) {
     debugEnabled = false;
     elements.modeStatus.className = "mode-status is-disabled";
-    setText(elements.modeStatusText, "接口不可用");
-    setText(elements.runSubtitle, "无法连接插件调试接口");
-    showToast(error?.message || "读取调试状态失败");
+    setText(elements.modeStatusText, "状态读取失败");
+    const issue = issueFromError(error, {
+      code: "status_unavailable",
+      title: "无法读取调试状态",
+      stage: "连接",
+      message: "页面无法连接 Parser X 调试接口。",
+      action: "请确认插件已启用并完成加载，然后刷新本页。",
+    });
+    setText(elements.runSubtitle, `${issue.title} · ${issue.message}`);
+    showIssueToast(issue);
+    return false;
   } finally {
     updateControls();
   }
@@ -491,7 +638,13 @@ async function cancelRun() {
   try {
     await bridge.apiPost("debug/cancel", { session_id: sessionId });
   } catch (error) {
-    showToast(error?.message || "取消任务失败");
+    showIssueToast(issueFromError(error), {
+      code: "cancel_failed",
+      title: "无法取消任务",
+      stage: "会话",
+      message: "取消请求未能完成。",
+      action: "任务可能已经结束；可以等待当前会话关闭后重新测试。",
+    });
   }
   if (activeSubscriptionId) {
     try {
@@ -502,23 +655,39 @@ async function cancelRun() {
   }
   activeSubscriptionId = null;
   activeSessionId = null;
-  setProgress("已取消解析", "error");
-  finishRun("任务已取消");
+  if (progressRow?.isConnected) progressRow.remove();
+  progressRow = null;
+  showCancellationIssue();
+  finishRun("在线 · 上次任务已取消");
 }
 
 async function startRun() {
   const text = elements.text.value.trim();
   if (!text || busy) return;
   setBusy(true);
-  await refreshStatus();
+  const statusAvailable = await refreshStatus();
+  if (!statusAvailable) {
+    setBusy(false);
+    return;
+  }
   if (!debugEnabled) {
     setBusy(false);
-    showToast("请先在 Parser X 插件配置中开启调试模式");
+    showIssueToast(
+      {
+        code: "debug_mode_disabled",
+        title: "无法启动解析",
+        stage: "配置",
+        message: "Parser X 的调试模式尚未开启。",
+        action: "请在插件配置中开启“Canvas 调试台”，保存后返回本页重试。",
+      },
+    );
     return;
   }
 
   if (!elements.timeline.childElementCount) appendTimeDivider();
   progressRow = null;
+  issueCount = 0;
+  cancellationDisplayed = false;
   renderUserMessage(text);
   elements.text.value = "";
   setText(elements.charCount, "0 / 20000");
@@ -540,16 +709,33 @@ async function startRun() {
           handleDebugEvent(event.parsed);
         },
         onError() {
-          setProgress("消息通道已中断", "error");
-          finishRun("连接已中断");
+          issueCount += 1;
+          if (progressRow?.isConnected) progressRow.remove();
+          progressRow = null;
+          appendIssue({
+            code: "event_stream_disconnected",
+            title: "消息通道已中断",
+            stage: "连接",
+            message: "页面与调试会话的实时连接意外断开。",
+            action: "请确认 AstrBot 仍在运行并刷新页面，然后重新发送。",
+          });
+          finishRun("在线 · 上次连接中断");
         },
       },
       { session_id: activeSessionId },
     );
   } catch (error) {
-    setProgress(error?.message || "启动调试任务失败", "error");
-    finishRun("启动失败");
-    showToast(error?.message || "启动调试任务失败");
+    const issue = issueFromError(error, {
+      code: "start_failed",
+      title: "无法启动解析",
+      stage: "启动",
+      message: "调试任务未能启动。",
+      action: "请检查输入内容和插件配置后重试。",
+    });
+    if (progressRow?.isConnected) progressRow.remove();
+    progressRow = null;
+    appendIssue(issue);
+    finishRun("在线 · 上次启动失败");
   }
 }
 
@@ -586,6 +772,6 @@ window.addEventListener("beforeunload", () => {
   if (activeSubscriptionId) void bridge.unsubscribeSSE(activeSubscriptionId);
 });
 
+resetConversation();
 await bridge.ready();
 await refreshStatus();
-resetConversation();

@@ -17,6 +17,7 @@ from core.debug_page import (
     DebugMediaRegistry,
     DebugMessageSerializer,
     DebugSessionManager,
+    debug_issue_event,
 )
 
 
@@ -45,7 +46,33 @@ def test_debug_switch_defaults_to_disabled_and_page_assets_exist():
     assert "parse-details" not in debug_html
     assert 'entry.className = "message-entry is-self"' in debug_app
     assert "elements.clearButton.disabled = busy" in debug_app
+    assert "function normalizeIssue" in debug_app
+    assert "function appendIssue" in debug_app
+    assert 'className = `issue-card is-${issue.level}`' in debug_app
     assert "[hidden] { display: none !important; }" in debug_css
+    assert ".issue-card" in debug_css
+
+
+def test_debug_issue_event_has_a_consistent_public_shape():
+    issue = debug_issue_event(
+        code="parse_failed",
+        title="链接解析失败",
+        stage="解析",
+        platform="演示平台",
+        message="页面内容已失效。",
+        action="请换一个仍可访问的链接后重试。",
+    )
+
+    assert issue == {
+        "event": "error",
+        "level": "error",
+        "code": "parse_failed",
+        "title": "链接解析失败",
+        "stage": "解析",
+        "message": "页面内容已失效。",
+        "action": "请换一个仍可访问的链接后重试。",
+        "platform": "演示平台",
+    }
 
 
 def test_debug_mode_blocks_adapter_message_before_it_is_inspected():
@@ -90,7 +117,17 @@ def test_debug_page_status_is_available_but_start_is_rejected_when_disabled():
     assert status.status_code == 200
     assert _response_json(status)["enabled"] is False
     assert start.status_code == 403
-    assert "调试模式尚未开启" in _response_json(start)["message"]
+    start_payload = _response_json(start)
+    assert start_payload["message"].startswith("无法启动解析：Parser X 的调试模式尚未开启。")
+    assert "建议：请在插件配置中开启" in start_payload["message"]
+    assert start_payload["data"] == {
+        "level": "error",
+        "code": "debug_mode_disabled",
+        "title": "无法启动解析",
+        "stage": "配置",
+        "message": "Parser X 的调试模式尚未开启。",
+        "action": "请在插件配置中开启“Canvas 调试台”，保存后返回本页重试。",
+    }
 
 
 def test_debug_page_rejects_a_request_without_dashboard_page_owner():
@@ -112,6 +149,10 @@ def test_debug_page_rejects_a_request_without_dashboard_page_owner():
 
     response = asyncio.run(run())
     assert response.status_code == 403
+    payload = _response_json(response)
+    assert payload["data"]["code"] == "page_access_required"
+    assert payload["data"]["stage"] == "访问"
+    assert payload["data"]["action"].startswith("请返回 AstrBot 插件详情页")
 
 
 def test_parser_match_collection_deduplicates_overlaps_and_repeated_urls():
@@ -248,6 +289,56 @@ def test_debug_runner_uses_real_parser_and_delivery_pipeline():
     assert emitted[3]["message"]["components"] == [
         {"type": "text", "text": "真实投递正文"}
     ]
+    assert emitted[-1]["issue_count"] == 0
+
+
+def test_debug_runner_emits_structured_parse_errors_and_failed_summary():
+    plugin = object.__new__(ParserXPlugin)
+
+    class FailingParser:
+        platform = Platform(name="demo", display_name="演示平台")
+        source_text = None
+
+        async def parse(self, _keyword, _searched):
+            raise main_module.ParseException("页面内容已失效")
+
+    parser = FailingParser()
+    plugin.parser_map = {"example.com": parser}
+    plugin.key_pattern_list = [
+        ("example.com", re.compile(r"https://example\.com/post/\d+"))
+    ]
+    emitted = []
+
+    async def run():
+        async def emit(payload):
+            emitted.append(payload)
+
+        await plugin._run_debug_page_parse(
+            "https://example.com/post/1",
+            owner="admin",
+            emit=emit,
+        )
+
+    asyncio.run(run())
+
+    assert [item["event"] for item in emitted] == [
+        "started",
+        "match",
+        "error",
+        "done",
+    ]
+    assert emitted[2] == {
+        "event": "error",
+        "level": "error",
+        "code": "parse_failed",
+        "title": "链接解析失败",
+        "stage": "解析",
+        "message": "页面内容已失效",
+        "action": "请确认链接仍可访问、Cookie 配置有效，然后重试。",
+        "platform": "演示平台",
+    }
+    assert emitted[3]["completed"] == 0
+    assert emitted[3]["issue_count"] == 1
 
 
 def test_debug_session_stream_completes_and_removes_session():
@@ -294,3 +385,6 @@ def test_debug_session_can_be_cancelled_before_runner_starts():
         "cancelled",
         "session_end",
     ]
+    assert payloads[0]["code"] == "session_cancelled"
+    assert payloads[0]["title"] == "解析已取消"
+    assert payloads[0]["action"] == "可以修改输入内容后重新发送。"

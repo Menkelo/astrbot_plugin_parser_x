@@ -31,6 +31,38 @@ DebugEventEmitter = Callable[[dict[str, Any]], Awaitable[None]]
 DebugRunner = Callable[[DebugEventEmitter], Awaitable[None]]
 
 
+def debug_issue_event(
+    *,
+    event: str = "error",
+    code: str,
+    title: str,
+    stage: str,
+    message: str,
+    action: str,
+    platform: str | None = None,
+    level: str | None = None,
+) -> dict[str, Any]:
+    """Build the shared public issue envelope used by the debug Page."""
+
+    payload: dict[str, Any] = {
+        "event": event,
+        "level": level
+        or {
+            "error": "error",
+            "skipped": "warning",
+            "cancelled": "info",
+        }.get(event, "error"),
+        "code": str(code or "debug_error").strip(),
+        "title": str(title or "调试任务失败").strip(),
+        "stage": str(stage or "调试").strip(),
+        "message": str(message or "未提供具体原因。").strip(),
+        "action": str(action or "请稍后重试。").strip(),
+    }
+    if platform:
+        payload["platform"] = str(platform).strip()
+    return payload
+
+
 @dataclass(slots=True)
 class DebugMediaEntry:
     token: str
@@ -347,14 +379,26 @@ class DebugSessionManager:
             try:
                 await runner(emit)
             except asyncio.CancelledError:
-                await emit({"event": "cancelled", "message": "调试任务已取消"})
-                raise
-            except Exception as exc:
                 await emit(
-                    {
-                        "event": "error",
-                        "message": f"调试任务异常：{exc}",
-                    }
+                    debug_issue_event(
+                        event="cancelled",
+                        code="session_cancelled",
+                        title="解析已取消",
+                        stage="任务",
+                        message="调试任务已停止，不会继续生成消息。",
+                        action="可以修改输入内容后重新发送。",
+                    )
+                )
+                raise
+            except Exception:
+                await emit(
+                    debug_issue_event(
+                        code="session_internal_error",
+                        title="调试任务异常",
+                        stage="任务",
+                        message="任务发生未预期异常，详细信息已写入 AstrBot 日志。",
+                        action="请查看 AstrBot 日志定位原因，然后重新发送。",
+                    )
                 )
             finally:
                 self._finish(session)
@@ -380,7 +424,14 @@ class DebugSessionManager:
             await asyncio.gather(session.task, return_exceptions=True)
             if not session.ended:
                 session.queue.put_nowait(
-                    {"event": "cancelled", "message": "调试任务已取消"}
+                    debug_issue_event(
+                        event="cancelled",
+                        code="session_cancelled",
+                        title="解析已取消",
+                        stage="任务",
+                        message="调试任务已停止，不会继续生成消息。",
+                        action="可以修改输入内容后重新发送。",
+                    )
                 )
                 self._finish(session)
         return True
