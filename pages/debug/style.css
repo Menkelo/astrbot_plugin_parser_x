@@ -137,6 +137,8 @@ button:disabled { cursor: not-allowed; }
 .media-card { width: min(470px,100%); min-width: 250px; overflow: hidden; margin: 0; border-radius: 8px; background: var(--incoming); box-shadow: 0 1px 3px rgba(28,35,47,.09); }
 .media-preview { display: grid; max-height: 500px; place-items: center; overflow: hidden; background: color-mix(in srgb, var(--chat-bg) 78%, #fff); }
 .media-card img, .media-card video { display: block; width: 100%; max-height: 500px; object-fit: contain; background: color-mix(in srgb, var(--chat-bg) 78%, #fff); }
+.media-card.is-image .media-preview { display: block; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--muted) 28%, transparent) transparent; }
+.media-card.is-image .media-preview img { max-height: none; height: auto; }
 .media-card audio { display: block; width: calc(100% - 24px); margin: 16px 12px; }
 .media-placeholder { display: grid; width: 100%; min-height: 170px; place-items: center; padding: 20px; color: var(--muted); font-size: 11px; }
 .media-placeholder.is-error { color: var(--red); }
