@@ -486,7 +486,8 @@ class WeiboParser(BaseParser):
             image_contents.append(ImageContent(img_task))
 
         contents = [*image_contents, *video_contents]
-        summary = self._delivery_summary(data, text)
+        # 参考 r_parser：带媒体时只发媒体（提纯），纯文本才渲染正文卡。
+        summary = "" if contents else self._delivery_summary(data, text)
         delivery = self._delivery_plan(summary, image_contents, video_contents)
 
         comment_title = re.sub(r"\s+", " ", text).strip()
@@ -498,56 +499,29 @@ class WeiboParser(BaseParser):
             cover=(static_pic_urls[0] if static_pic_urls else author_avatar),
             owner_id=user.get("id"),
         )
-        extra.update(
-            {
-                "render_text_card": True,
-                "text_card_avatar": author_avatar,
-                "text_card_media": (
-                    ""
-                    if image_contents
-                    else static_pic_urls[0]
-                    if static_pic_urls
-                    else ""
-                ),
-                "card_kind": (
-                    "微博 · 图文视频"
-                    if image_contents and video_contents
-                    else "微博 · 图文"
-                    if image_contents
-                    else "微博 · 视频"
-                    if video_contents
-                    else "微博"
-                ),
-                "card_author_badge": "认证" if user.get("verified") else "博主",
-                "card_metrics": [
-                    ("评论", data.get("comments_count")),
-                    ("点赞", data.get("attitudes_count")),
-                    ("转发", data.get("reposts_count")),
-                ],
-                "card_info": [
-                    "正文完整保留",
-                    *(
-                        ["含转发原文"]
-                        if isinstance(data.get("retweeted_status"), dict)
-                        else []
-                    ),
-                    *(
-                        ["单图引用原消息"]
-                        if len(image_contents) == 1 and not video_contents
-                        else []
-                    ),
-                    *(
-                        ["图片与视频合并转发"]
-                        if image_contents and video_contents
-                        else []
-                    ),
-                    *([f"媒体 {len(contents)} 项"] if len(contents) > 1 else []),
-                ],
-                "card_emotes": card_emotes,
-            }
-        )
-        if image_contents and not video_contents:
-            extra["image_post_card_in_forward"] = True
+        if not contents:
+            extra.update(
+                {
+                    "render_text_card": True,
+                    "text_card_avatar": author_avatar,
+                    "card_kind": "微博",
+                    "card_author_badge": "认证" if user.get("verified") else "博主",
+                    "card_metrics": [
+                        ("评论", data.get("comments_count")),
+                        ("点赞", data.get("attitudes_count")),
+                        ("转发", data.get("reposts_count")),
+                    ],
+                    "card_info": [
+                        "正文完整保留",
+                        *(
+                            ["含转发原文"]
+                            if isinstance(data.get("retweeted_status"), dict)
+                            else []
+                        ),
+                    ],
+                    "card_emotes": card_emotes,
+                }
+            )
 
         author = self.create_author(
             author_name, author_avatar, ext_headers=self.headers

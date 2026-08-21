@@ -16,11 +16,6 @@ from ...constants import BILIBILI_HEADER
 from ...data import Platform
 from ...exception import SizeLimitException
 from ...html_renderer import HtmlRenderService
-from ...platform_emotes import (
-    contains_platform_emotes,
-    load_platform_emotes,
-    select_text_emotes,
-)
 from ...utils import ck2dict
 from ..base import BaseParser, Downloader, ParseException, handle
 from .comment_canvas import BiliCommentCanvas
@@ -798,44 +793,7 @@ class BilibiliParser(BaseParser):
         )
         video_content.is_file_upload = False
 
-        stats = raw_info.get("stat") or {}
-        metrics = [
-            ("播放", stats.get("view")),
-            ("评论", stats.get("reply")),
-            ("点赞", stats.get("like")),
-            ("收藏", stats.get("favorite")),
-            ("投币", stats.get("coin")),
-            ("分享", stats.get("share")),
-        ]
-        metrics = [item for item in metrics if item[1] is not None]
-        minutes, seconds = divmod(int(page_info.duration or 0), 60)
-        card_info = [f"时长 {minutes}:{seconds:02d}"]
-        if video_info.videos > 1:
-            card_info.append(f"分P {page_info.index + 1}/{video_info.videos}")
-        if video_info.tname:
-            card_info.append(video_info.tname)
-
-        extra = {
-            "render_text_card": True,
-            "text_card_media": self.norm_bili_img(page_info.cover) or "",
-            "text_card_avatar": owner_avatar or "",
-            "card_platform_name": "B站视频",
-            "card_kind": "视频",
-            "card_author_badge": "UP主",
-            "card_metrics": metrics,
-            "card_info": card_info,
-            "video_separate_from_card": True,
-        }
-        emote_text = "\n".join(
-            value for value in (page_info.title or "", text or "") if value
-        )
-        if contains_platform_emotes(emote_text, "bilibili"):
-            emote_catalog = await load_platform_emotes(self, "bilibili")
-            extra["card_emotes"] = select_text_emotes(
-                emote_text,
-                "bilibili",
-                emote_catalog,
-            )
+        extra: dict = {}
         if comment_image_task_factory:
             extra.update(
                 {

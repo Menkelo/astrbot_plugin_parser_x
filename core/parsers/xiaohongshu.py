@@ -242,25 +242,6 @@ class XiaoHongShuParser(BaseParser):
         }
 
     @staticmethod
-    def _interaction_metrics(note_data: dict) -> list[tuple[str, object]]:
-        info = note_data.get("interactInfo") or note_data.get("interact_info") or {}
-        if not isinstance(info, dict):
-            return []
-
-        def first(*keys: str):
-            for key in keys:
-                if info.get(key) is not None:
-                    return info.get(key)
-            return None
-
-        return [
-            ("评论", first("commentCount", "comment_count")),
-            ("点赞", first("likedCount", "liked_count")),
-            ("收藏", first("collectedCount", "collected_count")),
-            ("分享", first("shareCount", "share_count")),
-        ]
-
-    @staticmethod
     def _is_live_url(url: str | None) -> bool:
         u = (url or "").lower()
         return "xiaohongshu.com/livestream" in u or "/livestream/" in u
@@ -591,45 +572,16 @@ class XiaoHongShuParser(BaseParser):
 
         author = self.create_author(note_detail.nickname, note_detail.avatar_url)
         extra = {}
-        if contents:
+        if note_detail.video_url and contents:
             extra.update(
-                {
-                    "render_text_card": True,
-                    "text_card_media": (
-                        card_media_url if note_detail.video_url else ""
-                    ),
-                    "card_kind": (
-                        "笔记 · 视频" if note_detail.video_url else "笔记 · 图文"
-                    ),
-                    "card_author_badge": "作者",
-                    "card_metrics": self._interaction_metrics(note_data),
-                    "card_info": [
-                        "正文完整保留",
-                        *(
-                            ["视频文件独立发送"]
-                            if note_detail.video_url
-                            else [f"图片 {len(note_image_urls)} 张"]
-                            if note_image_urls
-                            else []
-                        ),
-                    ],
-                }
-            )
-            if note_detail.video_url:
-                extra["video_separate_from_card"] = True
-                extra.update(
-                    self._comment_extra(
-                        note_data,
-                        note_id=note_id,
-                        final_url=final_url,
-                        title=note_title,
-                        cover=card_media_url,
-                    )
+                self._comment_extra(
+                    note_data,
+                    note_id=note_id,
+                    final_url=final_url,
+                    title=note_title,
+                    cover=card_media_url,
                 )
-            else:
-                extra["image_post_card_in_forward"] = True
-            if note_detail.avatar_url:
-                extra["text_card_avatar"] = note_detail.avatar_url
+            )
 
         return self.result(
             title=note_title,
@@ -726,45 +678,16 @@ class XiaoHongShuParser(BaseParser):
             contents.extend(self.create_image_contents(img_urls))
 
         extra = {}
-        if contents:
+        if note_data_obj.video_url and contents:
             extra.update(
-                {
-                    "render_text_card": True,
-                    "text_card_media": (
-                        card_media_url if note_data_obj.video_url else ""
-                    ),
-                    "card_kind": (
-                        "笔记 · 视频" if note_data_obj.video_url else "笔记 · 图文"
-                    ),
-                    "card_author_badge": "作者",
-                    "card_metrics": self._interaction_metrics(note_data),
-                    "card_info": [
-                        "正文完整保留",
-                        *(
-                            ["视频文件独立发送"]
-                            if note_data_obj.video_url
-                            else [f"图片 {len(note_data_obj.image_urls)} 张"]
-                            if note_data_obj.image_urls
-                            else []
-                        ),
-                    ],
-                }
-            )
-            if note_data_obj.video_url:
-                extra["video_separate_from_card"] = True
-                extra.update(
-                    self._comment_extra(
-                        note_data,
-                        note_id=note_id,
-                        final_url=final_url,
-                        title=note_title,
-                        cover=card_media_url,
-                    )
+                self._comment_extra(
+                    note_data,
+                    note_id=note_id,
+                    final_url=final_url,
+                    title=note_title,
+                    cover=card_media_url,
                 )
-            else:
-                extra["image_post_card_in_forward"] = True
-            if note_data_obj.user.avatar:
-                extra["text_card_avatar"] = note_data_obj.user.avatar
+            )
 
         return self.result(
             title=note_title,

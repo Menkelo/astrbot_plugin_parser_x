@@ -155,13 +155,6 @@ class KuaiShouParser(BaseParser):
                 author=self.create_author(author),
                 contents=contents,
                 url=real_url,
-                extra={
-                    "render_text_card": True,
-                    "card_kind": "视频作品",
-                    "card_author_badge": "作者",
-                    "card_info": ["视频文件独立发送"],
-                    "video_separate_from_card": True,
-                },
             )
 
         raise ParseException("快手解析失败: 未找到视频信息")
@@ -196,50 +189,12 @@ class KuaiShouParser(BaseParser):
         author = self.create_author(
             photo.name, photo.head_url, ext_headers=self.ios_headers
         )
-        has_images = bool(photo_image_urls or single_image_url)
-        extra = {}
-        if contents:
-            extra.update(
-                {
-                    "render_text_card": True,
-                    "text_card_media": (
-                        "" if has_images else cover_url if video_url else ""
-                    ),
-                    "card_kind": (
-                        "图文视频"
-                        if video_url and has_images
-                        else "视频作品"
-                        if video_url
-                        else "图文作品"
-                    ),
-                    "card_author_badge": "作者",
-                    "card_info": [
-                        *(["图片与视频合并转发"] if video_url and has_images else []),
-                        *(["视频文件独立发送"] if video_url and not has_images else []),
-                        *(
-                            [
-                                f"图片 {len(photo_image_urls) or int(bool(single_image_url))} 张"
-                            ]
-                            if has_images
-                            else []
-                        ),
-                    ],
-                }
-            )
-            if video_url and not has_images:
-                extra["video_separate_from_card"] = True
-            if has_images and not video_url:
-                extra["image_post_card_in_forward"] = True
-            if photo.head_url:
-                extra["text_card_avatar"] = photo.head_url
-
         return self.result(
             title=photo.caption,
             author=author,
             contents=contents,
             timestamp=photo.timestamp // 1000,
             url=url,
-            extra=extra,
         )
 
 

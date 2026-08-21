@@ -11,13 +11,13 @@
 
 | 上游模块 | Parser X 状态 | 实现位置 | 说明 |
 | --- | --- | --- | --- |
-| Bilibili | 原生 | `core/parsers/bilibili/` | 视频及所有动态使用统一正文卡；图文动态单图发送引用、正文卡和原图，多图将正文卡与全部原图合并转发；转发动态补回原动态正文/图片；正文支持公共、已购、动态富文本自带表情和 Unicode Emoji；直播使用封面、关键帧与文字原生消息链；视频评论在视频/主内容发送完成后使用独立评论图合并转发，等级、粉丝牌和 UP 标识完整保留 |
-| 抖音 | 原生 | `core/parsers/douyin/` | 视频、图文、图集、Cookie 与 yt-dlp 兜底；视频正文卡与视频先发送，独立评论区随后发送；图文单图保留正文卡和原图，多图将正文卡与全部原图合并转发且不抓取评论；作品元数据表情与 Unicode Emoji 可进入长卡，`comment_feed.py` 适配 Cookie 评论接口、A-Bogus、表情、图片、贴纸、作者标识与楼中楼 |
-| 快手 | 原生 | `core/parsers/kuaishou.py` | 视频、图片、图文均使用统一正文卡；纯视频独立发送正文卡与视频，单图保留原图，多图或图片与视频混合内容进入同一合并转发 |
-| 微博 | 原生 | `core/parsers/weibo.py`、`core/parsers/weibo_comment.py` | 完整正文使用统一正文卡，正文 HTML 表情和 Unicode Emoji 按图片渲染；纯文字发送正文卡，单图发送引用、正文卡和原图，多图合并转发且不抓取评论；同时含静态图和视频时将正文卡、全部图片和视频放入同一合并转发，评论在主内容发送完成后发送；公开 `m.weibo.cn/comments/hotflow` 评论支持认证/VIP、微博表情、原博与楼中楼 |
-| 小红书 | 原生 | `core/parsers/xiaohongshu.py`、`core/parsers/xiaohongshu_comment.py` | 视频、图片、图文均使用统一正文卡；图文单图保留正文卡和原图，多图将正文卡与全部原图合并转发，空正文不回填分享链接，视频文件独立发送；配置完整 Cookie 后仅视频笔记请求签名评论接口，评论在视频/主内容后发送，并支持官方 redmoji、评论内嵌表情、Unicode Emoji、作者/置顶标识、IP 属地、点赞数、评论图片与首条楼中楼 |
-| AcFun | 兼容层 | `core/parsers/ytdlp.py` | 单视频，统一长卡与视频文件分开发送 |
-| 网易云音乐 | 兼容层 | `core/parsers/ytdlp.py` | 统一长卡与音频文件分开发送 |
+| Bilibili | 原生 | `core/parsers/bilibili/` | 视频直接发送源视频，不渲染正文卡；图文动态使用统一正文卡，单图发送引用、正文卡和原图，多图将正文卡与全部原图合并转发；转发动态补回原动态正文/图片；正文支持公共、已购、动态富文本自带表情和 Unicode Emoji；直播使用封面、关键帧与文字原生消息链；视频评论在视频/主内容发送完成后使用独立评论图合并转发，等级、粉丝牌和 UP 标识完整保留 |
+| 抖音 | 原生 | `core/parsers/douyin/` | 视频、图文、图集、Cookie 与 yt-dlp 兜底；视频与图片直接发送媒体，不渲染正文卡，独立评论区随后发送且不抓取图文评论；`comment_feed.py` 适配 Cookie 评论接口、A-Bogus、表情、图片、贴纸、作者标识与楼中楼 |
+| 快手 | 原生 | `core/parsers/kuaishou.py` | 视频、图片、图文均直接发送媒体，不渲染正文卡；单图保留原图，多图或图片与视频混合内容进入同一合并转发 |
+| 微博 | 原生 | `core/parsers/weibo.py`、`core/parsers/weibo_comment.py` | 纯文本微博渲染统一正文卡，正文 HTML 表情和 Unicode Emoji 按图片渲染；带图片或视频时只发送媒体（单图引用原消息，多图合并转发），不附加正文卡或文案；评论在主内容发送完成后发送；公开 `m.weibo.cn/comments/hotflow` 评论支持认证/VIP、微博表情、原博与楼中楼 |
+| 小红书 | 原生 | `core/parsers/xiaohongshu.py`、`core/parsers/xiaohongshu_comment.py` | 视频、图片、图文均直接发送媒体，不渲染正文卡，空正文不回填分享链接；配置完整 Cookie 后仅视频笔记请求签名评论接口，评论在视频/主内容后发送，并支持官方 redmoji、评论内嵌表情、Unicode Emoji、作者/置顶标识、IP 属地、点赞数、评论图片与首条楼中楼 |
+| AcFun | 兼容层 | `core/parsers/ytdlp.py` | 单视频，直接发送源视频文件 |
+| 网易云音乐 | 兼容层 | `core/parsers/ytdlp.py` | 直接发送音频文件 |
 | 米游社 | 原生 | `core/parsers/miyoushe.py`、`core/parsers/miyoushe_comment.py` | 文章正文、封面和正文配图合成一张图文一体长卡，成功后不再发送原生图片批次，视频仍独立；仅含视频的文章启用评论区，视频/主内容先发送、评论随后发送，官方表情、评论自定义表情和 Unicode Emoji 按图片渲染；公开 `getPostReplies` 评论支持认证、等级、配图与楼中楼 |
 | 小黑盒 | 原生 | `core/parsers/xiaoheihe.py`、`core/parsers/xiaoheihe_comment.py` | 帖子正文、封面和富文本配图按顺序合成一张图文一体长卡，成功后不再重复发送概要或富文本转发，官方表情与 Unicode Emoji 按图片渲染并过滤客户端本地缓存路径，视频仍独立；仅含视频的帖子启用评论区，视频/主内容先发送、评论随后发送，无 Cookie 也先尝试签名接口，失败后回退公开接口/分享页 |
 | 西瓜视频、皮皮虾、微视、贴吧、微信视频号、QQ音乐、酷狗音乐、汽水音乐、通用网页 AI 总结 | 已移除 | - | 不注册路由、配置项或命令，不保留无法稳定维护的兼容入口 |

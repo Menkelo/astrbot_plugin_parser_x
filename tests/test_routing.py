@@ -417,7 +417,7 @@ def test_ytdlp_parser_builds_a_downloadable_media_result(tmp_path):
     assert downloader.download_args[1]["max_size_mb"] == 42
 
 
-def test_ytdlp_audio_parser_also_uses_shared_card(tmp_path):
+def test_ytdlp_audio_parser_sends_media_without_card(tmp_path):
     class FakeDownloader:
         async def ytdlp_extract_info(self, *_args, **_kwargs):
             return VideoInfo(
@@ -445,10 +445,8 @@ def test_ytdlp_audio_parser_also_uses_shared_card(tmp_path):
 
     result = asyncio.run(parse())
 
-    assert result.extra["render_text_card"] is True
-    assert result.extra["text_card_media"].endswith("music.jpg")
-    assert result.extra["card_kind"] == "音频"
-    assert result.extra["card_info"] == ["音频文件独立发送"]
+    assert result.extra == {"adapter": "yt-dlp"}
+    assert "render_text_card" not in result.extra
 
 
 def test_domestic_parser_helpers_cover_new_routes():
@@ -732,7 +730,8 @@ def test_xiaohongshu_comments_require_explicit_opt_in_even_with_cookie(tmp_path)
         return result
 
     result = asyncio.run(run())
-    assert result.extra["video_separate_from_card"] is True
+    assert "video_separate_from_card" not in result.extra
+    assert "render_text_card" not in result.extra
     assert "comment_image_task_factory" not in result.extra
     assert "comment_timeout" not in result.extra
 
@@ -1080,10 +1079,8 @@ def test_image_post_parsers_use_shared_cards_and_keep_canonical_urls(tmp_path):
     assert xhs_result.text == "小红书正文 #性能车#"
     for result in (kuaishou_result, douyin_result, xhs_result):
         assert result.contents
-        assert result.extra["render_text_card"] is True
-    for result in (kuaishou_result, douyin_result, xhs_result):
-        assert result.extra["text_card_media"] == ""
-        assert result.extra["image_post_card_in_forward"] is True
+        assert "render_text_card" not in result.extra
+        assert "image_post_card_in_forward" not in result.extra
         assert "comment_image_task_factory" not in result.extra
 
 
@@ -1191,9 +1188,8 @@ def test_video_post_parsers_and_ytdlp_use_shared_cards(tmp_path):
 
     results = asyncio.run(run())
     for result in results:
-        assert result.extra["render_text_card"] is True
-        assert result.extra["video_separate_from_card"] is True
-        assert "视频" in result.extra["card_kind"]
+        assert "render_text_card" not in result.extra
+        assert "video_separate_from_card" not in result.extra
     assert "comment_image_task_factory" not in results[2].extra
 
 
@@ -2405,15 +2401,9 @@ def test_bilibili_video_builds_unified_card_metadata_and_comment_factories(tmp_p
     result = asyncio.run(run())
     assert result.title == "测试视频 - 第二集"
     assert result.text == "简介: 完整简介"
-    assert result.extra["render_text_card"] is True
-    assert result.extra["video_separate_from_card"] is True
-    assert result.extra["card_platform_name"] == "B站视频"
-    assert result.extra["text_card_media"].endswith("cover.jpg")
-    assert result.extra["text_card_avatar"].endswith("avatar.jpg")
-    assert ("播放", 123456) in result.extra["card_metrics"]
-    assert "时长 2:10" in result.extra["card_info"]
-    assert "分P 2/2" in result.extra["card_info"]
-    assert "单机游戏" in result.extra["card_info"]
+    assert "render_text_card" not in result.extra
+    assert "video_separate_from_card" not in result.extra
+    assert "card_platform_name" not in result.extra
     assert "comment_document_task_factory" not in result.extra
     assert callable(result.extra["comment_image_task_factory"])
     assert result.extra["comment_timeout"] == 45
@@ -3133,10 +3123,8 @@ def test_native_parsers_attach_comment_factories(tmp_path):
     assert "comment_document_task_factory" not in douyin_extra
     assert callable(douyin_extra["comment_image_task_factory"])
     assert douyin_extra["comment_timeout"] == 45
-    assert douyin_extra["card_emotes"] == {
-        "[比心]": "https://p3.douyinpic.com/bixin.png",
-        "比心": "https://p3.douyinpic.com/bixin.png",
-    }
+    assert "card_emotes" not in douyin_extra
+    assert "render_text_card" not in douyin_extra
     assert "comment_document_task_factory" not in weibo_extra
     assert callable(weibo_extra["comment_image_task_factory"])
     assert weibo_extra["comment_timeout"] == 45
@@ -3205,19 +3193,13 @@ def test_weibo_media_result_keeps_body_before_single_image_reply(tmp_path):
 
     result = asyncio.run(run())
     assert result.text == "微博正文[笑cry]"
-    assert result.extra["card_emotes"] == {
-        "[笑cry]": "https://h5.sinaimg.cn/emote.png",
-        "笑cry": "https://h5.sinaimg.cn/emote.png",
-    }
+    assert "card_emotes" not in result.extra
+    assert "render_text_card" not in result.extra
     assert len(result.contents) == 1
     assert result.delivery is not None
-    assert len(result.delivery.batches) == 2
-    assert result.delivery.batches[0].parts == ["识别：微博\n微博正文[笑cry]"]
-    assert result.delivery.batches[0].reply_original is False
-    assert result.delivery.batches[1].parts == result.contents
-    assert result.delivery.batches[1].reply_original is True
-    assert result.extra["text_card_media"] == ""
-    assert result.extra["image_post_card_in_forward"] is True
+    assert len(result.delivery.batches) == 1
+    assert result.delivery.batches[0].parts == result.contents
+    assert result.delivery.batches[0].reply_original is True
     assert "comment_image_task_factory" not in result.extra
 
 
@@ -3287,10 +3269,6 @@ def test_weibo_mixed_image_video_is_parsed_and_sent_in_one_forward(tmp_path):
         async def close(self):
             return None
 
-    class FakeTextRenderer:
-        async def render_text_card(self, out_path, **_kwargs):
-            _save_render_fixture(out_path, size=(760, 320))
-
     class Event:
         message_obj = SimpleNamespace(message_id=9755)
 
@@ -3329,7 +3307,6 @@ def test_weibo_mixed_image_video_is_parsed_and_sent_in_one_forward(tmp_path):
         plugin = object.__new__(ParserXPlugin)
         plugin.config = {"behavior": {"show_download_fail_tip": True}}
         plugin.cache_dir = tmp_path
-        plugin.text_renderer = FakeTextRenderer()
         event = Event()
         try:
             keyword, searched = parser.search_url(
@@ -3348,18 +3325,16 @@ def test_weibo_mixed_image_video_is_parsed_and_sent_in_one_forward(tmp_path):
     assert result.delivery is not None
     assert len(result.delivery.batches) == 1
     assert result.delivery.batches[0].mode == "forward"
-    assert result.delivery.batches[0].parts[1:] == result.contents
-    assert result.extra["text_card_media"] == ""
-    assert result.extra["card_kind"] == "微博 · 图文视频"
+    assert result.delivery.batches[0].parts == result.contents
+    assert "render_text_card" not in result.extra
+    assert "card_kind" not in result.extra
 
     assert len(event.sent) == 1
     assert isinstance(event.sent[0][0], Nodes)
     node_contents = [node.content[0] for node in event.sent[0][0].nodes]
-    assert len(node_contents) == 3
+    assert len(node_contents) == 2
     assert isinstance(node_contents[0], MessageImage)
-    assert Path(node_contents[0].file).name.startswith("text_card_weibo_")
-    assert isinstance(node_contents[1], MessageImage)
-    assert isinstance(node_contents[2], MessageVideo)
+    assert isinstance(node_contents[1], MessageVideo)
 
 
 def test_weibo_long_post_fetches_complete_body(tmp_path):
@@ -3429,7 +3404,8 @@ def test_weibo_long_post_fetches_complete_body(tmp_path):
     assert result.text == "完整长微博正文"
     assert result.delivery is not None
     assert result.delivery.batches[0].parts == ["识别：微博\n完整长微博正文"]
-    assert result.extra["text_card_media"] == ""
+    assert result.extra["render_text_card"] is True
+    assert "text_card_media" not in result.extra
 
 
 def test_weibo_recovers_missing_api_body_from_authenticated_detail(tmp_path):

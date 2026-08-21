@@ -11,10 +11,8 @@ from astrbot.core.config.astrbot_config import AstrBotConfig
 
 from ...comment_canvas import SocialCommentCanvas
 from ...comment_settings import CommentSettings
-from ...data import ImageContent
 from ...download import Downloader
 from ...html_renderer import HtmlRenderService
-from ...platform_emotes import contains_platform_emotes, select_text_emotes
 from ...utils import cookies_str_to_netscape
 from ..base import BaseParser, ParseException, Platform, SkipParseException, handle
 from .comment_feed import DouyinCommentFeed
@@ -633,42 +631,6 @@ class DouyinParser(BaseParser):
             cover=comment_cover,
             owner=aweme.get("author") if isinstance(aweme, dict) else None,
         )
-        if contents:
-            statistics = aweme.get("statistics") or {}
-            image_work = all(isinstance(item, ImageContent) for item in contents)
-            card_emotes = select_text_emotes(
-                meta.desc,
-                "douyin",
-                self.comment_feed._local_emoji_map(aweme, {}),
-            )
-            extra.update(
-                {
-                    "render_text_card": True,
-                    "text_card_avatar": meta.avatar_url or "",
-                    "text_card_media": "" if image_work else comment_cover or "",
-                    "card_kind": "图文作品" if image_work else "视频作品",
-                    "card_author_badge": "作者",
-                    "card_metrics": [
-                        ("评论", statistics.get("comment_count")),
-                        ("点赞", statistics.get("digg_count")),
-                        ("收藏", statistics.get("collect_count")),
-                        ("分享", statistics.get("share_count")),
-                    ],
-                    "card_info": [
-                        "正文完整保留",
-                        *(
-                            [f"图片 {len(contents)} 张"]
-                            if image_work
-                            else ["视频文件独立发送"]
-                        ),
-                    ],
-                    "card_emotes": card_emotes,
-                }
-            )
-            if image_work:
-                extra["image_post_card_in_forward"] = True
-            else:
-                extra["video_separate_from_card"] = True
         return self.result(
             title=meta.desc,
             author=author,
@@ -702,11 +664,6 @@ class DouyinParser(BaseParser):
             raise ParseException("图集数据为空")
 
         slides = info.aweme_details[0]
-        raw_slide = {}
-        if isinstance(raw_payload, dict):
-            raw_slides = raw_payload.get("aweme_details") or []
-            if raw_slides and isinstance(raw_slides[0], dict):
-                raw_slide = raw_slides[0]
         contents = []
 
         def pick_best_image_url(urls: list[str]) -> str | None:
@@ -767,27 +724,6 @@ class DouyinParser(BaseParser):
             cover=comment_cover,
             owner={"nickname": slides.name},
         )
-        if contents:
-            card_emotes = select_text_emotes(
-                slides.desc,
-                "douyin",
-                self.comment_feed._local_emoji_map(raw_slide, {}),
-            )
-            extra.update(
-                {
-                    "render_text_card": True,
-                    "text_card_avatar": slides.avatar_url or "",
-                    "text_card_media": "",
-                    "image_post_card_in_forward": True,
-                    "card_kind": "图集",
-                    "card_author_badge": "作者",
-                    "card_info": [
-                        "正文完整保留",
-                        f"图片 {len(contents)} 张",
-                    ],
-                    "card_emotes": card_emotes,
-                }
-            )
         return self.result(
             title=slides.desc,
             author=author,
@@ -839,29 +775,6 @@ class DouyinParser(BaseParser):
             cover=info.thumbnail,
             owner={"nickname": author_name},
         )
-        if contents:
-            emote_text = "\n".join(
-                value for value in (title, info.description or "") if value
-            )
-            card_emotes = {}
-            if contains_platform_emotes(emote_text, "douyin"):
-                emoji_map = await self.comment_feed._load_emoji_map()
-                card_emotes = select_text_emotes(
-                    emote_text,
-                    "douyin",
-                    emoji_map,
-                )
-            extra.update(
-                {
-                    "render_text_card": True,
-                    "text_card_media": info.thumbnail or "",
-                    "card_kind": "视频作品",
-                    "card_author_badge": "作者",
-                    "card_info": ["正文完整保留", "视频文件独立发送"],
-                    "video_separate_from_card": True,
-                    "card_emotes": card_emotes,
-                }
-            )
         return self.result(
             title=title,
             text=info.description or "",
