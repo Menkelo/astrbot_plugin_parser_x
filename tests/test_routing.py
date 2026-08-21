@@ -4008,12 +4008,12 @@ def test_comment_feed_footers_use_repository_brand(tmp_path):
 
 
 def test_comment_layout_cache_versions_invalidate_pre_fix_images():
-    assert BiliCommentFeed.CACHE_VERSION == "bili_comment_v11_unified_clean"
-    assert DouyinCommentFeed.CACHE_VERSION == "douyin_comment_v10_unified_clean"
-    assert WeiboCommentFeed.CACHE_VERSION == "weibo_comment_v10_unified_clean"
-    assert XiaoheiheCommentFeed.CACHE_VERSION == "xiaoheihe_comment_v4_unified_clean"
-    assert MiyousheCommentFeed.CACHE_VERSION == "miyoushe_comment_v4_unified_clean"
-    assert XiaohongshuCommentFeed.CACHE_VERSION == "xiaohongshu_comment_v2_emotes"
+    assert BiliCommentFeed.CACHE_VERSION == "bili_comment_v12_unified_clean"
+    assert DouyinCommentFeed.CACHE_VERSION == "douyin_comment_v11_unified_clean"
+    assert WeiboCommentFeed.CACHE_VERSION == "weibo_comment_v11_unified_clean"
+    assert XiaoheiheCommentFeed.CACHE_VERSION == "xiaoheihe_comment_v5_unified_clean"
+    assert MiyousheCommentFeed.CACHE_VERSION == "miyoushe_comment_v5_unified_clean"
+    assert XiaohongshuCommentFeed.CACHE_VERSION == "xiaohongshu_comment_v3_emotes"
 
 
 def test_manifest_has_a_reviewable_upstream_baseline():
