@@ -45,7 +45,8 @@ def standalone_comment_css(*, extra_css: str = "") -> str:
     style = UNIFIED_COMMENT_STYLE
     return f"""
 *{{box-sizing:border-box}}html,body{{margin:0;width:760px;background:{style.background};color:{style.text}}}html{{overflow-x:hidden;scrollbar-width:none}}html::-webkit-scrollbar{{width:0;height:0}}
-body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif,"Noto Color Emoji","Apple Color Emoji","Segoe UI Emoji","Noto Emoji"}}
+@font-face{{font-family:"Parser X Latin";src:url("https://cdn.jsdelivr.net/npm/@fontsource-variable/inter@5.2.5/files/inter-latin-wght-normal.woff2") format("woff2-variations");font-weight:100 900;font-display:block;unicode-range:U+0000-00FF,U+131,U+152-153,U+2BB-2BC,U+2C6,U+2DA,U+2DC,U+2000-206F,U+2074,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD}}
+body{{font-family:"Parser X Latin",-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif,"Noto Color Emoji","Apple Color Emoji","Segoe UI Emoji","Noto Emoji"}}
 .page{{width:760px;padding:18px 22px 20px;background:{style.background}}}.shell{{overflow:hidden;border:1px solid {style.border};border-radius:14px;background:{style.surface};box-shadow:0 12px 30px rgba(30,35,48,.10)}}
 .header{{display:flex;min-height:58px;align-items:center;gap:10px;padding:0 16px;background:{style.header};color:{style.header_text}}}
 .brand{{display:grid;width:32px;height:32px;place-items:center;flex:0 0 32px;border-radius:9px;background:rgba(255,255,255,.12)}}.header-icon{{width:17px;height:17px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}}

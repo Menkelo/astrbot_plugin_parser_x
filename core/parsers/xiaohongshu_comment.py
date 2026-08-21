@@ -42,7 +42,7 @@ class _RawXiaohongshuFeed:
 class XiaohongshuCommentFeed(SocialCommentFeedBase):
     COMMENT_HOST = "https://edith.xiaohongshu.com"
     COMMENT_PATH = "/api/sns/web/v2/comment/page"
-    CACHE_VERSION = "xiaohongshu_comment_v4_emotes"
+    CACHE_VERSION = "xiaohongshu_comment_v5_emotes"
     PLATFORM_SLUG = "xiaohongshu"
     AVATAR_REFERER = "https://www.xiaohongshu.com/"
 

@@ -68,24 +68,154 @@ _XIAOHEIHE_FALLBACK = {
 
 _XIAOHONGSHU_FALLBACK = {
     "[微笑R]": (
-        "https://picasso-static.xiaohongshu.com/fe-platform/"
-        "9366d16631e3e208689cbc95eefb7cfb0901001e.png"
+        "https://picasso-static.xiaohongshu.com/fe-platform/9366d16631e3e208689cbc95eefb7cfb0901001e.png"
+    ),
+    "[偷笑R]": (
+        "https://picasso-static.xiaohongshu.com/fe-platform/d1a34cf8aeac526d36890d3e8f727192a6808ecf.png"
+    ),
+    "[大笑R]": (
+        "https://picasso-static.xiaohongshu.com/fe-platform/aed28089f6578522cd490f636955efe6dd27da38.png"
+    ),
+    "[笑哭R]": (
+        "https://picasso-static.xiaohongshu.com/fe-platform/ca75b2fc85b0a3e171fe5df1cbf90efdcd3ba571.png"
+    ),
+    "[害羞R]": (
+        "https://picasso-static.xiaohongshu.com/fe-platform/219fe9d7e40b14dd7a6712203143bb1f9972bc5c.png"
+    ),
+    "[惊恐R]": (
+        "https://picasso-static.xiaohongshu.com/fe-platform/114d21cd3f1b4a1591cc997ddd5976bb0cec8f4c.png"
     ),
     "[生气R]": (
-        "https://picasso-static.xiaohongshu.com/fe-platform/"
-        "91515ae9718d8cce4f8de909683011b538d35327.png"
+        "https://picasso-static.xiaohongshu.com/fe-platform/91515ae9718d8cce4f8de909683011b538d35327.png"
     ),
     "[哭惹R]": (
-        "https://picasso-static.xiaohongshu.com/fe-platform/"
-        "14b005f7afd5f7c88620478b610bf1de90c4ceab.png"
+        "https://picasso-static.xiaohongshu.com/fe-platform/14b005f7afd5f7c88620478b610bf1de90c4ceab.png"
     ),
     "[斜眼R]": (
-        "https://picasso-static.xiaohongshu.com/fe-platform/"
-        "6062be312a922da7998f99fb773e06cea0a640df.png"
+        "https://picasso-static.xiaohongshu.com/fe-platform/6062be312a922da7998f99fb773e06cea0a640df.png"
+    ),
+    "[鄙视R]": (
+        "https://picasso-static.xiaohongshu.com/fe-platform/0dbbe487e5157d9fb720df7e59fe45a7927af647.png"
+    ),
+    "[可怜R]": (
+        "https://picasso-static.xiaohongshu.com/fe-platform/36338a7a39e27341b34e845e28561378e9ad1ede.png"
+    ),
+    "[抓狂R]": (
+        "https://picasso-static.xiaohongshu.com/fe-platform/13619bff18deffe1d2dcc4be0a6ba7ee0394926b.png"
+    ),
+    "[捂脸R]": (
+        "https://picasso-static.xiaohongshu.com/fe-platform/83278234fdeb5c36682334f6eb756d243ee62201.png"
+    ),
+    "[汗颜R]": (
+        "https://picasso-static.xiaohongshu.com/fe-platform/87e23e577662f3268362518f7f4e90e30b4ea284.png"
+    ),
+    "[流汗R]": (
+        "https://picasso-static.xiaohongshu.com/fe-platform/4fc14b31e947deec15d0a1b3f96ae57214ab2bb2.png"
+    ),
+    "[吃瓜R]": (
+        "https://picasso-static.xiaohongshu.com/fe-platform/a38d15b09910f65756d521f1f46031c44694214a.png"
+    ),
+    "[吐舌头H]": (
+        "https://picasso-static.xiaohongshu.com/fe-platform/e4533cbaa5829c6ffd92992414290987e39ba6be.png"
+    ),
+    "[蹲后续H]": (
+        "https://picasso-static.xiaohongshu.com/fe-platform/a633dcf8d48c500ae11532d0583c529b89286c66.webp"
+    ),
+    "[暗中观察R]": (
+        "https://picasso-static.xiaohongshu.com/fe-platform/0a9cd643452c7b717b9735a23c550295baa69f02.png"
+    ),
+    "[得意R]": (
+        "https://picasso-static.xiaohongshu.com/fe-platform/b02bf85f97acbd6be1749148e163b36920655f92.png"
+    ),
+    "[失望R]": (
+        "https://picasso-static.xiaohongshu.com/fe-platform/b862c8f94da375f55805a97c152efeeb5099c149.png"
+    ),
+    "[皱眉R]": (
+        "https://picasso-static.xiaohongshu.com/fe-platform/fd82d69014a4a50397e20fc6b23ae8dba1c74998.png"
+    ),
+    "[叹气R]": (
+        "https://picasso-static.xiaohongshu.com/fe-platform/5ce63c6024defb2f6334aa153fd0fd238a683779.png"
+    ),
+    "[睡觉R]": (
+        "https://picasso-static.xiaohongshu.com/fe-platform/d98472a962e744dd238f2b4f5dba2665dcb8360b.png"
+    ),
+    "[再见R]": (
+        "https://picasso-static.xiaohongshu.com/fe-platform/c34602650951342f09ca6e00d6f4c4ac57208a07.png"
+    ),
+    "[抠鼻R]": (
+        "https://picasso-static.xiaohongshu.com/fe-platform/5fd4922d00a004260912247dad6ca7149d8a1f75.png"
+    ),
+    "[鼓掌R]": (
+        "https://picasso-static.xiaohongshu.com/fe-platform/59bbbe6fc2879f6ef42e63b3264096a9f4d403c7.png"
+    ),
+    "[拥抱R]": (
+        "https://picasso-static.xiaohongshu.com/fe-platform/efc3b7a9e6df5d2be0233e203adf0d1110623441.png"
+    ),
+    "[合十R]": (
+        "https://picasso-static.xiaohongshu.com/fe-platform/fbdbb2547a281e18ee9759e3d658d417871996c0.png"
+    ),
+    "[点赞R]": (
+        "https://picasso-static.xiaohongshu.com/fe-platform/391438d25580a034707791b5f165c27f8899025a.png"
+    ),
+    "[赞R]": (
+        "https://picasso-static.xiaohongshu.com/fe-platform/1b81c5ec3f7006f6b8baf7c006773f5f9d1ab6d7.png"
+    ),
+    "[爱心R]": (
+        "https://picasso-static.xiaohongshu.com/fe-platform/fc7cec55e0e1a0ffd8668d89ea2921c23c63539e.png"
+    ),
+    "[红色心形R]": (
+        "https://picasso-static.xiaohongshu.com/fe-platform/d6125900d5de3969a1bb075e23d361c4bd78b0eb.png"
+    ),
+    "[玫瑰R]": (
+        "https://picasso-static.xiaohongshu.com/fe-platform/abc0a1cd8434c5348e89e887cf8a4f93f352558c.png"
+    ),
+    "[火R]": (
+        "https://picasso-static.xiaohongshu.com/fe-platform/51f1d8e7c5b4182c05510f3aeadecee19e968b42.png"
+    ),
+    "[烟花R]": (
+        "https://picasso-static.xiaohongshu.com/fe-platform/64071df3b7c40545149a1d26fcfdf0e704c96c2c.png"
+    ),
+    "[红薯R]": (
+        "https://picasso-static.xiaohongshu.com/fe-platform/bfb8a6309b8b42af2cf7c8ce20d1d4fb9a64b512.png"
+    ),
+    "[红书R]": (
+        "https://picasso-static.xiaohongshu.com/fe-platform/182d040c46942e0ba1c8eeb66bf7047dad751e72.png"
     ),
     "[doge]": (
-        "https://picasso-static.xiaohongshu.com/fe-platform/"
-        "b7c0498189d449e8f22946be494d6bad48eda5ab.png"
+        "https://picasso-static.xiaohongshu.com/fe-platform/b7c0498189d449e8f22946be494d6bad48eda5ab.png"
+    ),
+    "[哇R]": (
+        "https://picasso-static.xiaohongshu.com/fe-platform/e0771182c12362d41f70356f714d84dccc4d07bc.png"
+    ),
+    "[喝奶茶R]": (
+        "https://picasso-static.xiaohongshu.com/fe-platform/364ad5d3e0d5c3b1aa101c9243f488be97d9e8d7.png"
+    ),
+    "[吧唧R]": (
+        "https://picasso-static.xiaohongshu.com/fe-platform/238271771c806047fc928b6ba49a6d8e7a741e5e.png"
+    ),
+    "[派对R]": (
+        "https://picasso-static.xiaohongshu.com/fe-platform/7a6287c7f65fabdc15fa8f06b2696cccc21e86f2.png"
+    ),
+    "[庆祝R]": (
+        "https://picasso-static.xiaohongshu.com/fe-platform/51eab29d66493ab028e9a446c6c10fa606e1e412.png"
+    ),
+    "[飞吻R]": (
+        "https://picasso-static.xiaohongshu.com/fe-platform/81cedd016ad9d8bef38b2cd0c1e725454df53598.png"
+    ),
+    "[石化R]": (
+        "https://picasso-static.xiaohongshu.com/fe-platform/a61db6b1917b6c5c1e8f30bbeea9118a7bdbbe74.png"
+    ),
+    "[打卡R]": (
+        "https://picasso-static.xiaohongshu.com/fe-platform/89214fad0c95300ab58a96037fddafa0415d387e.png"
+    ),
+    "[种草R]": (
+        "https://picasso-static.xiaohongshu.com/fe-platform/035c8044c53dbf7df2cf28d6ec35eb325567121b.png"
+    ),
+    "[私信R]": (
+        "https://picasso-static.xiaohongshu.com/fe-platform/2062069d03c2927cc823ad0f65c4db645e968058.png"
+    ),
+    "[萌萌哒R]": (
+        "https://picasso-static.xiaohongshu.com/fe-platform/c255f0ae809f8045561a80737b6aec25139f7607.png"
     ),
 }
 
