@@ -388,7 +388,7 @@ class TextCardRenderer:
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <style id="parser-x-content-card-styles">
 *{{box-sizing:border-box}}html,body{{margin:0;width:760px;background:{theme.background};color:{theme.text}}}html{{overflow-x:hidden;scrollbar-width:none}}html::-webkit-scrollbar{{width:0;height:0}}
-body{{padding:18px 22px 20px;overflow-x:hidden;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei","Noto Color Emoji","Apple Color Emoji","Segoe UI Emoji","Noto Emoji",sans-serif}}
+body{{padding:18px 22px 20px;overflow-x:hidden;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif,"Noto Color Emoji","Apple Color Emoji","Segoe UI Emoji","Noto Emoji"}}
 .card{{width:716px;overflow:hidden;border:1px solid {theme.border};border-radius:14px;background:{theme.surface}}}
 .brand-bar{{display:flex;min-height:58px;align-items:center;justify-content:space-between;gap:16px;padding:14px 20px;border-bottom:1px solid {accent_dark};background:{theme.accent};color:#fff}}
 .brand-copy{{display:flex;min-width:0;align-items:center}}.brand-name{{overflow:hidden;font-size:19px;font-weight:700;letter-spacing:.02em;text-overflow:ellipsis;white-space:nowrap}}.product-name{{font-size:13px;opacity:.88;white-space:nowrap}}

@@ -450,7 +450,7 @@ class ParserXPlugin(Star):
                     accent_color,
                     accent_soft,
                     accent_source,
-                    "text_card_v15_no_global_emoji_variant",
+                    "text_card_v16_emoji_fonts_after_generic",
                 ]
             ).encode("utf-8")
         ).hexdigest()[:12]
