@@ -2,6 +2,23 @@
 
 本项目遵循语义化版本，版本更新同时记录用户可见变化、兼容迁移和验证范围。
 
+## [0.6.0] - 2026-08-22
+
+### Removed
+
+- 移除小红书视频笔记热门评论功能：评论接口要求携带账号 Cookie 的实时网页签名
+  （`xhshow`），已有用户反馈该请求会导致小红书账号被封，继续提供该功能的风险不可接受。
+  移除内容包括 `core/parsers/xiaohongshu_comment.py`、`comments.xiaohongshu` 与
+  `cookies.xiaohongshu_cookie` 配置项、redmoji 表情目录适配及 `xhshow` 依赖。
+- 升级时自动清理旧配置中残留的 `comments.xiaohongshu` 开关与 `cookies.xiaohongshu_cookie`
+  登录态；小红书笔记、视频与图文解析本身不受影响，仍直接发送媒体。
+
+### Validation
+
+- 自动化回归测试结果与移除前基线一致（本地 AstrBot 版本缺 `astrbot.api.web` 的 32 项
+  环境性失败在移除前后相同）；Ruff 检查通过；新增回归测试保证旧配置残留时也不挂载
+  小红书评论任务。
+
 ## [0.5.24] - 2026-08-21
 
 ### Fixed

@@ -24,8 +24,8 @@ Parser X 是面向 AstrBot `aiocqhttp`（OneBot v11）的国内平台分享链�
   楼中楼；正文及评论中的微博表情均可正确解析。
 - 小红书：视频、图片和图文笔记；媒体直接发送，不渲染正文卡；
   发布时间兼容秒和毫秒时间戳，空正文不会回填分享链接，平台内部的 `[话题]` 标记会清理
-  为标准 `#话题#`。配置完整网页 Cookie 后，视频笔记可附带热门评论、作者/置顶标识、
-  IP 属地、点赞数、评论图片和首条楼中楼；图文笔记不会抓取或发送评论区。
+  为标准 `#话题#`。评论区抓取已整体移除：签名评论接口依赖账号登录态，存在触发风控封号的
+  风险，任何笔记都不再请求或发送评论区。
 - 米游社：文章正文、封面、正文配图和官方表情按富文本原始顺序合成为一张图片；含视频时先
   发送主内容和源视频，再发送独立评论图，用户自定义评论表情和 Unicode Emoji 会按图片渲染。
 - 小黑盒：帖子概要、富文本正文、配图和平台表情合成为一张图片，不再拆分或重复发送节点；
@@ -88,13 +88,11 @@ https://github.com/Menkelo/astrbot_plugin_parser_x
 - `performance.video_codec`：B站编码偏好。
 - `cookies.douyin_ck`、`cookies.bili_ck`：原生解析器 Cookie。
 - `cookies.weibo_cookie`：可选微博登录态；公开热门评论通常无需配置。
-- `cookies.xiaohongshu_cookie`：小红书视频评论区登录态，必须包含 `a1`，通常还需要
-  `web_session`；建议使用专用小号。
 - `cookies.ytdlp_cookie_file`：Netscape 格式 Cookie 文件，用于需要登录的平台。
 - `cookies.xiaoheihe_cookie`：可选的小黑盒登录态；公开内容未配置时也会先尝试签名接口。
-- `comments.bilibili`、`comments.douyin`、`comments.weibo`、`comments.xiaohongshu`、
-  `comments.xiaoheihe`、`comments.miyoushe`：各平台视频评论区开关；所有平台的纯图文、图集和
-  纯文字作品都不会抓取或发送评论，小红书评论默认关闭。
+- `comments.bilibili`、`comments.douyin`、`comments.weibo`、`comments.xiaoheihe`、
+  `comments.miyoushe`：各平台视频评论区开关；所有平台的纯图文、图集和纯文字作品都不会
+  抓取或发送评论。小红书评论区已移除，不再提供开关。
 - `comments.display_count`：最多展示的热门评论总数。
 - `comments.filter.*`：视频评论共享过滤。默认使用平衡 `@` 处理、二维码图片过滤、明显广告组合
   评分和重复评论去重；二维码检测失败时保留评论，低信息评论过滤默认关闭。
@@ -108,9 +106,8 @@ https://github.com/Menkelo/astrbot_plugin_parser_x
 挂载评论任务，也不会请求或发送评论区。评论抓取、渲染和下载可与视频并行，但实际评论消息会
 等待主内容投递结束，确保先发送视频/主内容，再发送评论区。评论使用独立合并转发，第一节点为
 平台评论标题，后续每张评论图各占一个节点；转发失败时降级逐条发送，评论失败不会阻塞视频。
-六个平台的普通 Unicode Emoji 会渲染为 Twemoji，CDN 不可用时保留原字符；各平台自定义表情
-继续使用官方目录，小红书同时支持官方 redmoji 目录和评论内嵌表情字段。小红书视频评论使用
-完整登录态与网页签名接口；Cookie、`xsec_token` 或签名不可用时自动跳过评论。
+五个平台的普通 Unicode Emoji 会渲染为 Twemoji，CDN 不可用时保留原字符；各平台自定义表情
+继续使用官方目录。
 
 评论适配完成后会先经过统一过滤层，再截取 `comments.display_count`：平衡模式会清除单个
 `@用户名` 并保留实际正文，纯召唤、多人群发、联系方式引流、明显广告、二维码配图和重复评论

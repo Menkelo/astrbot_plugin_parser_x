@@ -28,12 +28,6 @@
         "default": true
       },
       "weibo": {"description": "微博视频评论区", "type": "bool", "default": true},
-      "xiaohongshu": {
-        "description": "小红书视频评论区",
-        "hint": "仅视频笔记启用；需要在“平台登录态”中配置完整小红书 Cookie，图文笔记不会抓取评论。",
-        "type": "bool",
-        "default": false
-      },
       "xiaoheihe": {"description": "小黑盒视频评论区", "type": "bool", "default": true},
       "miyoushe": {"description": "米游社视频评论区", "type": "bool", "default": true},
       "display_count": {
@@ -45,7 +39,7 @@
       },
       "filter": {
         "description": "评论内容过滤",
-        "hint": "统一应用于六个平台的视频评论区；先过滤候选评论，再按热门顺序补足展示数量。",
+        "hint": "统一应用于五个平台的视频评论区；先过滤候选评论，再按热门顺序补足展示数量。",
         "type": "object",
         "items": {
           "enabled": {
@@ -167,12 +161,6 @@
       "weibo_cookie": {
         "description": "微博 Cookie",
         "hint": "可选；公开微博和热门评论通常无需登录，受限内容可使用该登录态。",
-        "type": "text",
-        "default": ""
-      },
-      "xiaohongshu_cookie": {
-        "description": "小红书 Cookie",
-        "hint": "仅用于小红书视频笔记评论区，请粘贴网页端完整 Cookie（必须包含 a1，通常还需要 web_session）。建议使用专用小号。",
         "type": "text",
         "default": ""
       },

@@ -2,18 +2,14 @@ import json
 import re
 import time
 from typing import Any, ClassVar
-from urllib.parse import unquote, urlsplit
+from urllib.parse import unquote
 
 from astrbot.api import logger
 from astrbot.core.config.astrbot_config import AstrBotConfig
 from msgspec import Struct, convert, field
 
-from ..comment_canvas import SocialCommentCanvas
-from ..comment_settings import CommentSettings
 from ..download import Downloader
-from ..html_renderer import HtmlRenderService
 from .base import BaseParser, ParseException, Platform, SkipParseException, handle
-from .xiaohongshu_comment import XiaohongshuCommentFeed
 
 
 class XiaoHongShuParser(BaseParser):
@@ -25,27 +21,6 @@ class XiaoHongShuParser(BaseParser):
         self._page_cache_ttl = int(config.get("xhs_cache_ttl", 120))
         self._page_cache: dict[str, tuple[float, str, str]] = {}
         self._redirect_cache: dict[str, tuple[float, str]] = {}
-        self.render_service = HtmlRenderService.from_config(config)
-        cookies = config.get("cookies", {})
-        self.comment_cookie = (
-            str(cookies.get("xiaohongshu_cookie", ""))
-            if isinstance(cookies, dict)
-            else ""
-        )
-        comment_settings = CommentSettings.from_config(
-            config,
-            "xiaohongshu",
-            legacy_enabled=False,
-        )
-        self.enable_comment_card = comment_settings.enabled
-        self.comment_limit = comment_settings.display_count
-        self.comment_timeout = comment_settings.timeout
-        self.comment_canvas = SocialCommentCanvas(self.render_service)
-        self.comment_feed = XiaohongshuCommentFeed(
-            self,
-            self.comment_canvas,
-            limit=self.comment_limit,
-        )
 
         explore_headers = {
             "accept": (
@@ -68,10 +43,6 @@ class XiaoHongShuParser(BaseParser):
             "sec-fetch-dest": "empty",
         }
         self.ios_headers.update(discovery_headers)
-
-    def set_render_service(self, render_service: HtmlRenderService) -> None:
-        self.render_service = render_service
-        self.comment_canvas.render_service = render_service
 
     # region cache
 
@@ -150,96 +121,6 @@ class XiaoHongShuParser(BaseParser):
             lambda matched: f"#{matched.group(1).rstrip()}#",
             text,
         )
-
-    @staticmethod
-    def _query_value(url: str | None, key: str) -> str:
-        query = urlsplit(url or "").query
-        for part in query.split("&"):
-            raw_key, separator, raw_value = part.partition("=")
-            if separator and unquote(raw_key) == key:
-                return unquote(raw_value)
-        return ""
-
-    @staticmethod
-    def _note_id(note_data: dict, fallback: str | None = None) -> str:
-        return str(
-            note_data.get("noteId")
-            or note_data.get("note_id")
-            or note_data.get("id")
-            or fallback
-            or ""
-        ).strip()
-
-    @staticmethod
-    def _note_owner_id(note_data: dict) -> str:
-        user = note_data.get("user") or note_data.get("userInfo") or {}
-        if not isinstance(user, dict):
-            return ""
-        return str(
-            user.get("userId")
-            or user.get("user_id")
-            or user.get("userid")
-            or user.get("id")
-            or ""
-        ).strip()
-
-    @classmethod
-    def _xsec_token(cls, note_data: dict, final_url: str | None) -> str:
-        return str(
-            cls._query_value(final_url, "xsec_token")
-            or note_data.get("xsecToken")
-            or note_data.get("xsec_token")
-            or ""
-        ).strip()
-
-    @staticmethod
-    def _comment_total(note_data: dict) -> int:
-        info = note_data.get("interactInfo") or note_data.get("interact_info") or {}
-        if not isinstance(info, dict):
-            return 0
-        try:
-            return int(info.get("commentCount") or info.get("comment_count") or 0)
-        except (TypeError, ValueError):
-            return 0
-
-    def _comment_extra(
-        self,
-        note_data: dict,
-        *,
-        note_id: str | None,
-        final_url: str | None,
-        title: str,
-        cover: str | None,
-    ) -> dict:
-        if not self.enable_comment_card or not self.comment_cookie:
-            return {}
-
-        resolved_note_id = self._note_id(note_data, note_id)
-        xsec_token = self._xsec_token(note_data, final_url)
-        if not resolved_note_id or not xsec_token:
-            logger.debug(
-                "[评论区][小红书] stage=attach result=skipped "
-                "reason=missing_note_context"
-            )
-            return {}
-
-        owner_id = self._note_owner_id(note_data)
-        total_hint = self._comment_total(note_data)
-
-        async def build_comment_images():
-            return await self.comment_feed.build_images(
-                resolved_note_id,
-                xsec_token,
-                work_title=title,
-                cover=cover,
-                owner_id=owner_id,
-                total_hint=total_hint,
-            )
-
-        return {
-            "comment_image_task_factory": build_comment_images,
-            "comment_timeout": self.comment_timeout,
-        }
 
     @staticmethod
     def _is_live_url(url: str | None) -> bool:
@@ -438,11 +319,7 @@ class XiaoHongShuParser(BaseParser):
             )
             raise ParseException("can't find note detail in json_obj")
 
-        return self._process_explore_data(
-            note_data,
-            final_url,
-            note_id=xhs_id,
-        )
+        return self._process_explore_data(note_data, final_url)
 
     async def parse_discovery(self, url: str, xhs_id: str | None = None):
         final_url, html = await self._fetch_html(
@@ -457,12 +334,7 @@ class XiaoHongShuParser(BaseParser):
         note_data = json_obj.get("noteData", {}).get("data", {}).get("noteData", {})
         if note_data:
             preload_data = json_obj.get("noteData", {}).get("normalNotePreloadData", {})
-            return self._process_discovery_data(
-                note_data,
-                preload_data,
-                final_url,
-                note_id=xhs_id,
-            )
+            return self._process_discovery_data(note_data, preload_data, final_url)
 
         note_container = json_obj.get("note", {})
         detail_map = note_container.get("noteDetailMap", {})
@@ -470,31 +342,19 @@ class XiaoHongShuParser(BaseParser):
         if xhs_id:
             note_data = detail_map.get(xhs_id, {}).get("note", {})
             if note_data:
-                return self._process_explore_data(
-                    note_data,
-                    final_url,
-                    note_id=xhs_id,
-                )
+                return self._process_explore_data(note_data, final_url)
 
         if detail_map:
             first_key = next(iter(detail_map))
             note_data = detail_map[first_key].get("note", {})
             if note_data:
-                return self._process_explore_data(
-                    note_data,
-                    final_url,
-                    note_id=first_key,
-                )
+                return self._process_explore_data(note_data, final_url)
 
         note_data = note_container.get("firstNote", {}) or note_container.get(
             "note", {}
         )
         if note_data:
-            return self._process_explore_data(
-                note_data,
-                final_url,
-                note_id=xhs_id,
-            )
+            return self._process_explore_data(note_data, final_url)
 
         logger.warning(
             f"[XHS] discovery 未找到 note (xhs_id={xhs_id}): {self._debug_note_locations(json_obj)}"
@@ -507,8 +367,6 @@ class XiaoHongShuParser(BaseParser):
         self,
         note_data: dict,
         final_url: str | None = None,
-        *,
-        note_id: str | None = None,
     ):
         class Image(Struct):
             urlDefault: str | None = None
@@ -559,29 +417,15 @@ class XiaoHongShuParser(BaseParser):
 
         contents = []
         note_image_urls = note_detail.image_urls
-        card_media_url = ""
 
         if video_url := note_detail.video_url:
             cover_url = note_image_urls[0] if note_image_urls else None
-            card_media_url = cover_url or ""
             contents.append(self.create_video_content(video_url, cover_url))
 
         elif image_urls := note_image_urls:
-            card_media_url = image_urls[0]
             contents.extend(self.create_image_contents(image_urls))
 
         author = self.create_author(note_detail.nickname, note_detail.avatar_url)
-        extra = {}
-        if note_detail.video_url and contents:
-            extra.update(
-                self._comment_extra(
-                    note_data,
-                    note_id=note_id,
-                    final_url=final_url,
-                    title=note_title,
-                    cover=card_media_url,
-                )
-            )
 
         return self.result(
             title=note_title,
@@ -590,7 +434,6 @@ class XiaoHongShuParser(BaseParser):
             contents=contents,
             timestamp=self._normalize_timestamp(note_detail.time),
             url=final_url,
-            extra=extra,
         )
 
     def _process_discovery_data(
@@ -598,8 +441,6 @@ class XiaoHongShuParser(BaseParser):
         note_data: dict,
         preload_data: dict,
         final_url: str | None = None,
-        *,
-        note_id: str | None = None,
     ):
         class Image(Struct):
             url: str | None = None
@@ -656,7 +497,6 @@ class XiaoHongShuParser(BaseParser):
         note_text = self._normalize_note_text(note_data_obj.desc)
 
         contents = []
-        card_media_url = ""
 
         if video_url := note_data_obj.video_url:
             if preload_data:
@@ -664,7 +504,6 @@ class XiaoHongShuParser(BaseParser):
                 img_urls = preload_obj.image_urls
             else:
                 img_urls = note_data_obj.image_urls
-            card_media_url = img_urls[0] if img_urls else ""
 
             contents.append(
                 self.create_video_content(
@@ -674,20 +513,7 @@ class XiaoHongShuParser(BaseParser):
             )
 
         elif img_urls := note_data_obj.image_urls:
-            card_media_url = img_urls[0]
             contents.extend(self.create_image_contents(img_urls))
-
-        extra = {}
-        if note_data_obj.video_url and contents:
-            extra.update(
-                self._comment_extra(
-                    note_data,
-                    note_id=note_id,
-                    final_url=final_url,
-                    title=note_title,
-                    cover=card_media_url,
-                )
-            )
 
         return self.result(
             title=note_title,
@@ -698,7 +524,6 @@ class XiaoHongShuParser(BaseParser):
             text=note_text,
             timestamp=self._normalize_timestamp(note_data_obj.time),
             url=final_url,
-            extra=extra,
         )
 
     def _extract_initial_state_json(self, html: str) -> dict[str, Any]:

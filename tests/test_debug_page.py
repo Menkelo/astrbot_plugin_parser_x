@@ -98,7 +98,7 @@ def test_debug_page_is_available_when_exclusive_mode_is_disabled():
     plugin = object.__new__(ParserXPlugin)
     plugin.config = {
         "debug": {"enabled": False},
-        "comments": {"xiaohongshu": True},
+        "comments": {"bilibili": True, "xiaohongshu": True},
     }
     parser = SimpleNamespace(
         platform=SimpleNamespace(name="bilibili", display_name="B站")
@@ -138,7 +138,7 @@ def test_debug_page_is_available_when_exclusive_mode_is_disabled():
     assert status_payload["available"] is True
     assert status_payload["enabled"] is False
     assert status_payload["exclusive"] is False
-    assert status_payload["comments"] == {"xiaohongshu": True}
+    assert status_payload["comments"] == {"bilibili": True}
     assert start.status_code == 200
     start_payload = _response_json(start)
     assert start_payload["session_id"]

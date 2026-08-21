@@ -121,6 +121,19 @@ class ParserXPlugin(Star):
             for retired_platform in ("tieba", "xigua", "pipixia", "weishi"):
                 platforms.pop(retired_platform, None)
             config["platforms"] = platforms
+
+        # The Xiaohongshu comment feed was retired because the signed,
+        # Cookie-authenticated comment endpoint risks account bans. Drop its
+        # leftover switches and login state so upgraded installs stop sending
+        # the cookie anywhere.
+        comment_config = config.get("comments", {})
+        if isinstance(comment_config, dict):
+            comment_config.pop("xiaohongshu", None)
+            config["comments"] = comment_config
+        cookies = config.get("cookies", {})
+        if isinstance(cookies, dict):
+            cookies.pop("xiaohongshu_cookie", None)
+            config["cookies"] = cookies
         integrations = config.get("integrations", {})
         if isinstance(integrations, dict):
             integrations.pop("tieba_api_base", None)
@@ -2175,7 +2188,6 @@ class ParserXPlugin(Star):
                         "bilibili",
                         "douyin",
                         "weibo",
-                        "xiaohongshu",
                         "xiaoheihe",
                         "miyoushe",
                     }

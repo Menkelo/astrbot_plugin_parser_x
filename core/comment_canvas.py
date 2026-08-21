@@ -10,7 +10,6 @@ from .card_theme import (
     MIYOUSHE_CARD_THEME,
     WEIBO_CARD_THEME,
     XIAOHEIHE_CARD_THEME,
-    XIAOHONGSHU_CARD_THEME,
     PlatformCardTheme,
 )
 from .comment_style import COMMENT_HEADER_ICON, standalone_comment_css
@@ -71,10 +70,6 @@ DOUYIN_THEME = _comment_theme(DOUYIN_CARD_THEME, portrait_cover=True)
 WEIBO_THEME = _comment_theme(WEIBO_CARD_THEME)
 XIAOHEIHE_THEME = _comment_theme(XIAOHEIHE_CARD_THEME)
 MIYOUSHE_THEME = _comment_theme(MIYOUSHE_CARD_THEME)
-XIAOHONGSHU_THEME = _comment_theme(
-    XIAOHONGSHU_CARD_THEME,
-    portrait_cover=True,
-)
 
 
 @dataclass(slots=True)
@@ -394,5 +389,4 @@ __all__ = [
     "SocialCommentCanvas",
     "WEIBO_THEME",
     "XIAOHEIHE_THEME",
-    "XIAOHONGSHU_THEME",
 ]
