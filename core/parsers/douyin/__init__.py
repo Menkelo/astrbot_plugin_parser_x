@@ -30,6 +30,9 @@ if TYPE_CHECKING:
 class DouyinParser(BaseParser):
     platform: ClassVar[Platform] = Platform(name="douyin", display_name="抖音")
     DAILY_UNSUPPORTED_TEXT: ClassVar[str] = "无法解析抖音限时日常内容"
+    UNRECOGNIZED_TEXT: ClassVar[str] = (
+        "插件无法识别到当前抖音内容（可能是私密、已删除或需登录可见的作品），请换一个试试！"
+    )
 
     def __init__(self, config: AstrBotConfig, downloader: Downloader):
         super().__init__(config, downloader)
@@ -275,6 +278,30 @@ class DouyinParser(BaseParser):
         text = str(error).lower()
         return any(kw in text for kw in ("cookie", "douyin_ck", "fresh cookies"))
 
+    def _terminal_parse_exception(self, error: Exception) -> ParseException:
+        """
+        把兜底链路的原始报错转换成用户可读提示。
+
+        抖音对私密/已删除/需登录可见的作品，无论有没有带 cookie，
+        yt-dlp 都统一抛 "Fresh cookies ... are needed"，文本里带 cookie 字样。
+        以前只要命中 cookie 关键词就提示"未配置 douyin_ck"，
+        对已经配好 cookie 的用户是纯误导。只有确实没配 cookie 时才提示去配置，
+        否则一律按"内容无法识别"处理。
+        """
+        if not self.cookies and self._is_cookie_error(error):
+            return ParseException("未配置抖音 cookie (douyin_ck)，无法解析")
+        return ParseException(self.UNRECOGNIZED_TEXT)
+
+    async def _ytdlp_fallback(self, vid: str):
+        """ytdlp 是最后一道兜底，它失败即为终态，不再向用户暴露原始报错。"""
+        try:
+            return await self._parse_with_ytdlp(vid)
+        except SkipParseException:
+            raise
+        except Exception as e:
+            logger.warning(f"[Douyin] ytdlp 兜底失败 vid={vid}: {e}")
+            raise self._terminal_parse_exception(e) from e
+
     async def _resolve_final_url_by_head(self, url: str) -> str | None:
         """
         抖音短链只需要最终落点。优先用 HEAD 跟随跳转，避免像 get_final_url
@@ -338,6 +365,8 @@ class DouyinParser(BaseParser):
         if keyword and m:
             try:
                 return await self.parse(keyword, m)
+            except SkipParseException:
+                raise
             except Exception as e:
                 logger.warning(f"[Douyin] 短链路由后解析失败，尝试ID兜底: {e}")
 
@@ -345,16 +374,15 @@ class DouyinParser(BaseParser):
         if vid and not self._is_live_url(final_url):
             try:
                 return await self._parse_by_id_fallback(vid)
+            except SkipParseException:
+                raise
             except Exception as e:
                 if self._looks_like_daily_share_url(
                     final_url
                 ) and self._is_fresh_cookies_error(e):
                     return self._unsupported_daily_result()
-                if self._is_cookie_error(e):
-                    raise ParseException("未配置抖音 cookie (douyin_ck)，无法解析")
-                raise ParseException(
-                    f"短链解析失败，ID兜底失败: {e} | 最终链接: {final_url}"
-                )
+                logger.warning(f"[Douyin] 短链ID兜底失败: {e} | 最终链接: {final_url}")
+                raise self._terminal_parse_exception(e) from e
 
         raise ParseException(f"短链解析失败，无法识别最终链接: {final_url}")
 
@@ -398,7 +426,7 @@ class DouyinParser(BaseParser):
             raise
         except Exception as last_err:
             logger.warning(f"[Douyin] 直连解析失败，切换 ytdlp 兜底: {last_err}")
-            return await self._parse_with_ytdlp(vid)
+            return await self._ytdlp_fallback(vid)
 
     async def _parse_by_id_fallback(self, vid: str):
         # video / note 两种类型 × m / iesdouyin 两个域名，共 4 个候选。
@@ -415,7 +443,7 @@ class DouyinParser(BaseParser):
             logger.warning(
                 f"[Douyin] _parse_by_id_fallback 失败，切换 ytdlp: {last_err}"
             )
-            return await self._parse_with_ytdlp(vid)
+            return await self._ytdlp_fallback(vid)
 
     async def _fetch_router_resp(self, url: str, timeout: int = 8):
         """
