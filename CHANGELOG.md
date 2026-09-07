@@ -2,6 +2,19 @@
 
 本项目遵循语义化版本，版本更新同时记录用户可见变化、兼容迁移和验证范围。
 
+## [0.6.2] - 2026-09-07
+
+### Fixed
+
+- 修复小红书笔记页 `noteDetailMap` 为空时抛出 `can't find note detail in json_obj` 的问题：
+  现在会解开 `/404/sec` 与 `redirectPath` 安全中转页、从分享文本补回 `xsec_token`（保留 token 中的 `+`）、兼容 Vue ref 包装，并在笔记被风控/删除时给出可读中文提示。
+- 修复 QQ 小程序/富文本分享卡解析失败：有标题时也会从 Json/Xml 卡片抽出链接，优先使用带 `xsec_token` 的笔记地址，并保留 token 中的 `+`。
+
+### Validation
+
+- Ruff 检查与格式化通过。
+- 新增小红书安全中转页、token 回填、Vue ref 解包、空 `noteDetailMap` 提示，以及 QQ 小程序分享卡抽取回归测试。
+
 ## [0.6.1] - 2026-08-29
 
 ### Fixed

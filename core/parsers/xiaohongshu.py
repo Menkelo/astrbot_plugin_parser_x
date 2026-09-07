@@ -1,8 +1,8 @@
 import json
 import re
 import time
-from typing import Any, ClassVar
-from urllib.parse import unquote
+from typing import Any, ClassVar, NoReturn
+from urllib.parse import unquote, urlencode, urlparse
 
 from astrbot.api import logger
 from astrbot.core.config.astrbot_config import AstrBotConfig
@@ -146,40 +146,251 @@ class XiaoHongShuParser(BaseParser):
             )
         )
 
+    _XSEC_TOKEN_RE = re.compile(r"xsec_token=([^&\s\"'<>]+)", re.I)
+    _NOTE_SHARE_RE = re.compile(
+        r"https?://(?:www\.)?xiaohongshu\.com/(?:explore|discovery/item)/"
+        r"(?P<id>[0-9a-zA-Z]+)(?:\?(?P<query>[A-Za-z0-9._%&+=/#@-]*))?",
+        re.I,
+    )
+
     @staticmethod
     def _unwrap_sec_redirect(url: str) -> str:
         """
         小红书安全中转页：
             https://www.xiaohongshu.com/404/sec_xxx?source=xhs_sec_server&originalUrl=<URL编码真实地址>
-        真实笔记地址（含 xsec_token）被编码塞进 originalUrl 参数里。这里取出并解码一次返回；
-        非该形态则原样返回。用 unquote（而非 parse_qs/unquote_plus），避免把 token 里的 '+' 误转成空格。
+            https://www.xiaohongshu.com/404?source=/404/sec_xxx?redirectPath=<URL编码真实地址>
+        真实笔记地址（含 xsec_token）被编码塞进 originalUrl / redirectPath。取出并解码一次返回；
+        非该形态则原样返回。用 unquote（而非 unquote_plus），避免把 token 里的 '+' 误转成空格。
         """
-        marker = "originalUrl="
-        idx = url.find(marker)
-        if idx == -1:
+        for marker in ("originalUrl=", "redirectPath="):
+            idx = url.find(marker)
+            if idx == -1:
+                continue
+            raw = url[idx + len(marker) :]
+            amp = raw.find("&")
+            if amp != -1:
+                raw = raw[:amp]
+            decoded = unquote(raw)
+            if decoded.startswith("http://www.xiaohongshu.com"):
+                decoded = "https://" + decoded[len("http://") :]
+            if decoded:
+                return decoded
+        return url
+
+    @staticmethod
+    def _iter_query_pairs(query: str):
+        for part in (query or "").split("&"):
+            if not part:
+                continue
+            if "=" in part:
+                name, value = part.split("=", 1)
+            else:
+                name, value = part, ""
+            yield unquote(name), unquote(value)
+
+    @staticmethod
+    def _query_value(url: str, key: str) -> str:
+        if not url or key not in url:
+            return ""
+        parsed = urlparse(url)
+        for name, value in XiaoHongShuParser._iter_query_pairs(parsed.query):
+            if name == key and value:
+                return value
+        unwrapped = XiaoHongShuParser._unwrap_sec_redirect(url)
+        if unwrapped != url:
+            return XiaoHongShuParser._query_value(unwrapped, key)
+        return ""
+
+    @staticmethod
+    def _with_query(url: str, **extra: str) -> str:
+        parsed = urlparse(url)
+        pairs = list(XiaoHongShuParser._iter_query_pairs(parsed.query))
+        existing = {name for name, _ in pairs}
+        for name, value in extra.items():
+            if value and name not in existing:
+                pairs.append((name, value))
+        return parsed._replace(query=urlencode(pairs)).geturl()
+
+    @staticmethod
+    def _unwrap_vue_ref(value: Any) -> Any:
+        seen = 0
+        while isinstance(value, dict) and seen < 6:
+            inner = value.get("value")
+            if inner is None:
+                inner = value.get("_value")
+            if inner is None:
+                break
+            if len(value) > 3 and not (
+                isinstance(inner, dict)
+                and (
+                    "noteDetailMap" in inner
+                    or "noteData" in inner
+                    or "type" in inner
+                    or "imageList" in inner
+                )
+            ):
+                break
+            value = inner
+            seen += 1
+        return value
+
+    def _collect_xsec_token(self, *urls: str) -> str:
+        for url in urls:
+            token = self._query_value(url or "", "xsec_token")
+            if token:
+                return token
+        matched = self._XSEC_TOKEN_RE.search(self.source_text or "")
+        if not matched:
+            return ""
+        return unquote(matched.group(1))
+
+    def _ensure_note_url(self, url: str, xhs_id: str = "") -> str:
+        url = self._unwrap_sec_redirect(url)
+        if re.search(r"xiaohongshu\.com/404(?:/|\?|$)", url, re.I):
             return url
+        token = self._collect_xsec_token(url)
+        source = ""
+        if not token and xhs_id:
+            for matched in self._NOTE_SHARE_RE.finditer(self.source_text or ""):
+                if matched.group("id") != xhs_id:
+                    continue
+                source = matched.group(0)
+                token = self._collect_xsec_token(source)
+                if token:
+                    break
+        extra: dict[str, str] = {}
+        if token:
+            extra["xsec_token"] = token
+            extra["xsec_source"] = (
+                self._query_value(url, "xsec_source")
+                or self._query_value(source, "xsec_source")
+                or "pc_share"
+            )
+        if extra:
+            url = self._with_query(url, **extra)
+        return url
 
-        raw = url[idx + len(marker) :]
-        # originalUrl 内部的 & 都是 %26，遇到字面 & 即为外层下一个参数，截断即可
-        amp = raw.find("&")
-        if amp != -1:
-            raw = raw[:amp]
+    @staticmethod
+    def _looks_like_note(item: dict) -> bool:
+        if item.get("imageList") or item.get("imagesList") or item.get("video"):
+            return True
+        if item.get("type") in {"normal", "video"}:
+            return True
+        if item.get("title") and isinstance(item.get("user"), dict):
+            return True
+        if item.get("noteId") or item.get("id"):
+            return bool(item.get("desc") or item.get("title") or item.get("user"))
+        return False
 
-        decoded = unquote(raw)
-        return decoded or url
+    def _as_note_dict(self, item: Any) -> dict:
+        item = self._unwrap_vue_ref(item)
+        if not isinstance(item, dict) or not item:
+            return {}
+        inner = self._unwrap_vue_ref(item.get("note"))
+        if isinstance(inner, dict) and self._looks_like_note(inner):
+            return inner
+        if self._looks_like_note(item):
+            return item
+        return {}
+
+    @staticmethod
+    def _is_discovery_note(note: dict) -> bool:
+        user = note.get("user")
+        return isinstance(user, dict) and "nickName" in user and "nickname" not in user
+
+    def _extract_note_from_state(
+        self, json_obj: dict, xhs_id: str | None = None
+    ) -> dict:
+        json_obj = self._unwrap_vue_ref(json_obj)
+        if not isinstance(json_obj, dict):
+            return {}
+
+        candidates: list[Any] = []
+        note_container = self._unwrap_vue_ref(json_obj.get("note") or {})
+        if not isinstance(note_container, dict):
+            note_container = {}
+        detail_map = self._unwrap_vue_ref(note_container.get("noteDetailMap") or {})
+        if not isinstance(detail_map, dict):
+            detail_map = {}
+        if xhs_id and xhs_id in detail_map:
+            candidates.append(detail_map.get(xhs_id))
+        candidates.extend(detail_map.values())
+        for key in ("firstNote", "note", "currentNote"):
+            candidates.append(note_container.get(key))
+
+        note_data_root = self._unwrap_vue_ref(json_obj.get("noteData") or {})
+        if isinstance(note_data_root, dict):
+            data = self._unwrap_vue_ref(note_data_root.get("data") or {})
+            if isinstance(data, dict):
+                candidates.append(data.get("noteData"))
+                candidates.append(data.get("note"))
+                candidates.append(data)
+            candidates.append(note_data_root.get("noteData"))
+            candidates.append(note_data_root.get("normalNotePreloadData"))
+            error_note = note_data_root.get("errorNoteData")
+            if isinstance(error_note, dict):
+                candidates.append(error_note.get("noteData"))
+
+        for item in candidates:
+            note = self._as_note_dict(item)
+            if note:
+                return note
+        return {}
+
+    @staticmethod
+    def _blocked_page_reason(
+        url: str,
+        html: str,
+        json_obj: dict | None = None,
+    ) -> str | None:
+        final = unquote(url or "")
+        html_text = html or ""
+        if (
+            "error_code=300031" in final
+            or "暂时无法浏览" in final
+            or "暂时无法浏览" in html_text
+        ):
+            return "当前笔记暂时无法浏览（可能已删除、设为私密或分享链接已失效）"
+        title_match = re.search(r"<title[^>]*>(.*?)</title>", html_text, re.I | re.S)
+        title = ""
+        if title_match:
+            title = re.sub(r"\s+", " ", title_match.group(1)).strip()
+        if "页面不见了" in title:
+            return "小红书分享链接失效或内容已删除"
+        if re.search(r"xiaohongshu\.com/404(?:/|\?|$)", final, re.I):
+            return "小红书分享链接失效或内容已删除"
+        if not isinstance(json_obj, dict):
+            return None
+        if json_obj.get("notFoundPage"):
+            return "小红书分享链接失效或内容已删除"
+        note = json_obj.get("note") if isinstance(json_obj.get("note"), dict) else {}
+        info = (
+            note.get("serverRequestInfo")
+            if isinstance(note.get("serverRequestInfo"), dict)
+            else {}
+        )
+        err = str(info.get("errMsg") or "").strip()
+        code = info.get("errorCode")
+        if code not in (0, "0", None, "") and err:
+            return err
+        note_data = json_obj.get("noteData")
+        if isinstance(note_data, dict) and note_data.get("hasError"):
+            return "小红书分享链接失效或内容已删除"
+        return None
 
     @staticmethod
     def _debug_note_locations(json_obj: dict) -> str:
         """调试用：定向汇总 note 可能所在的几个位置（仅键名/类型，不打印大段内容）。"""
         try:
-            note_obj = (
-                json_obj.get("note") if isinstance(json_obj.get("note"), dict) else {}
-            )
-            detail_map = (
+            json_obj = XiaoHongShuParser._unwrap_vue_ref(json_obj)
+            if not isinstance(json_obj, dict):
+                return f"top={type(json_obj).__name__}"
+            note_raw = XiaoHongShuParser._unwrap_vue_ref(json_obj.get("note"))
+            note_obj = note_raw if isinstance(note_raw, dict) else {}
+            detail_raw = XiaoHongShuParser._unwrap_vue_ref(
                 note_obj.get("noteDetailMap")
-                if isinstance(note_obj.get("noteDetailMap"), dict)
-                else {}
             )
+            detail_map = detail_raw if isinstance(detail_raw, dict) else {}
             sample: dict = {}
             if detail_map:
                 first = next(iter(detail_map.values()))
@@ -189,11 +400,8 @@ class XiaoHongShuParser(BaseParser):
                     if isinstance(inner, dict):
                         sample["note_keys"] = list(inner.keys())
                         sample["type"] = inner.get("type")
-            note_data_obj = (
-                json_obj.get("noteData")
-                if isinstance(json_obj.get("noteData"), dict)
-                else {}
-            )
+            note_data_raw = XiaoHongShuParser._unwrap_vue_ref(json_obj.get("noteData"))
+            note_data_obj = note_data_raw if isinstance(note_data_raw, dict) else {}
             return (
                 f"top={list(json_obj.keys())}, "
                 f"note_keys={list(note_obj.keys())}, "
@@ -204,32 +412,56 @@ class XiaoHongShuParser(BaseParser):
         except Exception as e:
             return f"<shape error: {e}>"
 
-    async def _fetch_html(
+    async def _request_html(
         self,
         url: str,
         *,
         headers: dict[str, str],
         timeout: int = 10,
     ) -> tuple[str, str]:
-        cached = self._cache_get_page(url)
-        if cached:
-            return cached
-
         resp = await self.http_get(
             url,
             headers=headers,
             allow_redirects=True,
             timeout=timeout,
         )
-
         html = resp.text or ""
         final_url = str(resp.url)
-
         if resp.status_code >= 400:
             raise ParseException(f"小红书页面请求失败: HTTP {resp.status_code}")
-
         if not html:
             raise ParseException("小红书页面为空")
+        return final_url, html
+
+    async def _fetch_html(
+        self,
+        url: str,
+        *,
+        headers: dict[str, str],
+        timeout: int = 10,
+        xhs_id: str = "",
+    ) -> tuple[str, str]:
+        url = self._ensure_note_url(url, xhs_id)
+        cached = self._cache_get_page(url)
+        if cached:
+            return cached
+
+        final_url, html = await self._request_html(
+            url, headers=headers, timeout=timeout
+        )
+        retry_url = self._ensure_note_url(
+            self._unwrap_sec_redirect(final_url),
+            xhs_id,
+        )
+        if retry_url != url:
+            try:
+                retry_final, retry_html = await self._request_html(
+                    retry_url, headers=headers, timeout=timeout
+                )
+            except ParseException:
+                retry_final, retry_html = "", ""
+            if retry_html and not self._blocked_page_reason(retry_final, retry_html):
+                final_url, html = retry_final, retry_html
 
         self._cache_set_page(url, final_url, html)
         return final_url, html
@@ -245,8 +477,7 @@ class XiaoHongShuParser(BaseParser):
         final_url = self._cache_get_redirect(url)
         if not final_url:
             final_url = await self.get_final_url(url, headers=self.ios_headers)
-            # 解包 /404/sec 安全中转页，取出 originalUrl 真实笔记地址（保留 xsec_token）
-            final_url = self._unwrap_sec_redirect(final_url)
+            final_url = self._ensure_note_url(final_url)
             self._cache_set_redirect(url, final_url)
 
         if self._is_live_url(final_url):
@@ -264,9 +495,19 @@ class XiaoHongShuParser(BaseParser):
     )
     async def _parse_explore(self, searched: re.Match[str]):
         route = searched.group(0)
-        url = f"https://www.xiaohongshu.com/{route}"
         xhs_id = searched.group("xhs_id")
-        return await self.parse_explore(url, xhs_id)
+        url = self._ensure_note_url(
+            f"https://www.xiaohongshu.com/{route}",
+            xhs_id,
+        )
+        try:
+            return await self.parse_explore(url, xhs_id)
+        except ParseException as e:
+            if self._is_terminal_xhs_error(e):
+                raise
+            logger.debug(f"parse_explore failed, fallback to discovery: {e}")
+            discovery_url = url.replace("/explore/", "/discovery/item/", 1)
+            return await self.parse_discovery(discovery_url, xhs_id)
 
     @handle(
         "hongshu.com/discovery/item/",
@@ -278,89 +519,108 @@ class XiaoHongShuParser(BaseParser):
 
         # discovery 优先转 explore，通常更稳更快
         explore_route = route.replace("discovery/item", "explore", 1)
-        explore_url = f"https://www.xiaohongshu.com/{explore_route}"
+        explore_url = self._ensure_note_url(
+            f"https://www.xiaohongshu.com/{explore_route}",
+            xhs_id,
+        )
 
         try:
             return await self.parse_explore(explore_url, xhs_id)
         except ParseException as e:
+            if self._is_terminal_xhs_error(e):
+                raise
             logger.debug(f"parse_explore failed, fallback to discovery: {e}")
             return await self.parse_discovery(
-                f"https://www.xiaohongshu.com/{route}",
+                self._ensure_note_url(
+                    f"https://www.xiaohongshu.com/{route}",
+                    xhs_id,
+                ),
                 xhs_id,
             )
+
+    @staticmethod
+    def _is_terminal_xhs_error(exc: ParseException) -> bool:
+        msg = str(exc)
+        return any(
+            key in msg
+            for key in (
+                "暂时无法浏览",
+                "分享链接失效",
+                "内容已删除",
+            )
+        )
+
+    def _process_note(self, note_data: dict, final_url: str | None = None):
+        if self._is_discovery_note(note_data):
+            return self._process_discovery_data(note_data, {}, final_url)
+        return self._process_explore_data(note_data, final_url)
+
+    def _raise_missing_note(
+        self,
+        *,
+        kind: str,
+        xhs_id: str | None,
+        final_url: str,
+        html: str,
+        json_obj: dict,
+    ) -> NoReturn:
+        blocked = self._blocked_page_reason(final_url, html, json_obj)
+        if blocked:
+            raise ParseException(blocked)
+        logger.warning(
+            f"[XHS] {kind} 未找到 note (xhs_id={xhs_id}): "
+            f"{self._debug_note_locations(json_obj)}"
+        )
+        raise ParseException("小红书笔记详情为空，请换一条带完整分享链接的笔记再试")
 
     async def parse_explore(self, url: str, xhs_id: str):
         final_url, html = await self._fetch_html(
             url,
             headers=self.headers,
             timeout=10,
+            xhs_id=xhs_id,
         )
         logger.debug(f"[XHS] explore url: {final_url}")
 
         json_obj = self._extract_initial_state_json(html)
-
-        note_data = (
-            json_obj.get("note", {})
-            .get("noteDetailMap", {})
-            .get(xhs_id, {})
-            .get("note", {})
-        )
-
+        note_data = self._extract_note_from_state(json_obj, xhs_id)
         if not note_data:
-            # 有时候 key 不是 xhs_id，直接取第一个 note
-            detail_map = json_obj.get("note", {}).get("noteDetailMap", {})
-            if isinstance(detail_map, dict) and detail_map:
-                first_key = next(iter(detail_map))
-                note_data = detail_map.get(first_key, {}).get("note", {})
-
-        if not note_data:
-            logger.warning(
-                f"[XHS] explore 未找到 note (xhs_id={xhs_id}): {self._debug_note_locations(json_obj)}"
+            self._raise_missing_note(
+                kind="explore",
+                xhs_id=xhs_id,
+                final_url=final_url,
+                html=html,
+                json_obj=json_obj,
             )
-            raise ParseException("can't find note detail in json_obj")
-
-        return self._process_explore_data(note_data, final_url)
+        return self._process_note(note_data, final_url)
 
     async def parse_discovery(self, url: str, xhs_id: str | None = None):
         final_url, html = await self._fetch_html(
             url,
             headers=self.ios_headers,
             timeout=10,
+            xhs_id=xhs_id or "",
         )
         logger.debug(f"[XHS] discovery url: {final_url}")
 
         json_obj = self._extract_initial_state_json(html)
-
-        note_data = json_obj.get("noteData", {}).get("data", {}).get("noteData", {})
+        note_data = self._extract_note_from_state(json_obj, xhs_id)
         if note_data:
-            preload_data = json_obj.get("noteData", {}).get("normalNotePreloadData", {})
-            return self._process_discovery_data(note_data, preload_data, final_url)
-
-        note_container = json_obj.get("note", {})
-        detail_map = note_container.get("noteDetailMap", {})
-
-        if xhs_id:
-            note_data = detail_map.get(xhs_id, {}).get("note", {})
-            if note_data:
-                return self._process_explore_data(note_data, final_url)
-
-        if detail_map:
-            first_key = next(iter(detail_map))
-            note_data = detail_map[first_key].get("note", {})
-            if note_data:
-                return self._process_explore_data(note_data, final_url)
-
-        note_data = note_container.get("firstNote", {}) or note_container.get(
-            "note", {}
-        )
-        if note_data:
+            if self._is_discovery_note(note_data):
+                preload_data = json_obj.get("noteData", {}).get(
+                    "normalNotePreloadData", {}
+                )
+                if not isinstance(preload_data, dict):
+                    preload_data = {}
+                return self._process_discovery_data(note_data, preload_data, final_url)
             return self._process_explore_data(note_data, final_url)
 
-        logger.warning(
-            f"[XHS] discovery 未找到 note (xhs_id={xhs_id}): {self._debug_note_locations(json_obj)}"
-        )
-        raise ParseException(
-            "解析异常: can't find noteData in noteData.data or noteDetailMap"
+        self._raise_missing_note(
+            kind="discovery",
+            xhs_id=xhs_id,
+            final_url=final_url,
+            html=html,
+            json_obj=json_obj,
         )
 
     def _process_explore_data(
@@ -534,7 +794,14 @@ class XiaoHongShuParser(BaseParser):
             raise ParseException("小红书分享链接失效或内容已删除")
 
         json_str = matched.group(1).replace("undefined", "null")
-        return json.loads(json_str)
+        try:
+            payload = json.loads(json_str)
+        except json.JSONDecodeError as exc:
+            raise ParseException("小红书分享链接失效或内容已删除") from exc
+        payload = self._unwrap_vue_ref(payload)
+        if not isinstance(payload, dict):
+            raise ParseException("小红书分享链接失效或内容已删除")
+        return payload
 
 
 class Stream(Struct):

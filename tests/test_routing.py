@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -37,6 +38,7 @@ from core.parsers import (
     DouyinParser,
     KuaiShouParser,
     MiyousheParser,
+    ParseException,
     WeiboParser,
     XiaoheiheParser,
     XiaoHongShuParser,
@@ -238,6 +240,113 @@ def test_json_share_url_is_extracted_from_onebot_payload():
         "meta": {"detail_1": {"qqdocurl": "https://b23.tv/abc123"}},
     }
     assert extract_json_url(payload) == "https://b23.tv/abc123"
+
+
+def test_json_share_url_prefers_xiaohongshu_note_with_token():
+    note_url = (
+        "https://www.xiaohongshu.com/discovery/item/6a9c17ee0000000027015702"
+        "?xsec_token=CB-NMCzTaQTrjO5Q19vzyB-261G5vO7Bd6UaAUcHyracQ%3D"
+        "&xsec_source=app_share"
+    )
+    payload = {
+        "app": "com.tencent.miniapp_01",
+        "meta": {
+            "detail_1": {
+                "desc": "小红书",
+                "qqdocurl": note_url,
+                "url": "https://xhslink.com/a/shortid",
+                "preview": "https://sns-img-qc.xhscdn.com/cover.jpg",
+            }
+        },
+    }
+    assert extract_json_url(payload) == note_url
+    xml = (
+        '<msg><item url="https://xhslink.com/a/shortid"/>'
+        f'<item qqdocurl="{note_url}"/></msg>'
+    )
+    assert extract_json_url(xml) == note_url
+
+
+def test_json_share_url_keeps_plus_in_xsec_token():
+    payload = {
+        "meta": {
+            "detail_1": {
+                "qqdocurl": (
+                    "https://www.xiaohongshu.com/explore/note123"
+                    "?xsec_token=token+value=&xsec_source=pc_share"
+                )
+            }
+        }
+    }
+    assert extract_json_url(payload).endswith(
+        "xsec_token=token+value=&xsec_source=pc_share"
+    )
+
+
+def test_share_card_text_is_used_even_when_message_title_exists():
+    from astrbot_plugin_parser_x.main import ParserXPlugin
+
+    note_url = (
+        "https://www.xiaohongshu.com/discovery/item/6a9c17ee0000000027015702"
+        "?xsec_token=token%2Bvalue%3D&xsec_source=app_share"
+    )
+
+    class Xml:
+        def __init__(self, data):
+            self.data = data
+
+    plugin = object.__new__(ParserXPlugin)
+    event = SimpleNamespace(
+        message_str="小红书",
+        get_messages=lambda: [
+            Xml(
+                {
+                    "app": "com.tencent.miniapp_01",
+                    "meta": {
+                        "detail_1": {
+                            "desc": "小红书",
+                            "qqdocurl": note_url,
+                            "url": "https://xhslink.com/a/shortid",
+                        }
+                    },
+                }
+            )
+        ],
+    )
+    text = plugin._text_from_event(event)
+    assert note_url in text
+    assert "小红书" in text
+
+
+def test_xiaohongshu_matches_prefer_token_note_over_short_link():
+    from astrbot_plugin_parser_x.main import ParserXPlugin
+
+    note = (
+        "https://www.xiaohongshu.com/discovery/item/6a9c17ee0000000027015702"
+        "?xsec_token=token%2Bvalue%3D"
+    )
+    short = "https://xhslink.com/a/shortid"
+    text = f"小红书 {short} {note}"
+    plugin = object.__new__(ParserXPlugin)
+    plugin.parser_map = {
+        "hongshu.com/discovery/item/": SimpleNamespace(
+            platform=SimpleNamespace(name="xiaohongshu")
+        ),
+        "xhslink.com": SimpleNamespace(platform=SimpleNamespace(name="xiaohongshu")),
+    }
+    plugin.key_pattern_list = [
+        (
+            "hongshu.com/discovery/item/",
+            re.compile(
+                r"discovery/item/(?P<xhs_id>[0-9a-zA-Z]+)(?:\?[A-Za-z0-9._%&+=/#@-]*)?"
+            ),
+        ),
+        ("xhslink.com", re.compile(r"xhslink\.com/[A-Za-z0-9._?%&+=/#@-]*")),
+    ]
+    matches = plugin._collect_parser_matches(text)
+    assert len(matches) == 1
+    assert matches[0][1] == "hongshu.com/discovery/item/"
+    assert "xsec_token=" in matches[0][2].group(0)
 
 
 def test_ytdlp_parsers_are_registered_once():
@@ -576,6 +685,173 @@ def test_xiaohongshu_removes_internal_topic_markers_only_inside_hashtags():
         )
         == "#性能车# #机车跑山# 正文[话题]"
     )
+
+
+def _xhs_state_html(payload: dict) -> str:
+    return (
+        "<html><head><title>小红书</title></head><body>"
+        f"<script>window.__INITIAL_STATE__={json.dumps(payload)}</script>"
+        "</body></html>"
+    )
+
+
+def _xhs_note_payload() -> dict:
+    return {
+        "type": "normal",
+        "title": "小红书标题",
+        "desc": "小红书正文",
+        "time": 1_700_000_000,
+        "user": {
+            "nickname": "作者",
+            "avatar": "https://img.example.com/avatar.jpg",
+        },
+        "imageList": [{"urlDefault": "https://img.example.com/c.jpg"}],
+    }
+
+
+def test_xiaohongshu_unwraps_sec_redirect_and_keeps_plus_in_token():
+    wrapped = (
+        "https://www.xiaohongshu.com/404/sec_abc?"
+        "source=xhs_sec_server&originalUrl="
+        "https%3A%2F%2Fwww.xiaohongshu.com%2Fexplore%2Fnote123"
+        "%3Fxsec_token%3Dtoken%2Bvalue%3D%26xsec_source%3Dpc_share"
+    )
+    assert XiaoHongShuParser._unwrap_sec_redirect(wrapped) == (
+        "https://www.xiaohongshu.com/explore/note123"
+        "?xsec_token=token+value=&xsec_source=pc_share"
+    )
+    nested = (
+        "https://www.xiaohongshu.com/404?source=/404/sec_abc?"
+        "redirectPath=https%3A%2F%2Fwww.xiaohongshu.com%2Fexplore%2Fnote123"
+        "%3Fxsec_token%3Dtoken%2Bvalue"
+    )
+    assert XiaoHongShuParser._unwrap_sec_redirect(nested).endswith(
+        "xsec_token=token+value"
+    )
+
+
+def test_xiaohongshu_ensure_note_url_copies_token_from_share_text():
+    parser = XiaoHongShuParser({"cache_dir": "."}, object())
+    parser.source_text = (
+        "分享 https://www.xiaohongshu.com/explore/note123"
+        "?xsec_token=token+value=&xsec_source=pc_share"
+    )
+    assert parser._ensure_note_url(
+        "https://www.xiaohongshu.com/explore/note123",
+        "note123",
+    ) == (
+        "https://www.xiaohongshu.com/explore/note123"
+        "?xsec_token=token%2Bvalue%3D&xsec_source=pc_share"
+    )
+
+
+def test_xiaohongshu_extracts_note_from_vue_ref_and_empty_map_fallback():
+    parser = XiaoHongShuParser({"cache_dir": "."}, object())
+    note = _xhs_note_payload()
+    wrapped = {
+        "value": {
+            "note": {
+                "noteDetailMap": {
+                    "value": {
+                        "other": {"note": {"value": note}},
+                    }
+                }
+            }
+        }
+    }
+    assert parser._extract_note_from_state(wrapped, "note123") == note
+    discovery = {
+        "noteData": {
+            "data": {"noteData": {**note, "user": {"nickName": "作者"}}},
+            "noteDetailMap": {},
+        }
+    }
+    extracted = parser._extract_note_from_state(discovery, "note123")
+    assert extracted["user"]["nickName"] == "作者"
+
+
+def test_xiaohongshu_explore_follows_sec_redirect_and_reads_note(tmp_path):
+    class FakeDownloader:
+        def download_img(self, _url, **_kwargs):
+            async def done():
+                return tmp_path / "image.jpg"
+
+            return asyncio.create_task(done())
+
+    note = _xhs_note_payload()
+    blocked_url = (
+        "https://www.xiaohongshu.com/404/sec_abc?source=xhs_sec_server"
+        "&originalUrl=https%3A%2F%2Fwww.xiaohongshu.com%2Fexplore%2Fnote123"
+        "%3Fxsec_token%3Dtoken%2Bvalue"
+    )
+    note_url = (
+        "https://www.xiaohongshu.com/explore/note123"
+        "?xsec_token=token%2Bvalue&xsec_source=pc_share"
+    )
+    pages = {
+        "https://www.xiaohongshu.com/explore/note123": (
+            blocked_url,
+            _xhs_state_html({"note": {"noteDetailMap": {}}}),
+        ),
+        note_url: (
+            note_url,
+            _xhs_state_html({"note": {"noteDetailMap": {"note123": {"note": note}}}}),
+        ),
+    }
+
+    async def run():
+        parser = XiaoHongShuParser({"cache_dir": str(tmp_path)}, FakeDownloader())
+
+        async def fake_http_get(url, **_kwargs):
+            final, html = pages[url]
+            return SimpleNamespace(status_code=200, url=final, text=html)
+
+        parser.http_get = fake_http_get
+        result = await parser.parse_explore(
+            "https://www.xiaohongshu.com/explore/note123",
+            "note123",
+        )
+        await asyncio.gather(*(content.get_path() for content in result.contents))
+        await parser.close_session()
+        return result
+
+    result = asyncio.run(run())
+    assert result.title == "小红书标题"
+    assert result.text == "小红书正文"
+    assert result.contents
+
+
+def test_xiaohongshu_empty_note_map_reports_readable_block_reason():
+    html = (
+        "<html><head><title>小红书 - 你访问的页面不见了</title></head>"
+        "<body><script>window.__INITIAL_STATE__="
+        '{"note":{"noteDetailMap":{}}}</script></body></html>'
+    )
+
+    async def run():
+        parser = XiaoHongShuParser({"cache_dir": "."}, object())
+
+        async def fake_http_get(url, **_kwargs):
+            return SimpleNamespace(
+                status_code=200,
+                url=(
+                    "https://www.xiaohongshu.com/404?source=/404/sec_abc"
+                    "?redirectPath=https%3A%2F%2Fwww.xiaohongshu.com"
+                    "%2Fexplore%2F6a9c17ee0000000027015702"
+                    "&error_code=300031&error_msg=%E5%BD%93%E5%89%8D%E7%AC%94"
+                    "%E8%AE%B0%E6%9A%82%E6%97%B6%E6%97%A0%E6%B3%95%E6%B5%8F%E8%A7%88"
+                ),
+                text=html,
+            )
+
+        parser.http_get = fake_http_get
+        await parser.parse_explore(
+            "https://www.xiaohongshu.com/explore/6a9c17ee0000000027015702",
+            "6a9c17ee0000000027015702",
+        )
+
+    with pytest.raises(ParseException, match="暂时无法浏览"):
+        asyncio.run(run())
 
 
 def test_xiaohongshu_notes_never_attach_comment_tasks(tmp_path):

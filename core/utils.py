@@ -11,7 +11,7 @@ from collections.abc import Awaitable, Callable, MutableMapping
 from html import unescape
 from pathlib import Path
 from typing import Any, TypeVar
-from urllib.parse import parse_qsl, unquote, urlparse
+from urllib.parse import unquote, urlparse
 
 from astrbot.api import logger
 
@@ -352,7 +352,10 @@ def _iter_urls_from_text(text: str) -> list[str]:
 
         try:
             parsed = urlparse(url)
-            for _, value in parse_qsl(parsed.query, keep_blank_values=True):
+            for part in (parsed.query or "").split("&"):
+                if "=" not in part:
+                    continue
+                value = unquote(part.split("=", 1)[1])
                 if "http" not in value:
                     continue
                 for inner_url in _iter_urls_from_text(value):
@@ -417,7 +420,7 @@ def _json_url_priority(url: str) -> int | None:
 
 
 def _pick_supported_json_url(urls: list[str]) -> str | None:
-    best: tuple[int, int, str] | None = None
+    best: tuple[int, int, int, str] | None = None
     seen: set[str] = set()
 
     for index, url in enumerate(urls):
@@ -430,19 +433,40 @@ def _pick_supported_json_url(urls: list[str]) -> str | None:
         if priority is None:
             continue
 
-        item = (priority, index, url)
+        has_token = "xsec_token=" in url.lower()
+        item = (priority, 0 if has_token else 1, index, url)
         if best is None or item < best:
             best = item
 
-    return best[2] if best else None
+    return best[3] if best else None
 
 
-def extract_json_url(data: dict | str) -> str | None:
+def pick_supported_share_url(urls: list[str]) -> str | None:
+    return _pick_supported_json_url(urls)
+
+
+def extract_json_url(data: dict | str | None) -> str | None:
+    if data is None:
+        return None
+
     if isinstance(data, str):
-        try:
-            data = json.loads(data)
-        except Exception:
+        stripped = data.strip()
+        if not stripped:
             return None
+        if stripped[0] in "{[":
+            try:
+                data = json.loads(stripped)
+            except Exception:
+                return _pick_supported_json_url(_iter_urls_from_text(stripped))
+        else:
+            text = unescape(stripped).replace("&amp;", "&")
+            found = _pick_supported_json_url(_iter_urls_from_text(text))
+            if found:
+                return found
+            try:
+                data = json.loads(stripped)
+            except Exception:
+                return None
 
     if not isinstance(data, dict):
         return None
@@ -479,7 +503,7 @@ def _recursive_find_xhs_url(obj: Any) -> str | None:
     if isinstance(obj, str):
         if "xhslink.com" in obj or "xhslink.cn" in obj or "xiaohongshu.com" in obj:
             if m := re.search(
-                r"https?://[a-zA-Z0-9./?=&_%#@:-]*(?:xhslink\.com|xhslink\.cn|xiaohongshu\.com)[a-zA-Z0-9./?=&_%#@:-]*",
+                r"https?://[a-zA-Z0-9./?=&_%+#@:-]*(?:xhslink\.com|xhslink\.cn|xiaohongshu\.com)[a-zA-Z0-9./?=&_%+#@:-]*",
                 obj,
             ):
                 return m.group(0)

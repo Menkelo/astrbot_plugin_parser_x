@@ -66,7 +66,7 @@ from .core.exception import (
 from .core.html_renderer import HtmlRenderService
 from .core.parsers import BaseParser
 from .core.text_renderer import TextCardRenderer
-from .core.utils import exec_ffmpeg_cmd, extract_json_url
+from .core.utils import exec_ffmpeg_cmd, extract_json_url, pick_supported_share_url
 
 PLUGIN_NAME = "astrbot_plugin_parser_x"
 
@@ -2628,7 +2628,102 @@ class ParserXPlugin(Star):
             accepted_spans.append(span)
             accepted.append((parser, keyword, searched))
 
-        return accepted
+        return self._prefer_xiaohongshu_note_matches(accepted)
+
+    @staticmethod
+    def _xiaohongshu_note_id(raw_match: str) -> str:
+        matched = re.search(
+            r"(?:explore|discovery/item)/([0-9a-zA-Z]+)",
+            raw_match,
+            re.I,
+        )
+        return matched.group(1).lower() if matched else ""
+
+    @classmethod
+    def _prefer_xiaohongshu_note_matches(
+        cls,
+        accepted: list[tuple[BaseParser, str, re.Match[str]]],
+    ) -> list[tuple[BaseParser, str, re.Match[str]]]:
+        has_token_note = any(
+            parser.platform.name == "xiaohongshu"
+            and "xsec_token=" in searched.group(0).lower()
+            and "xiaohongshu.com" in searched.group(0).lower()
+            for parser, _keyword, searched in accepted
+        )
+        if has_token_note:
+            accepted = [
+                item
+                for item in accepted
+                if item[1] not in {"xhslink.com", "xhslink.cn"}
+            ]
+
+        preferred: dict[str, tuple[int, tuple[BaseParser, str, re.Match[str]]]] = {}
+        for item in accepted:
+            parser, _keyword, searched = item
+            if parser.platform.name != "xiaohongshu":
+                continue
+            note_id = cls._xiaohongshu_note_id(searched.group(0))
+            if not note_id:
+                continue
+            score = 1 if "xsec_token=" in searched.group(0).lower() else 0
+            existing = preferred.get(note_id)
+            if existing is None or score > existing[0]:
+                preferred[note_id] = (score, item)
+
+        if not preferred:
+            return accepted
+
+        merged: list[tuple[BaseParser, str, re.Match[str]]] = []
+        used_ids: set[str] = set()
+        for item in accepted:
+            parser, _keyword, searched = item
+            if parser.platform.name != "xiaohongshu":
+                merged.append(item)
+                continue
+            note_id = cls._xiaohongshu_note_id(searched.group(0))
+            if not note_id:
+                merged.append(item)
+                continue
+            if note_id in used_ids:
+                continue
+            used_ids.add(note_id)
+            merged.append(preferred[note_id][1])
+        return merged
+
+    @staticmethod
+    def _is_share_card_segment(segment: object) -> bool:
+        if isinstance(segment, Json):
+            return True
+        return type(segment).__name__ in {"Json", "Xml"}
+
+    def _text_from_event(self, event: AstrMessageEvent) -> str:
+        text = (event.message_str or "").strip()
+        chain = event.get_messages()
+        if not chain:
+            return text
+
+        card_urls: list[str] = []
+        for segment in chain:
+            if not self._is_share_card_segment(segment):
+                continue
+            try:
+                url = extract_json_url(getattr(segment, "data", None)) or ""
+            except Exception:
+                url = ""
+            if url:
+                card_urls.append(url)
+
+        if not card_urls:
+            return text
+
+        best = pick_supported_share_url(card_urls)
+        if not best:
+            return text
+        if not text:
+            return best
+        if best in text:
+            return text
+        return f"{text}\n{best}"
 
     @filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP)
     @filter.event_message_type(filter.EventMessageType.ALL)
@@ -2638,23 +2733,10 @@ class ParserXPlugin(Star):
         if not isinstance(event, AiocqhttpMessageEvent):
             return
         umo = event.unified_msg_origin
-        text = (event.message_str or "").strip()
+        text = self._text_from_event(event)
 
         if umo in self._disabled_sessions():
             return
-
-        if not text:
-            chain = event.get_messages()
-            if chain:
-                for segment in chain:
-                    if not isinstance(segment, Json):
-                        continue
-                    try:
-                        text = extract_json_url(segment.data) or ""
-                    except Exception:
-                        text = ""
-                    if text:
-                        break
 
         if not text:
             return
