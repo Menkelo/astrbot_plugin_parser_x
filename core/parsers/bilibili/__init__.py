@@ -8,6 +8,7 @@ from typing import ClassVar
 from astrbot.api import logger
 from astrbot.core.config.astrbot_config import AstrBotConfig
 from bilibili_api import Credential, request_settings, select_client
+from bilibili_api.exceptions import ResponseCodeException
 from bilibili_api.video import Video
 from msgspec import convert
 
@@ -18,6 +19,7 @@ from ...exception import SizeLimitException
 from ...html_renderer import HtmlRenderService
 from ...utils import ck2dict
 from ..base import BaseParser, Downloader, ParseException, handle
+from .api_errors import bili_api_parse_exc
 from .comment_canvas import BiliCommentCanvas
 from .comment_feed import BiliCommentFeed
 from .dynamic_service import BiliDynamicService
@@ -658,7 +660,7 @@ class BilibiliParser(BaseParser):
             raw_info = await self._get_video_info_cached(video, key)
         except Exception as e:
             logger.error(f"[Bilibili] get_info error: {e}")
-            raise ParseException(f"B站 API 请求失败: {e}")
+            raise bili_api_parse_exc(e, "稿件") from e
 
         video_info = convert(raw_info, VideoInfo)
         page_info = video_info.extract_info_with_page(page_num)
@@ -694,7 +696,11 @@ class BilibiliParser(BaseParser):
         )
 
         # 评论区在发送阶段抓取，此处只等待视频取流。
-        video_ladders, a_candidates, play_url_data = await stream_task
+        try:
+            video_ladders, a_candidates, play_url_data = await stream_task
+        except ResponseCodeException as e:
+            logger.warning(f"[Bilibili] playurl error: {e}")
+            raise bili_api_parse_exc(e, "稿件") from e
 
         if not video_ladders:
             logger.warning(

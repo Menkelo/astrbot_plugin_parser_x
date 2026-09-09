@@ -16,6 +16,7 @@ from ...platform_emotes import (
 )
 from ...utils import cached_image_to_data_uri, normalize_image_url
 from ..base import ParseException
+from .api_errors import bili_api_parse_exc
 
 
 class BiliDynamicService:
@@ -770,7 +771,7 @@ class BiliDynamicService:
                 if getattr(e, "code", None) in (-352, -412, -799):
                     await asyncio.sleep(0.8 * (i + 1))
                     continue
-                raise ParseException(f"B站动态解析失败: {e}") from e
+                raise bili_api_parse_exc(e, "动态") from e
             except Exception as e:
                 last_err = e
                 await asyncio.sleep(0.6 * (i + 1))
