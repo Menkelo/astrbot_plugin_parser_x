@@ -8,7 +8,7 @@ bilibili_api 的 ResponseCodeException.__str__ 会附加整个原始响应 dict
 
 from bilibili_api.exceptions import ResponseCodeException
 
-from ..exception import ParseException
+from ...exception import ParseException
 
 _BILI_API_CODE_HINTS: dict[int, str] = {
     -404: "该{subject}不存在或已被删除",
