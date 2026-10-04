@@ -1,4 +1,4 @@
-from asyncio import Task
+from asyncio import Task, shield
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -15,11 +15,14 @@ def repr_path_task(path_task: Path | Task[Path]) -> str:
 @dataclass(repr=False, slots=True)
 class MediaContent:
     path_task: Path | Task[Path]
+    _cache_shared: bool = field(default=False, init=False, repr=False)
 
     async def get_path(self) -> Path:
         if isinstance(self.path_task, Path):
             return self.path_task
-        self.path_task = await self.path_task
+        self.path_task = await (
+            shield(self.path_task) if self._cache_shared else self.path_task
+        )
         return self.path_task
 
     def __repr__(self) -> str:
@@ -56,7 +59,7 @@ class VideoContent(MediaContent):
             return None
         if isinstance(self.cover, Path):
             return self.cover
-        self.cover = await self.cover
+        self.cover = await (shield(self.cover) if self._cache_shared else self.cover)
         return self.cover
 
     @property
@@ -84,6 +87,7 @@ class DynamicContent(MediaContent):
     """动态内容"""
 
     gif_path: Path | None = None
+    fallback_image: ImageContent | None = None
 
 
 @dataclass(repr=False, slots=True)
@@ -113,13 +117,14 @@ class Author:
     name: str
     avatar: Path | Task[Path] | None = None
     description: str | None = None
+    _cache_shared: bool = field(default=False, init=False, repr=False)
 
     async def get_avatar_path(self) -> Path | None:
         if self.avatar is None:
             return None
         if isinstance(self.avatar, Path):
             return self.avatar
-        self.avatar = await self.avatar
+        self.avatar = await (shield(self.avatar) if self._cache_shared else self.avatar)
         return self.avatar
 
     def __repr__(self) -> str:

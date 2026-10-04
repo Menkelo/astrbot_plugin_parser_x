@@ -24,13 +24,13 @@ class Cover(Struct):
 
 
 class Video(Struct):
-    play_addr: PlayAddr
-    cover: Cover
+    play_addr: PlayAddr = field(default_factory=PlayAddr)
+    cover: Cover = field(default_factory=Cover)
     duration: int = 0
 
 
 class Image(Struct):
-    video: Video | None = None
+    video: dict[str, Any] | None = None
     url_list: list[str] = field(default_factory=list)
 
 

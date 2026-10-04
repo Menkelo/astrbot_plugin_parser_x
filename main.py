@@ -65,6 +65,7 @@ from .core.exception import (
 )
 from .core.html_renderer import HtmlRenderService
 from .core.parsers import BaseParser
+from .core.result_cache import ParseResultCache
 from .core.text_renderer import TextCardRenderer
 from .core.utils import exec_ffmpeg_cmd, extract_json_url, pick_supported_share_url
 
@@ -118,21 +119,27 @@ class ParserXPlugin(Star):
         # upgraded installations do not keep displaying retired platforms.
         platforms = config.get("platforms", {})
         if isinstance(platforms, dict):
-            for retired_platform in ("tieba", "xigua", "pipixia", "weishi"):
+            for retired_platform in (
+                "tieba",
+                "xigua",
+                "pipixia",
+                "weishi",
+                "xiaoheihe",
+                "miyoushe",
+            ):
                 platforms.pop(retired_platform, None)
             config["platforms"] = platforms
 
-        # The Xiaohongshu comment feed was retired because the signed,
-        # Cookie-authenticated comment endpoint risks account bans. Drop its
-        # leftover switches and login state so upgraded installs stop sending
-        # the cookie anywhere.
+        # Drop comment switches and login state for retired integrations.
         comment_config = config.get("comments", {})
         if isinstance(comment_config, dict):
-            comment_config.pop("xiaohongshu", None)
+            for retired_platform in ("xiaohongshu", "xiaoheihe", "miyoushe"):
+                comment_config.pop(retired_platform, None)
             config["comments"] = comment_config
         cookies = config.get("cookies", {})
         if isinstance(cookies, dict):
-            cookies.pop("xiaohongshu_cookie", None)
+            for retired_cookie in ("xiaohongshu_cookie", "xiaoheihe_cookie"):
+                cookies.pop(retired_cookie, None)
             config["cookies"] = cookies
         integrations = config.get("integrations", {})
         if isinstance(integrations, dict):
@@ -144,6 +151,7 @@ class ParserXPlugin(Star):
         self.config.save_config()
 
         self.parser_map: dict[str, BaseParser] = {}
+        self.result_cache = ParseResultCache()
         self.key_pattern_list: list[tuple[str, re.Pattern[str]]] = []
         self.downloader = Downloader(config)
         self.arbiter = EmojiLikeArbiter()
@@ -161,6 +169,8 @@ class ParserXPlugin(Star):
 
     async def terminate(self):
         await self.debug_sessions.close()
+        if cache := getattr(self, "result_cache", None):
+            await cache.close()
         await self.downloader.close()
         unique_parsers = set(self.parser_map.values())
         for parser in unique_parsers:
@@ -283,6 +293,12 @@ class ParserXPlugin(Star):
     async def _download_content(
         self, cont: MediaContent
     ) -> tuple[MediaContent, Path | None, str | None]:
+        if isinstance(cont, DynamicContent) and cont.fallback_image is not None:
+            try:
+                return cont, await cont.get_path(), None
+            except Exception:
+                logger.debug("实况片段不可用，使用对应静态图")
+                return await self._download_content(cont.fallback_image)
         try:
             path = await cont.get_path()
             return cont, path, None
@@ -1448,7 +1464,7 @@ class ParserXPlugin(Star):
 
         async def resolve_media(
             content: MediaContent,
-        ) -> tuple[Path | None, str | None]:
+        ) -> tuple[MediaContent, Path | None, str | None]:
             task = download_tasks.get(id(content))
             if task is None:
                 task = asyncio.create_task(
@@ -1456,8 +1472,7 @@ class ParserXPlugin(Star):
                     name=f"parser_x_native_{type(content).__name__}",
                 )
                 download_tasks[id(content)] = task
-            _, path, error = await task
-            return path, error
+            return await task
 
         async def send_individually(
             segments: list[BaseMessageComponent],
@@ -1466,7 +1481,10 @@ class ParserXPlugin(Star):
         ) -> None:
             for index, segment in enumerate(segments):
                 if isinstance(segment, Video):
-                    await self._send_video_segment(event, result, segment)
+                    try:
+                        await self._send_video_segment(event, result, segment)
+                    except Exception as exc:
+                        logger.warning(f"视频发送失败，继续后续媒体: {exc}")
                     continue
                 chain: list[BaseMessageComponent] = []
                 if (
@@ -1512,12 +1530,12 @@ class ParserXPlugin(Star):
                         segments.append(Plain(text.replace("@", "@\u200b")))
                     continue
 
-                path, error = path_map.get(id(part), (None, None))
+                resolved, path, error = path_map.get(id(part), (part, None, None))
                 if error:
                     if show_download_fail_tip:
                         segments.append(Plain(error.strip()))
                     continue
-                if path and (segment := self._convert_to_seg(part, path)):
+                if path and (segment := self._convert_to_seg(resolved, path)):
                     segments.append(segment)
 
             if not segments:
@@ -1540,7 +1558,10 @@ class ParserXPlugin(Star):
                 return
 
             if len(segments) == 1 and isinstance(segments[0], Video):
-                await self._send_video_segment(event, result, segments[0])
+                try:
+                    await self._send_video_segment(event, result, segments[0])
+                except Exception as exc:
+                    logger.warning(f"视频发送失败，继续后续媒体: {exc}")
                 return
 
             chain: list[BaseMessageComponent] = []
@@ -1600,7 +1621,7 @@ class ParserXPlugin(Star):
         ]
 
         async def send_media_content(content: MediaContent) -> None:
-            _, path, error = await self._download_content(content)
+            content, path, error = await self._download_content(content)
             if error:
                 if show_download_fail_tip:
                     try:
@@ -1848,10 +1869,7 @@ class ParserXPlugin(Star):
                             error=exc,
                         )
 
-        native_delivery = bool(result.extra.get("native_delivery")) or (
-            result.platform.name in {"xiaoheihe", "miyoushe"}
-            and result.delivery is not None
-        )
+        native_delivery = bool(result.extra.get("native_delivery"))
         if native_delivery and result.delivery is not None:
             one_image_flow = bool(
                 result.extra.get("render_text_card")
@@ -2188,8 +2206,6 @@ class ParserXPlugin(Star):
                         "bilibili",
                         "douyin",
                         "weibo",
-                        "xiaoheihe",
-                        "miyoushe",
                     }
                 },
             }
@@ -2409,10 +2425,9 @@ class ParserXPlugin(Star):
                     "url": searched.group(0).strip(),
                 }
             )
-            parser.source_text = text
             parse_started_at = asyncio.get_running_loop().time()
             try:
-                result = await parser.parse(keyword, searched)
+                result = await self._parse_with_cache(parser, keyword, searched, text)
             except SkipParseException:
                 await emit(
                     debug_issue_event(
@@ -2647,7 +2662,7 @@ class ParserXPlugin(Star):
         has_token_note = any(
             parser.platform.name == "xiaohongshu"
             and "xsec_token=" in searched.group(0).lower()
-            and "xiaohongshu.com" in searched.group(0).lower()
+            and cls._xiaohongshu_note_id(searched.group(0))
             for parser, _keyword, searched in accepted
         )
         if has_token_note:
@@ -2725,6 +2740,16 @@ class ParserXPlugin(Star):
             return text
         return f"{text}\n{best}"
 
+    async def _parse_with_cache(
+        self, parser: BaseParser, keyword: str, searched: re.Match[str], text: str
+    ) -> ParseResult:
+        cache = getattr(self, "result_cache", None)
+        if cache is None:
+            cache = self.result_cache = ParseResultCache()
+        return await cache.parse(
+            parser, keyword, searched, text, getattr(self, "config", {})
+        )
+
     @filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP)
     @filter.event_message_type(filter.EventMessageType.ALL)
     async def on_message(self, event: AstrMessageEvent):
@@ -2763,8 +2788,9 @@ class ParserXPlugin(Star):
 
         for parser, keyword, searched in collected_matches:
             try:
-                parser.source_text = text
-                parse_res = await parser.parse(keyword, searched)
+                parse_res = await self._parse_with_cache(
+                    parser, keyword, searched, text
+                )
                 await self._send_parse_result(event, parse_res)
             except SkipParseException:
                 continue

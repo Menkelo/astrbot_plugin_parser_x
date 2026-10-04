@@ -4,9 +4,7 @@ from .base import BaseParser, handle
 from .bilibili import BilibiliParser
 from .douyin import DouyinParser
 from .kuaishou import KuaiShouParser
-from .miyoushe import MiyousheParser
 from .weibo import WeiboParser
-from .xiaoheihe import XiaoheiheParser
 from .xiaohongshu import XiaoHongShuParser
 from .ytdlp import AcFunParser, NeteaseMusicParser
 
@@ -21,8 +19,6 @@ __all__ = [
     "KuaiShouParser",
     "WeiboParser",
     "XiaoHongShuParser",
-    "MiyousheParser",
-    "XiaoheiheParser",
     "AcFunParser",
     "NeteaseMusicParser",
 ]
