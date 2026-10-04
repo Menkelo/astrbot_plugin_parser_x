@@ -65,6 +65,7 @@ from .core.exception import (
 )
 from .core.html_renderer import HtmlRenderService
 from .core.parsers import BaseParser
+from .core.result_cache import ParseResultCache
 from .core.text_renderer import TextCardRenderer
 from .core.utils import exec_ffmpeg_cmd, extract_json_url, pick_supported_share_url
 
@@ -150,6 +151,7 @@ class ParserXPlugin(Star):
         self.config.save_config()
 
         self.parser_map: dict[str, BaseParser] = {}
+        self.result_cache = ParseResultCache()
         self.key_pattern_list: list[tuple[str, re.Pattern[str]]] = []
         self.downloader = Downloader(config)
         self.arbiter = EmojiLikeArbiter()
@@ -167,6 +169,8 @@ class ParserXPlugin(Star):
 
     async def terminate(self):
         await self.debug_sessions.close()
+        if cache := getattr(self, "result_cache", None):
+            await cache.close()
         await self.downloader.close()
         unique_parsers = set(self.parser_map.values())
         for parser in unique_parsers:
@@ -2410,10 +2414,9 @@ class ParserXPlugin(Star):
                     "url": searched.group(0).strip(),
                 }
             )
-            parser.source_text = text
             parse_started_at = asyncio.get_running_loop().time()
             try:
-                result = await parser.parse(keyword, searched)
+                result = await self._parse_with_cache(parser, keyword, searched, text)
             except SkipParseException:
                 await emit(
                     debug_issue_event(
@@ -2726,6 +2729,16 @@ class ParserXPlugin(Star):
             return text
         return f"{text}\n{best}"
 
+    async def _parse_with_cache(
+        self, parser: BaseParser, keyword: str, searched: re.Match[str], text: str
+    ) -> ParseResult:
+        cache = getattr(self, "result_cache", None)
+        if cache is None:
+            cache = self.result_cache = ParseResultCache()
+        return await cache.parse(
+            parser, keyword, searched, text, getattr(self, "config", {})
+        )
+
     @filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP)
     @filter.event_message_type(filter.EventMessageType.ALL)
     async def on_message(self, event: AstrMessageEvent):
@@ -2764,8 +2777,9 @@ class ParserXPlugin(Star):
 
         for parser, keyword, searched in collected_matches:
             try:
-                parser.source_text = text
-                parse_res = await parser.parse(keyword, searched)
+                parse_res = await self._parse_with_cache(
+                    parser, keyword, searched, text
+                )
                 await self._send_parse_result(event, parse_res)
             except SkipParseException:
                 continue

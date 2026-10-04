@@ -285,7 +285,7 @@ class BiliLiveService:
         if live_status != 1:
             return self.parser.result(
                 text="B站直播间未开播",
-                extra={"plain_text_only": True},
+                extra={"plain_text_only": True, "cache_result": False},
             )
 
         uid = self._first_str(
@@ -375,5 +375,5 @@ class BiliLiveService:
             contents=image_contents,
             delivery=DeliveryPlan([DeliveryBatch([*image_contents, summary])]),
             url=f"https://live.bilibili.com/{real_room_id}",
-            extra={"native_delivery": True},
+            extra={"native_delivery": True, "cache_result": False},
         )

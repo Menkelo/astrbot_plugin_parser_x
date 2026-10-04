@@ -82,6 +82,9 @@ https://github.com/Menkelo/astrbot_plugin_parser_x
 - `performance.max_concurrent_downloads`：下载并发上限。
 - `performance.source_max_size`：单个媒体的最大体积（MB）。
 - `performance.video_codec`：B站编码偏好。
+- `result_cache.enabled`：成功解析结果缓存，默认开启。
+- `result_cache.ttl`：缓存有效期，默认 300 秒；命中不会延长有效期。
+- `result_cache.max_entries`：最多保留的解析结果数，默认 128，超过后淘汰最久未使用的结果。
 - `cookies.douyin_ck`、`cookies.bili_ck`：原生解析器 Cookie。
 - `cookies.weibo_cookie`：可选微博登录态；公开热门评论通常无需配置。
 - `cookies.ytdlp_cookie_file`：Netscape 格式 Cookie 文件，用于需要登录的平台。
@@ -110,6 +113,22 @@ B站、抖音和微博的普通 Unicode Emoji 会渲染为 Twemoji，CDN 不可�
 
 缓存只写入 AstrBot 官方约定的 `data/plugin_data/astrbot_plugin_parser_x/`，默认每天清理一次。
 
+### 重复分享缓存
+
+QQ 消息与调试台共用解析结果缓存。同一链接和相同分享文本重复出现时，可跳过平台解析，
+复用已完成的结果及媒体文件；多个同时到达的相同请求合并解析，但仍分别向每条消息回复。
+首次解析仍边准备边发送，不会为填充缓存额外等待全部媒体下载。
+
+结果缓存在内存中，插件重载或重启后清空。解析异常和主动跳过不缓存；下载失败、下载被取消、
+本地文件丢失或变为空文件时淘汰该结果，下次重新解析。配置、Cookie 或上传 Cookie 文件的
+修改时间/大小变化时刷新缓存。每次发送使用独立结果副本，取消一个接收者不会取消其他接收者
+共用的下载；插件卸载时会清理尚未结束的任务。
+
+缓存键保留完整查询参数、匹配分组和分享文本，避免混用 B站分 P、小红书 token、直播提示和
+抖音日常分享。不同附文或不同长短链接目前不自动归并，即使指向同一作品，也可能重新解析。
+B站开播与未开播状态不缓存。评论仍在每次发送时调用原有评论流程，使用评论模块自己的缓存，
+不将评论任务或已经构造好的 QQ 消息放入结果缓存。
+
 ## 上游兼容维护
 
 仓库记录了上游 commit 和功能映射。检查是否有上游更新：
@@ -125,7 +144,8 @@ python tools/check_upstream.py
 
 ## 开发与检查
 
-同类开源项目的源码调研与后续改进建议见 [docs/PARSER_RESEARCH.md](docs/PARSER_RESEARCH.md)。
+同类开源项目的源码调研见 [首轮调研](docs/PARSER_RESEARCH.md) 和
+[扩展调研：下载器、官网文档与 Codeberg](docs/PARSER_RESEARCH_EXTENDED.md)。
 
 ```bash
 python -m compileall -q .

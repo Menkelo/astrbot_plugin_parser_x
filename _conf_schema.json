@@ -136,6 +136,27 @@
       }
     }
   },
+  "result_cache": {
+    "description": "解析结果缓存",
+    "hint": "重复分享可复用成功解析的结果；失败、媒体文件失效、登录态或配置变化时重新解析。重启后清空。",
+    "type": "object",
+    "items": {
+      "enabled": {"description": "启用结果缓存", "type": "bool", "default": true},
+      "ttl": {
+        "description": "缓存有效期（秒）",
+        "hint": "从解析成功开始计时，重复访问不会延长有效期；B站直播不缓存。",
+        "type": "int",
+        "slider": {"min": 15, "max": 3600, "step": 15},
+        "default": 300
+      },
+      "max_entries": {
+        "description": "最多缓存作品数",
+        "type": "int",
+        "slider": {"min": 1, "max": 512, "step": 1},
+        "default": 128
+      }
+    }
+  },
   "cookies": {
     "description": "平台登录态",
     "hint": "Cookie 仅写入本插件配置。建议使用专用小号，并在失效后及时更新。",
