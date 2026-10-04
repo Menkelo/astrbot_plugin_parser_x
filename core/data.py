@@ -87,6 +87,7 @@ class DynamicContent(MediaContent):
     """动态内容"""
 
     gif_path: Path | None = None
+    fallback_image: ImageContent | None = None
 
 
 @dataclass(repr=False, slots=True)

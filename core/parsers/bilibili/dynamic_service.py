@@ -826,6 +826,31 @@ class BiliDynamicService:
         item = (raw_dynamic or {}).get("item") or {}
         modules = item.get("modules") or {}
 
+        # Video dynamics carry an archive identifier, not a playable URL.
+        # Reuse the normal video pipeline, including stream selection and limits.
+        candidate = item
+        seen = set()
+        for _ in range(8):
+            if not isinstance(candidate, dict) or id(candidate) in seen:
+                break
+            seen.add(id(candidate))
+            candidate_modules = candidate.get("modules") or {}
+            if isinstance(candidate_modules, dict):
+                dynamic = candidate_modules.get("module_dynamic") or {}
+                major = dynamic.get("major") or {} if isinstance(dynamic, dict) else {}
+                archive = major.get("archive") or {} if isinstance(major, dict) else {}
+                if isinstance(archive, dict):
+                    bvid, avid = archive.get("bvid"), archive.get("aid")
+                    if bvid or str(avid or "").isdigit():
+                        result = await self.parser.parse_video(
+                            **({"bvid": str(bvid)} if bvid else {"avid": int(avid)})
+                        )
+                        result.url = f"https://t.bilibili.com/{dynamic_id}"
+                        result.text = self.extract_dynamic_text(item, modules)
+                        result.extra["content_type"] = "视频动态"
+                        return result
+            candidate = candidate.get("orig")
+
         author_name, author_avatar, pub_ts = self.extract_author_info(modules)
 
         dynamic_title = self.extract_dynamic_title(item, modules)

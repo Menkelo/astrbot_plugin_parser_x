@@ -11,10 +11,12 @@ from astrbot.core.config.astrbot_config import AstrBotConfig
 
 from ...comment_canvas import SocialCommentCanvas
 from ...comment_settings import CommentSettings
+from ...data import DynamicContent
 from ...download import Downloader
 from ...html_renderer import HtmlRenderService
 from ...utils import cookies_str_to_netscape
 from ..base import BaseParser, ParseException, Platform, SkipParseException, handle
+from ..gallery import first_media_url, live_photo, motion_url, ordered_media_plan
 from .comment_feed import DouyinCommentFeed
 from .extractor import (
     extract_id_from_query,
@@ -607,29 +609,69 @@ class DouyinParser(BaseParser):
         aweme = pick_primary_aweme(targets, vid)
         return self._build_result_from_aweme(aweme, vid)
 
-    def _build_result_from_aweme(self, aweme: dict, vid: str):
+    def _gallery_contents(self, aweme: dict, headers: dict):
+        post = aweme.get("image_post_info")
+        post = post if isinstance(post, dict) else {}
+        items = (
+            post.get("images")
+            or post.get("image_list")
+            or aweme.get("images")
+            or aweme.get("image_list")
+            or aweme.get("image_infos")
+            or []
+        )
+        contents = []
+        seen = set()
+        for item in items if isinstance(items, list) else []:
+            if not isinstance(item, dict):
+                continue
+            still = next(
+                (
+                    url
+                    for key in (
+                        "url_list",
+                        "origin_image",
+                        "display_image",
+                        "download_url_list",
+                    )
+                    if (url := first_media_url(item.get(key)))
+                ),
+                None,
+            )
+            motion = motion_url(item.get("video")) or motion_url(item)
+            if not still and isinstance(item.get("video"), dict):
+                still = first_media_url(item["video"].get("cover"))
+            key = ("live" if motion else "image", motion or still)
+            if not key[1] or key in seen:
+                continue
+            seen.add(key)
+            if motion:
+                contents.append(live_photo(self, motion, still, headers=headers))
+            elif still:
+                contents.extend(
+                    self._create_image_contents_with_headers([still], headers)
+                )
+        return contents
+
+    def _build_result_from_aweme(self, aweme: dict, vid: str, *, media_headers=None):
         """从单个 aweme dict 构建 ParseResult，SSR 与 detail API 共用。"""
         from .video import VideoData
 
         meta = msgspec.convert(aweme, VideoData)
 
+        headers = media_headers or self.ios_headers
         contents = []
+        gallery = self._gallery_contents(aweme, headers)
         image_urls = meta.image_urls or extract_static_image_urls_deep(aweme)
 
-        # 图文作品优先发送静态图片，避免把无声或不可直连的图文视频误当普通视频下载。
-        if self._has_image_album(aweme) and image_urls:
-            contents.extend(
-                self._create_image_contents_with_headers(
-                    image_urls,
-                    self.ios_headers,
-                )
-            )
+        if gallery:
+            contents.extend(gallery)
 
         elif meta.video_url and self._is_video_like_url(meta.video_url):
             task = self.downloader.download_video(
                 meta.video_url,
                 video_name=f"douyin_{meta.id or vid}.mp4",
-                ext_headers=self.ios_headers,
+                ext_headers=headers,
             )
             contents.append(
                 self.create_video_content(
@@ -643,14 +685,14 @@ class DouyinParser(BaseParser):
             contents.extend(
                 self._create_image_contents_with_headers(
                     image_urls,
-                    self.ios_headers,
+                    headers,
                 )
             )
 
         author = self.create_author(
             meta.author.nickname,
             meta.avatar_url,
-            ext_headers=self.ios_headers,
+            ext_headers=headers,
         )
         comment_cover = meta.cover_url or (image_urls[0] if image_urls else None)
         extra = self._comment_extra(
@@ -659,107 +701,40 @@ class DouyinParser(BaseParser):
             cover=comment_cover,
             owner=aweme.get("author") if isinstance(aweme, dict) else None,
         )
+        delivery = None
+        if any(isinstance(item, DynamicContent) for item in contents):
+            delivery = ordered_media_plan(contents)
+            extra["native_delivery"] = True
         return self.result(
             title=meta.desc,
             author=author,
             contents=contents,
+            delivery=delivery,
             timestamp=meta.create_time,
             url=f"https://www.douyin.com/video/{meta.id or vid}",
             extra=extra,
         )
 
     async def parse_slides(self, video_id: str):
-        url = "https://www.iesdouyin.com/web/api/v2/aweme/slidesinfo/"
-        params = {"aweme_ids": f"[{video_id}]", "request_source": "200"}
-
         resp = await self.http_get(
-            url,
-            params=params,
+            "https://www.iesdouyin.com/web/api/v2/aweme/slidesinfo/",
+            params={"aweme_ids": f"[{video_id}]", "request_source": "200"},
             headers=self.android_headers,
             allow_redirects=True,
             timeout=10,
             retries=1,
         )
-
         if resp.status_code >= 400:
             raise ParseException(f"API Error: {resp.status_code}")
-
-        from .slides import SlidesInfo
-
-        raw_payload = msgspec.json.decode(resp.content)
-        info = msgspec.convert(raw_payload, type=SlidesInfo)
-        if not info.aweme_details:
+        payload = msgspec.json.decode(resp.content)
+        details = payload.get("aweme_details") if isinstance(payload, dict) else None
+        if not details or not isinstance(details[0], dict):
             raise ParseException("图集数据为空")
-
-        slides = info.aweme_details[0]
-        contents = []
-
-        def pick_best_image_url(urls: list[str]) -> str | None:
-            valid = [
-                u
-                for u in urls
-                if isinstance(u, str) and u.startswith(("http://", "https://"))
-            ]
-
-            if not valid:
-                return None
-
-            valid.sort(
-                key=lambda u: (
-                    (".jpeg" in u.lower()) * 30
-                    + (".jpg" in u.lower()) * 30
-                    + (".png" in u.lower()) * 25
-                    + (".webp" in u.lower()) * 20
-                    + ("p96-" in u.lower()) * 10
-                    + ("p26-" in u.lower()) * 8
-                    + ("p11-" in u.lower()) * 6
-                    + ("p9-" in u.lower()) * 5
-                    + ("p5-" in u.lower()) * 4
-                ),
-                reverse=True,
-            )
-
-            return valid[0]
-
-        sent_images: set[str] = set()
-        comment_cover: str | None = None
-
-        for image in slides.images or []:
-            image_url = pick_best_image_url(image.url_list or [])
-            if not image_url and image.video and image.video.cover:
-                image_url = pick_best_image_url(image.video.cover.url_list or [])
-
-            if image_url and image_url not in sent_images:
-                sent_images.add(image_url)
-                if comment_cover is None:
-                    comment_cover = image_url
-                contents.extend(
-                    self._create_image_contents_with_headers(
-                        [image_url],
-                        self.android_headers,
-                    )
-                )
-
-        author = self.create_author(
-            slides.name,
-            slides.avatar_url,
-            ext_headers=self.android_headers,
+        result = self._build_result_from_aweme(
+            details[0], video_id, media_headers=self.android_headers
         )
-
-        extra = self._comment_extra(
-            video_id,
-            title=slides.desc,
-            cover=comment_cover,
-            owner={"nickname": slides.name},
-        )
-        return self.result(
-            title=slides.desc,
-            author=author,
-            contents=contents,
-            timestamp=slides.create_time,
-            url=f"https://www.douyin.com/note/{video_id}",
-            extra=extra,
-        )
+        result.url = f"https://www.douyin.com/note/{video_id}"
+        return result
 
     async def _parse_with_ytdlp(self, vid: str):
         if not self.cookies:

@@ -2730,6 +2730,7 @@ def test_weibo_recovers_missing_api_body_from_authenticated_detail(tmp_path):
     assert result.delivery is not None
     assert result.delivery.batches[0].parts == ["识别：微博\n详情页补回的正文"]
     assert calls == [
+        ("https://weibo.com/ajax/statuses/show", "SUB=test"),
         ("https://m.weibo.cn/statuses/show?id=123", "SUB=test"),
         ("https://m.weibo.cn/detail/123", "SUB=test"),
     ]
@@ -3265,7 +3266,7 @@ def test_single_image_result_only_replies_with_source_image(tmp_path):
 
     assert len(event.sent) == 1
     assert isinstance(event.sent[0][0], Reply)
-    assert event.sent[0][0].id == 2468
+    assert str(event.sent[0][0].id) == "2468"
     assert isinstance(event.sent[0][1], MessageImage)
     assert len(event.sent[0]) == 2
 
@@ -3345,7 +3346,7 @@ def test_weibo_single_image_sends_body_card_and_source_image(tmp_path):
 
     assert len(event.sent) == 1
     assert isinstance(event.sent[0][0], Reply)
-    assert event.sent[0][0].id == 9753
+    assert str(event.sent[0][0].id) == "9753"
     assert isinstance(event.sent[0][1], MessageImage)
     assert Path(event.sent[0][1].file).name.startswith("text_card_weibo_")
     assert isinstance(event.sent[0][2], MessageImage)
@@ -4661,7 +4662,7 @@ def test_single_image_card_keeps_original_source_image(tmp_path):
 
     assert len(event.sent) == 1
     assert isinstance(event.sent[0][0], Reply)
-    assert event.sent[0][0].id == 1357
+    assert str(event.sent[0][0].id) == "1357"
     assert len(event.sent[0]) == 3
     assert isinstance(event.sent[0][1], MessageImage)
     assert Path(event.sent[0][1].file).name.startswith("text_card_weibo_")

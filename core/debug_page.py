@@ -257,8 +257,7 @@ class DebugMessageSerializer:
             "name": str(node.name or "Parser X"),
             "uin": str(node.uin or "0"),
             "content": [
-                await self.serialize_component(component)
-                for component in node.content
+                await self.serialize_component(component) for component in node.content
             ],
         }
 

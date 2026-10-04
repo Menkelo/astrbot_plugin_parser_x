@@ -114,6 +114,8 @@ class BaseParser:
         self.ios_headers = IOS_HEADER.copy()
         self.android_headers = ANDROID_HEADER.copy()
         self.config = config
+        # Keep share tokens local to this parser instance as well as this task.
+        self._source_text_ctx = ContextVar("parser_x_source_text", default="")
         self.downloader = downloader
         self.cache_dir = Path(config.get("cache_dir") or ".")
         self.cache_dir.mkdir(parents=True, exist_ok=True)

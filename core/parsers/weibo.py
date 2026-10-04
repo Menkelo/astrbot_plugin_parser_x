@@ -14,6 +14,7 @@ from ..comment_settings import CommentSettings
 from ..data import (
     DeliveryBatch,
     DeliveryPlan,
+    DynamicContent,
     ImageContent,
     Platform,
     VideoContent,
@@ -23,6 +24,7 @@ from ..html_renderer import HtmlRenderService
 from ..platform_emotes import select_text_emotes
 from ..utils import normalize_image_url
 from .base import BaseParser, ParseException, handle
+from .gallery import first_media_url, live_photo, media_url, ordered_media_plan
 from .weibo_comment import WeiboCommentFeed
 
 
@@ -276,7 +278,31 @@ class WeiboParser(BaseParser):
                 merged[key] = value
         return merged
 
+    async def _fetch_web_status(self, bid: str) -> dict | None:
+        try:
+            headers = self._request_headers()
+            headers["Referer"] = "https://weibo.com/"
+            response = await self.client.get(
+                "https://weibo.com/ajax/statuses/show",
+                params={"id": bid},
+                headers=headers,
+                timeout=8,
+            )
+            if response.status_code == 200:
+                data = response.json()
+                if self._looks_like_status_data(data):
+                    return data
+        except Exception as exc:
+            logger.debug(
+                f"[Weibo] 网页作品数据不可用，尝试移动端: {type(exc).__name__}"
+            )
+        return None
+
     async def _fetch_status_data(self, bid: str) -> dict:
+        # Logged-in web responses preserve live-photo and mixed-media metadata
+        # that the mobile view can flatten into still images.
+        if self.cookie and (web_data := await self._fetch_web_status(bid)):
+            return web_data
         api_error = ""
         try:
             response = await self.client.get(
@@ -397,13 +423,144 @@ class WeiboParser(BaseParser):
         batches.extend(DeliveryBatch([video]) for video in videos)
         return DeliveryPlan(batches)
 
+    @handle("weibo.com/tv", r"weibo\.com/tv/show/(?P<fid>\d+:\d+)(?:[?][^\s<>]*)?")
+    @handle(
+        "video.weibo.com",
+        r"(?:h5\.)?video\.weibo\.com/(?:show\?(?:[^\s<>]*?&)?fid=|show/)(?P<fid>\d+:\d+)(?:[&?][^\s<>]*)?",
+    )
+    async def _parse_video_fid(self, searched: Match[str]):
+        fid = searched.group("fid")
+        headers = self._request_headers()
+        headers["Referer"] = f"https://h5.video.weibo.com/show/{fid}"
+        headers["Content-Type"] = "application/x-www-form-urlencoded"
+        response = await self.client.post(
+            f"https://h5.video.weibo.com/api/component?page=/show/{fid}",
+            data={"data": json.dumps({"Component_Play_Playinfo": {"oid": fid}})},
+            headers=headers,
+            timeout=10,
+        )
+        if response.status_code >= 400:
+            raise ParseException(f"微博视频接口请求失败: HTTP {response.status_code}")
+        try:
+            payload = response.json()
+            data = payload.get("data") if isinstance(payload, dict) else None
+            info = (
+                data.get("Component_Play_Playinfo") if isinstance(data, dict) else None
+            )
+        except (TypeError, ValueError):
+            info = None
+        if not isinstance(info, dict):
+            raise ParseException("微博视频不存在、不可见或接口未返回播放信息")
+        url = self._pick_video_url({"urls": info.get("urls"), "media_info": info})
+        if not url:
+            raise ParseException("微博视频未返回可用播放地址")
+        reward = info.get("reward") or {}
+        user = reward.get("user") or {} if isinstance(reward, dict) else {}
+        content = self.create_video_content(
+            url, duration=self._duration(info.get("duration_time"))
+        )
+        return self.result(
+            title=self._html_to_plain_text(info.get("title")),
+            text=self._html_to_plain_text(info.get("text")),
+            author=self.create_author(
+                str(user.get("name") or "微博用户"), user.get("profile_image_url")
+            ),
+            timestamp=info.get("real_date"),
+            contents=[content],
+            url=f"https://video.weibo.com/show?fid={fid}",
+        )
+
+    @handle("mapp.api.weibo.cn", r"https?://mapp\.api\.weibo\.cn/fx/[A-Za-z0-9]+\.html")
+    async def _parse_app_share(self, searched: Match[str]):
+        return await self.parse_with_redirect(
+            searched.group(0), headers=self._request_headers()
+        )
+
+    @staticmethod
+    def _duration(value) -> float:
+        try:
+            return max(0.0, float(value or 0))
+        except (TypeError, ValueError):
+            return 0.0
+
+    @classmethod
+    def _media_specs(cls, data: dict):
+        # (kind, URL, duration, optional still image), in source order.
+        specs = []
+        seen = set()
+
+        def add(kind, url, duration=0, still=None):
+            url = media_url(url)
+            if url and (kind, url) not in seen:
+                seen.add((kind, url))
+                specs.append((kind, url, cls._duration(duration), still))
+
+        def picture(pic):
+            if not isinstance(pic, dict):
+                return
+            still = media_url(cls._pick_static_pic_url(pic))
+            kind = str(pic.get("type") or "").lower()
+            if kind == "livephoto":
+                if url := first_media_url(pic.get("video")):
+                    add("live", url, still=still)
+                    return
+            if cls._is_video_pic(pic):
+                url = media_url(
+                    pic.get("videoSrc") or pic.get("video_src")
+                ) or cls._pick_video_url(pic)
+                if url:
+                    add("video", url)
+                    return
+            if still:
+                add("image", still)
+
+        mixed = data.get("mix_media_info")
+        if isinstance(mixed, dict) and isinstance(mixed.get("items"), list):
+            for entry in mixed["items"]:
+                if not isinstance(entry, dict) or not isinstance(
+                    entry.get("data"), dict
+                ):
+                    continue
+                item = entry["data"]
+                if entry.get("type") == "video":
+                    info = item.get("media_info") or {}
+                    add(
+                        "video",
+                        cls._pick_video_url(item),
+                        info.get("duration") if isinstance(info, dict) else 0,
+                    )
+                elif entry.get("type") in {"pic", "livephoto"}:
+                    picture({**item, "type": item.get("type") or entry["type"]})
+            if specs:
+                return specs
+
+        pids = set()
+        for pic in data.get("pics") or []:
+            if isinstance(pic, dict):
+                picture(pic)
+                if pid := pic.get("pid") or pic.get("pic_id"):
+                    pids.add(str(pid))
+        infos = data.get("pic_infos")
+        if isinstance(infos, dict):
+            ids = list(dict.fromkeys([*(data.get("pic_ids") or []), *infos]))
+            for pid in ids:
+                if str(pid) not in pids:
+                    picture(infos.get(pid))
+        # Legacy status layouts may only expose pic_ids or URL objects.
+        if not specs:
+            for url in cls._collect_static_pic_urls(data):
+                add("image", url)
+        for url, duration in cls._collect_video_items(data):
+            add("video", url, duration)
+        return specs
+
     @handle(
         "weibo.com/tv/show",
         r"weibo\.com/tv/show/[^\s?]+[^\s]*?[?&]mid=([0-9]+)",
     )
-    @handle("weibo.com", r"weibo\.com/(?:u/)?[A-Za-z0-9]+/([a-zA-Z0-9]+)")
+    @handle("weibo.com", r"weibo\.com/(?:u/)?[0-9]+/([a-zA-Z0-9]+)")
     @handle("weibo.cn", r"weibo\.cn/(?:status|detail)/([a-zA-Z0-9]+)")
-    @handle("weibo.cn", r"m\.weibo\.cn/[A-Za-z0-9]+/([a-zA-Z0-9]+)")
+    @handle("weibo.cn", r"m\.weibo\.cn/[0-9]+/([a-zA-Z0-9]+)")
     async def _parse_weibo(self, searched: Match[str]):
         bid = searched.group(1)
         if "/tv/show/" in searched.group(0):
@@ -448,47 +605,42 @@ class WeiboParser(BaseParser):
         if isinstance(data.get("retweeted_status"), dict):
             media_sources.append(data["retweeted_status"])
 
+        contents = []
         static_pic_urls = []
-        seen_pic_urls: set[str] = set()
+        seen_media = set()
         for media_source in media_sources:
-            for pic_url in self._collect_static_pic_urls(media_source):
-                if pic_url in seen_pic_urls:
+            for kind, url, duration, still in self._media_specs(media_source):
+                if (kind, url) in seen_media:
                     continue
-                seen_pic_urls.add(pic_url)
-                static_pic_urls.append(pic_url)
+                seen_media.add((kind, url))
+                if kind == "image":
+                    static_pic_urls.append(url)
+                    contents.extend(self.create_image_contents([url]))
+                elif kind == "live":
+                    if still:
+                        static_pic_urls.append(still)
+                    contents.append(live_photo(self, url, still, headers=self.headers))
+                else:
+                    task = self.downloader.download_video(
+                        url,
+                        video_name=f"weibo_{bid}_{len(contents)}.mp4",
+                        ext_headers=self.headers,
+                    )
+                    contents.append(VideoContent(task, None, duration=duration))
 
-        video_items = []
-        seen_video_urls: set[str] = set()
-        for media_source in media_sources:
-            for video_url, duration in self._collect_video_items(media_source):
-                key = self._normalize_video_url_key(video_url)
-                if key in seen_video_urls:
-                    continue
-                seen_video_urls.add(key)
-                video_items.append((video_url, duration))
-
-        video_contents = []
-        for index, (video_url, duration) in enumerate(video_items, start=1):
-            video_task = self.downloader.download_video(
-                video_url,
-                video_name=f"weibo_{bid}_{index}.mp4",
-                ext_headers=self.headers,
-            )
-            # 提纯：不下载封面
-            video_contents.append(VideoContent(video_task, None, duration=duration))
-
-        image_contents = []
-        for url in static_pic_urls:
-            img_task = self.downloader.download_img(
-                url,
-                ext_headers=self.headers,
-            )
-            image_contents.append(ImageContent(img_task))
-
-        contents = [*image_contents, *video_contents]
-        # 参考 r_parser：带媒体时只发媒体（提纯），纯文本才渲染正文卡。
+        image_contents = [item for item in contents if isinstance(item, ImageContent)]
+        video_contents = [item for item in contents if isinstance(item, VideoContent)]
         summary = "" if contents else self._delivery_summary(data, text)
-        delivery = self._delivery_plan(summary, image_contents, video_contents)
+        ordered = (
+            any(isinstance(item, DynamicContent) for item in contents)
+            or bool(image_contents and video_contents)
+            or any(source.get("mix_media_info") for source in media_sources)
+        )
+        delivery = (
+            ordered_media_plan(contents)
+            if ordered
+            else self._delivery_plan(summary, image_contents, video_contents)
+        )
 
         comment_title = re.sub(r"\s+", " ", text).strip()
         if len(comment_title) > 64:
@@ -499,6 +651,8 @@ class WeiboParser(BaseParser):
             cover=(static_pic_urls[0] if static_pic_urls else author_avatar),
             owner_id=user.get("id"),
         )
+        if contents:
+            extra["native_delivery"] = True
         if not contents:
             extra.update(
                 {
@@ -547,28 +701,32 @@ class WeiboParser(BaseParser):
     def _pick_video_url(page_info: dict) -> str | None:
         if not isinstance(page_info, dict):
             return None
-
-        media_info = page_info.get("media_info") or {}
+        info = page_info.get("media_info") or {}
         urls = page_info.get("urls") or {}
-
-        if not isinstance(media_info, dict):
-            media_info = {}
-        if not isinstance(urls, dict):
-            urls = {}
-
-        candidates = (
-            urls.get("mp4_720p_mp4"),
-            urls.get("mp4_hd_mp4"),
-            urls.get("mp4_ld_mp4"),
-            media_info.get("mp4_720p_mp4"),
-            media_info.get("mp4_hd_url"),
-            media_info.get("mp4_sd_url"),
-            media_info.get("stream_url_hd"),
-            media_info.get("stream_url"),
-        )
-        for url in candidates:
-            if isinstance(url, str) and url:
+        info = info if isinstance(info, dict) else {}
+        urls = urls if isinstance(urls, dict) else {}
+        for key in ("mp4_720p_mp4", "mp4_hd_mp4", "mp4_ld_mp4"):
+            if url := media_url(urls.get(key)):
                 return url
+        for key in (
+            "mp4_720p_mp4",
+            "mp4_hd_url",
+            "mp4_sd_url",
+            "stream_url_hd",
+            "stream_url",
+            "replay_hd",
+        ):
+            if url := media_url(info.get(key)):
+                return url
+        for value in urls.values():
+            if url := media_url(value):
+                return url
+        for playback in info.get("playback_list") or []:
+            if isinstance(playback, dict) and isinstance(
+                playback.get("play_info"), dict
+            ):
+                if url := media_url(playback["play_info"].get("url")):
+                    return url
         return None
 
     @classmethod
@@ -767,7 +925,7 @@ class WeiboParser(BaseParser):
         if not isinstance(pic, dict):
             return None
 
-        for key in ("large", "original", "bmiddle", "thumbnail"):
+        for key in ("largest", "large", "original", "bmiddle", "thumbnail"):
             item = pic.get(key)
             if isinstance(item, dict):
                 url = item.get("url")

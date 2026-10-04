@@ -8,8 +8,10 @@ from astrbot.api import logger
 from astrbot.core.config.astrbot_config import AstrBotConfig
 from msgspec import Struct, convert, field
 
+from ..data import DynamicContent
 from ..download import Downloader
 from .base import BaseParser, ParseException, Platform, SkipParseException, handle
+from .gallery import first_media_url, live_photo, motion_url, ordered_media_plan
 
 
 class XiaoHongShuParser(BaseParser):
@@ -623,6 +625,42 @@ class XiaoHongShuParser(BaseParser):
             json_obj=json_obj,
         )
 
+    def _gallery_contents(self, note_data: dict):
+        contents = []
+        seen = set()
+        for item in note_data.get("imageList") or note_data.get("imagesList") or []:
+            if not isinstance(item, dict):
+                continue
+            still = next(
+                (
+                    url
+                    for key in ("urlDefault", "urlSizeLarge", "url", "urlPre")
+                    if (url := first_media_url(item.get(key)))
+                ),
+                None,
+            )
+            if not still:
+                still = first_media_url(item.get("infoList"))
+            motion = motion_url({"stream": item.get("stream")})
+            key = ("live" if motion else "image", motion or still)
+            if key in seen or not key[1]:
+                continue
+            seen.add(key)
+            if motion:
+                contents.append(live_photo(self, motion, still, headers=self.headers))
+            elif still:
+                contents.extend(self.create_image_contents([still]))
+        return contents
+
+    @staticmethod
+    def _gallery_delivery(contents):
+        if any(isinstance(item, DynamicContent) for item in contents):
+            return {
+                "delivery": ordered_media_plan(contents),
+                "extra": {"native_delivery": True},
+            }
+        return {}
+
     def _process_explore_data(
         self,
         note_data: dict,
@@ -682,8 +720,8 @@ class XiaoHongShuParser(BaseParser):
             cover_url = note_image_urls[0] if note_image_urls else None
             contents.append(self.create_video_content(video_url, cover_url))
 
-        elif image_urls := note_image_urls:
-            contents.extend(self.create_image_contents(image_urls))
+        else:
+            contents.extend(self._gallery_contents(note_data))
 
         author = self.create_author(note_detail.nickname, note_detail.avatar_url)
 
@@ -694,6 +732,7 @@ class XiaoHongShuParser(BaseParser):
             contents=contents,
             timestamp=self._normalize_timestamp(note_detail.time),
             url=final_url,
+            **self._gallery_delivery(contents),
         )
 
     def _process_discovery_data(
@@ -772,8 +811,8 @@ class XiaoHongShuParser(BaseParser):
                 )
             )
 
-        elif img_urls := note_data_obj.image_urls:
-            contents.extend(self.create_image_contents(img_urls))
+        else:
+            contents.extend(self._gallery_contents(note_data))
 
         return self.result(
             title=note_title,
@@ -784,6 +823,7 @@ class XiaoHongShuParser(BaseParser):
             text=note_text,
             timestamp=self._normalize_timestamp(note_data_obj.time),
             url=final_url,
+            **self._gallery_delivery(contents),
         )
 
     def _extract_initial_state_json(self, html: str) -> dict[str, Any]:
