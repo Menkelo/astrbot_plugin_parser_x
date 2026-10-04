@@ -118,21 +118,27 @@ class ParserXPlugin(Star):
         # upgraded installations do not keep displaying retired platforms.
         platforms = config.get("platforms", {})
         if isinstance(platforms, dict):
-            for retired_platform in ("tieba", "xigua", "pipixia", "weishi"):
+            for retired_platform in (
+                "tieba",
+                "xigua",
+                "pipixia",
+                "weishi",
+                "xiaoheihe",
+                "miyoushe",
+            ):
                 platforms.pop(retired_platform, None)
             config["platforms"] = platforms
 
-        # The Xiaohongshu comment feed was retired because the signed,
-        # Cookie-authenticated comment endpoint risks account bans. Drop its
-        # leftover switches and login state so upgraded installs stop sending
-        # the cookie anywhere.
+        # Drop comment switches and login state for retired integrations.
         comment_config = config.get("comments", {})
         if isinstance(comment_config, dict):
-            comment_config.pop("xiaohongshu", None)
+            for retired_platform in ("xiaohongshu", "xiaoheihe", "miyoushe"):
+                comment_config.pop(retired_platform, None)
             config["comments"] = comment_config
         cookies = config.get("cookies", {})
         if isinstance(cookies, dict):
-            cookies.pop("xiaohongshu_cookie", None)
+            for retired_cookie in ("xiaohongshu_cookie", "xiaoheihe_cookie"):
+                cookies.pop(retired_cookie, None)
             config["cookies"] = cookies
         integrations = config.get("integrations", {})
         if isinstance(integrations, dict):
@@ -1848,10 +1854,7 @@ class ParserXPlugin(Star):
                             error=exc,
                         )
 
-        native_delivery = bool(result.extra.get("native_delivery")) or (
-            result.platform.name in {"xiaoheihe", "miyoushe"}
-            and result.delivery is not None
-        )
+        native_delivery = bool(result.extra.get("native_delivery"))
         if native_delivery and result.delivery is not None:
             one_image_flow = bool(
                 result.extra.get("render_text_card")
@@ -2188,8 +2191,6 @@ class ParserXPlugin(Star):
                         "bilibili",
                         "douyin",
                         "weibo",
-                        "xiaoheihe",
-                        "miyoushe",
                     }
                 },
             }

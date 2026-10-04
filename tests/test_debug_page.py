@@ -28,13 +28,9 @@ def _response_json(response) -> dict:
 def test_debug_switch_defaults_to_disabled_and_page_assets_exist():
     root = Path(__file__).parents[1]
     schema = json.loads((root / "_conf_schema.json").read_text(encoding="utf-8"))
-    debug_html = (root / "pages" / "debug" / "index.html").read_text(
-        encoding="utf-8"
-    )
+    debug_html = (root / "pages" / "debug" / "index.html").read_text(encoding="utf-8")
     debug_app = (root / "pages" / "debug" / "app.js").read_text(encoding="utf-8")
-    debug_css = (root / "pages" / "debug" / "style.css").read_text(
-        encoding="utf-8"
-    )
+    debug_css = (root / "pages" / "debug" / "style.css").read_text(encoding="utf-8")
 
     assert schema["debug"]["items"]["enabled"]["default"] is False
     assert (root / "pages" / "debug" / "index.html").is_file()
@@ -48,7 +44,7 @@ def test_debug_switch_defaults_to_disabled_and_page_assets_exist():
     assert "elements.clearButton.disabled = busy" in debug_app
     assert "function normalizeIssue" in debug_app
     assert "function appendIssue" in debug_app
-    assert 'className = `issue-card is-${issue.level}`' in debug_app
+    assert "className = `issue-card is-${issue.level}`" in debug_app
     assert "elements.runButton.disabled = busy || !hasText" in debug_app
     assert 'exclusiveMode ? "独占调试" : "普通模式"' in debug_app
     assert "debug_mode_disabled" not in debug_app
@@ -98,15 +94,18 @@ def test_debug_page_is_available_when_exclusive_mode_is_disabled():
     plugin = object.__new__(ParserXPlugin)
     plugin.config = {
         "debug": {"enabled": False},
-        "comments": {"bilibili": True, "xiaohongshu": True},
+        "comments": {
+            "bilibili": True,
+            "xiaohongshu": True,
+            "xiaoheihe": True,
+            "miyoushe": True,
+        },
     }
     parser = SimpleNamespace(
         platform=SimpleNamespace(name="bilibili", display_name="B站")
     )
     plugin.parser_map = {"b23.tv": parser}
-    plugin.key_pattern_list = [
-        ("b23.tv", re.compile(r"https://b23\.tv/[A-Za-z0-9]+"))
-    ]
+    plugin.key_pattern_list = [("b23.tv", re.compile(r"https://b23\.tv/[A-Za-z0-9]+"))]
     plugin.debug_sessions = DebugSessionManager()
 
     class FakeRequest:

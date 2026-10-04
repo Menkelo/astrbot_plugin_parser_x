@@ -37,10 +37,8 @@ from core.parsers import (
     BilibiliParser,
     DouyinParser,
     KuaiShouParser,
-    MiyousheParser,
     ParseException,
     WeiboParser,
-    XiaoheiheParser,
     XiaoHongShuParser,
 )
 from core.parsers.bilibili.comment_canvas import (
@@ -54,14 +52,10 @@ from core.parsers.bilibili.comment_feed import BiliCommentFeed
 from core.parsers.bilibili.dynamic_service import BiliDynamicService
 from core.parsers.douyin.a_bogus import _sm3_fallback, generate_a_bogus
 from core.parsers.douyin.comment_feed import DouyinCommentFeed
-from core.parsers.miyoushe_comment import MiyousheCommentFeed
 from core.parsers.weibo_comment import WeiboCommentFeed
-from core.parsers.xiaoheihe_comment import XiaoheiheCommentFeed
 from core.parsers.ytdlp import AcFunParser, NeteaseMusicParser
 from core.platform_emotes import (
     build_bilibili_emote_map,
-    build_miyoushe_emote_map,
-    build_xiaoheihe_emote_map,
     load_platform_emotes,
 )
 from core.rendered_image import save_rendered_image
@@ -154,8 +148,6 @@ def test_comment_delivery_logs_use_the_shared_stage_and_result_shape():
         DouyinParser,
         WeiboParser,
         XiaoHongShuParser,
-        XiaoheiheParser,
-        MiyousheParser,
     ],
 )
 def test_all_parser_results_remove_comment_tasks_without_video(parser_cls, tmp_path):
@@ -191,7 +183,7 @@ def test_parser_results_keep_comment_tasks_for_video_contents_and_delivery(tmp_p
         },
     )
     planned_video = VideoContent(tmp_path / "planned.mp4")
-    planned = MiyousheParser.result(
+    planned = WeiboParser.result(
         delivery=DeliveryPlan([DeliveryBatch([planned_video])]),
         extra={
             "comment_image_task_factory": build_comment_images,
@@ -354,7 +346,7 @@ def test_ytdlp_parsers_are_registered_once():
     names = [(item.__module__, item.__qualname__) for item in classes]
     assert len(names) == len(set(names))
     assert AcFunParser in classes
-    assert MiyousheParser in classes
+    assert NeteaseMusicParser in classes
 
 
 def test_foreign_platform_routes_are_not_registered():
@@ -456,8 +448,8 @@ def test_config_schema_uses_latest_astrbot_panel_features():
     assert schema["cookies"]["items"]["ytdlp_cookie_file"]["type"] == "file"
     assert schema["cookies"]["items"]["ytdlp_cookie_file"]["file_types"] == ["txt"]
     assert schema["behavior"]["items"]["disabled_sessions"]["collapsed"] is True
-    assert schema["comments"]["items"]["xiaoheihe"]["default"] is True
-    assert schema["comments"]["items"]["miyoushe"]["default"] is True
+    assert "xiaoheihe" not in schema["comments"]["items"]
+    assert "miyoushe" not in schema["comments"]["items"]
     assert "xiaohongshu" not in schema["comments"]["items"]
     assert schema["comments"]["items"]["filter"]["items"]["enabled"]["default"] is True
     assert (
@@ -556,45 +548,6 @@ def test_ytdlp_audio_parser_sends_media_without_card(tmp_path):
 
 
 def test_domestic_parser_helpers_cover_new_routes():
-    assert (
-        MiyousheParser.extract_post_id("https://www.miyoushe.com/ys/article/69857339")
-        == "69857339"
-    )
-    assert XiaoheiheParser.extract_identity(
-        "https://www.xiaoheihe.cn/app/game/pc/730"
-    ) == ("pc", "730")
-    assert XiaoheiheParser.extract_identity(
-        "https://www.xiaoheihe.cn/games/detail/730"
-    ) == ("pc", "730")
-    assert XiaoheiheParser.extract_identity(
-        "https://www.xiaoheihe.cn/community/42/list/123456789"
-    ) == ("bbs", "123456789")
-    share_url = "https://api.xiaoheihe.cn/v3/bbs/app/api/web/share?link_id=123456789"
-    assert XiaoheiheParser.extract_identity(share_url) == ("bbs", "123456789")
-    keyword, searched = XiaoheiheParser.search_url(share_url)
-    assert keyword == "xiaoheihe.cn"
-    assert searched.group(0) == share_url
-    for subdomain in ("www", "share", "bbs"):
-        route_url = f"https://{subdomain}.xiaoheihe.cn/app/bbs/link/abc123"
-        keyword, searched = XiaoheiheParser.search_url(route_url)
-        assert keyword == "xiaoheihe.cn"
-        assert XiaoheiheParser.extract_identity(searched.group(0)) == (
-            "bbs",
-            "abc123",
-        )
-    assert XiaoheiheParser._parse_redirect_metadata(
-        "https://www.xiaoheihe.cn/app/bbs/link/123?"
-        "redirect_data=%7B%22link%22%3A%7B%22title%22%3A%22Demo%22%2C"
-        "%22description%22%3A%22Body%22%7D%7D"
-    ) == {"title": "Demo", "description": "Body"}
-    assert (
-        XiaoheiheParser.build_hkey(
-            "bbs/app/link/tree",
-            1700000001,
-            "ABCDEF0123456789ABCDEF0123456789",
-        )
-        == "V2V1Z67"
-    )
     assert WeiboParser._mid_to_bid("4461526582968019") == "IpOAqcs7h"
     keyword, searched = WeiboParser.search_url(
         "https://weibo.com/tv/show/1034:4461526582968019?mid=4461526582968019"
@@ -628,40 +581,6 @@ def test_domestic_parser_helpers_cover_new_routes():
         '<script>$render_data = [{"status":{"id":"1",'
         '"text":"<p>详情页正文</p>"}}][0]</script>'
     ) == {"id": "1", "text": "<p>详情页正文</p>"}
-
-
-def test_miyoushe_structured_content_preserves_text_image_order():
-    cover = "https://img.example.com/cover.jpg"
-    body = "https://img.example.com/body.jpg"
-    missing = "https://img.example.com/missing.jpg"
-    post = {
-        "content": "<p>降级正文</p>",
-        "structured_content": json.dumps(
-            [
-                {"insert": {"image": cover}},
-                {"insert": "第一段\n"},
-                {"insert": {"image": body}},
-                {
-                    "insert": {
-                        "backup_text": "【注意事项】\n折叠正文\n",
-                        "fold": {"title": "[]", "content": "[]"},
-                    }
-                },
-                {"insert": {"divider": "line_2"}},
-                {"insert": "尾段\n"},
-            ],
-            ensure_ascii=False,
-        ),
-        "images": [cover, body, missing],
-    }
-
-    assert MiyousheParser._ordered_content_flow(post) == [
-        {"type": "image", "url": cover},
-        {"type": "text", "text": "第一段"},
-        {"type": "image", "url": body},
-        {"type": "text", "text": "【注意事项】\n折叠正文\n尾段"},
-        {"type": "image", "url": missing},
-    ]
 
 
 @pytest.mark.parametrize(
@@ -1121,94 +1040,6 @@ def test_video_post_parsers_and_ytdlp_use_shared_cards(tmp_path):
     assert "comment_image_task_factory" not in results[2].extra
 
 
-def test_xiaoheihe_api_share_route_uses_redirect_metadata(tmp_path):
-    share_url = "https://api.xiaoheihe.cn/v3/bbs/app/api/web/share?link_id=123456789"
-
-    class FakeResponse:
-        status_code = 200
-        url = (
-            "https://www.xiaoheihe.cn/app/bbs/link/123456789?"
-            "redirect_data=%7B%22link%22%3A%7B%22title%22%3A%22Demo%22%2C"
-            "%22description%22%3A%22Body%22%7D%7D"
-        )
-        text = "<html></html>"
-
-    async def run():
-        parser = XiaoheiheParser(
-            {"cache_dir": str(tmp_path), "cookies": {}},
-            object(),
-        )
-
-        async def fake_http_get(url, **_kwargs):
-            if url.endswith("/bbs/app/link/tree"):
-                raise RuntimeError("signed api unavailable")
-            assert url == share_url
-            return FakeResponse()
-
-        parser.http_get = fake_http_get
-        keyword, searched = parser.search_url(share_url)
-        return await parser.parse(keyword, searched)
-
-    result = asyncio.run(run())
-    assert result.platform.name == "xiaoheihe"
-    assert result.title == "Demo"
-    assert result.text == "Body"
-    assert result.url == share_url
-
-
-def test_xiaoheihe_rich_text_extracts_html_body_and_inline_images():
-    text, images = XiaoheiheParser.extract_rich_content(
-        json.dumps(
-            [
-                {
-                    "type": "html",
-                    "text": (
-                        '<p>第一段 <a href="https://example.com">链接</a></p>'
-                        '<p>第二段</p><img src="https://img.example.com/demo.jpg">'
-                    ),
-                }
-            ]
-        )
-    )
-
-    assert text == "第一段 链接 (https://example.com)\n第二段"
-    assert images == ["https://img.example.com/demo.jpg"]
-    assert XiaoheiheParser.extract_rich_blocks(
-        '<p>前文</p><img src="https://img.example.com/a.jpg"><p>后文</p>'
-    ) == [
-        ("text", "前文"),
-        ("image", "https://img.example.com/a.jpg"),
-        ("text", "后文"),
-    ]
-
-
-def test_xiaoheihe_rich_text_ignores_android_cache_paths():
-    local_path = (
-        "/storage/emulated/0/Android/data/com.max.xiaoheihe/cache/"
-        "optimizer_output/298def8347f203c8599056f548bdd91116acba1a27a72b2313cc434ae9079599"
-        "@1280.0x1280.0.jpeg"
-    )
-    blocks = XiaoheiheParser.extract_rich_blocks(
-        [
-            {
-                "type": "text",
-                "text": "小黑盒学的，便宜了好多[cube_开心][cube_开心]",
-                "optimizer_output": local_path,
-            },
-            {"content": f"补充正文\n{local_path}", "local_path": local_path},
-            {"html": f"<p>HTML 正文</p><p>{local_path}</p>"},
-        ]
-    )
-
-    assert blocks == [
-        (
-            "text",
-            ("小黑盒学的，便宜了好多[cube_开心][cube_开心]\n\n补充正文\n\nHTML 正文"),
-        )
-    ]
-    assert local_path not in repr(blocks)
-
-
 def test_platform_emotes_render_in_cards_and_comment_rich_text():
     bilibili_map = build_bilibili_emote_map(
         {
@@ -1226,50 +1057,6 @@ def test_platform_emotes_render_in_cards_and_comment_rich_text():
             }
         }
     )
-    xiaoheihe_map = build_xiaoheihe_emote_map(
-        {
-            "result": {
-                "emoji_groups": [
-                    {
-                        "group_code": "cube",
-                        "emojis": [
-                            {
-                                "code": "开心",
-                                "img": "https://imgheybox.max-c.com/heybox/emoji/cube_21.png",
-                            }
-                        ],
-                    }
-                ]
-            }
-        }
-    )
-    miyoushe_map = build_miyoushe_emote_map(
-        {
-            "data": {
-                "list": [
-                    {
-                        "list": [
-                            {
-                                "name": "米游姬-期待",
-                                "icon": "https://img.example.com/miyoushe.png",
-                            }
-                        ]
-                    }
-                ]
-            }
-        }
-    )
-
-    html = TextCardRenderer(HtmlRenderService()).build_html(
-        platform_key="xiaoheihe",
-        platform_name="小黑盒",
-        author_name="作者",
-        title="标题",
-        text="便宜了好多[cube_开心]",
-        emotes=xiaoheihe_map,
-    )
-    assert 'class="inline-emote"' in html
-    assert "cube_21.png" in html
 
     bilibili_html = TextCardRenderer(HtmlRenderService()).build_html(
         platform_key="bilibili",
@@ -1281,54 +1068,6 @@ def test_platform_emotes_render_in_cards_and_comment_rich_text():
     )
     assert bilibili_html.count('class="inline-emote"') == 2
     assert "bfs/emote/doge.png" in bilibili_html
-
-    xiaoheihe_parts = XiaoheiheCommentFeed._rich_text(
-        "评论[cube_开心]",
-        xiaoheihe_map,
-    )
-    assert any(part.kind == "emote" and part.url for part in xiaoheihe_parts)
-
-    miyoushe_parts = MiyousheCommentFeed._rich_text(
-        {
-            "content": "正文_(米游姬 期待)",
-            "struct_content": json.dumps(
-                [
-                    {"insert": "正文_(米游姬 期待)"},
-                    {
-                        "insert": {
-                            "backup_text": "[自定义表情]",
-                            "custom_emoticon": {
-                                "url": "https://img.example.com/custom.gif"
-                            },
-                        }
-                    },
-                ],
-                ensure_ascii=False,
-            ),
-        },
-        miyoushe_map,
-    )
-    emotes = [part for part in miyoushe_parts if part.kind == "emote"]
-    assert [part.url for part in emotes] == ["https://img.example.com/miyoushe.png"]
-    assert (
-        MiyousheCommentFeed._custom_sticker(
-            {
-                "struct_content": json.dumps(
-                    [
-                        {
-                            "insert": {
-                                "backup_text": "[自定义表情]",
-                                "custom_emoticon": {
-                                    "url": "https://img.example.com/custom.gif"
-                                },
-                            }
-                        }
-                    ]
-                )
-            }
-        )
-        == "https://img.example.com/custom.gif"
-    )
 
 
 def test_unicode_emoji_render_as_images_in_shared_and_bilibili_comment_cards():
@@ -1426,358 +1165,6 @@ def test_bilibili_emote_loader_merges_public_and_owned_packages():
     assert catalog["[doge]"].endswith("/1.png")
     assert catalog["[已购表情]"].endswith("/2.png")
     assert [params.get("ids") for _url, params in calls] == ["1", None, "2"]
-
-
-def test_xiaoheihe_app_link_retries_official_share_endpoint(tmp_path):
-    app_url = "https://www.xiaoheihe.cn/app/bbs/link/123456789"
-    share_url = XiaoheiheParser._canonical_share_url("bbs", "123456789")
-    calls = []
-
-    class FakeResponse:
-        def __init__(self, status_code, url, text=""):
-            self.status_code = status_code
-            self.url = url
-            self.text = text
-
-    async def run():
-        parser = XiaoheiheParser(
-            {"cache_dir": str(tmp_path), "cookies": {}},
-            object(),
-        )
-
-        async def fake_http_get(url, **_kwargs):
-            calls.append(url)
-            if url.endswith("/bbs/app/link/tree"):
-                raise RuntimeError("signed api unavailable")
-            if url == app_url:
-                return FakeResponse(404, url)
-            return FakeResponse(
-                200,
-                share_url
-                + "&redirect_data=%7B%22link%22%3A%7B%22title%22%3A%22Demo%22%2C"
-                "%22description%22%3A%22Body%22%7D%7D",
-            )
-
-        parser.http_get = fake_http_get
-        keyword, searched = parser.search_url(app_url)
-        return await parser.parse(keyword, searched)
-
-    result = asyncio.run(run())
-    assert calls == [
-        "https://api.xiaoheihe.cn/bbs/app/link/tree",
-        share_url,
-    ]
-    assert result.title == "Demo"
-    assert result.text == "Body"
-    assert result.delivery is not None
-
-
-def test_xiaoheihe_uses_embedded_redirect_metadata_even_when_page_is_gone(tmp_path):
-    url = (
-        "https://www.xiaoheihe.cn/app/bbs/link/123?"
-        "redirect_data=%7B%22link%22%3A%7B%22title%22%3A%22Demo%22%2C"
-        "%22description%22%3A%22Body%22%7D%7D"
-    )
-
-    class FakeResponse:
-        status_code = 404
-        text = ""
-
-        def __init__(self, response_url):
-            self.url = response_url
-
-    async def run():
-        parser = XiaoheiheParser(
-            {"cache_dir": str(tmp_path), "cookies": {}},
-            object(),
-        )
-
-        async def fake_http_get(request_url, **_kwargs):
-            if request_url.endswith("/bbs/app/link/tree"):
-                raise RuntimeError("signed api unavailable")
-            return FakeResponse(request_url)
-
-        parser.http_get = fake_http_get
-        keyword, searched = parser.search_url(url)
-        return await parser.parse(keyword, searched)
-
-    result = asyncio.run(run())
-    assert result.title == "Demo"
-    assert result.text == "Body"
-    assert result.delivery is not None
-
-
-def test_xiaoheihe_api_preserves_rich_body_order_and_native_delivery(tmp_path):
-    class FakeDownloader:
-        def download_img(self, _url, **_kwargs):
-            async def done():
-                return tmp_path / "image.jpg"
-
-            return asyncio.create_task(done())
-
-    class FakeResponse:
-        status_code = 200
-
-        @staticmethod
-        def json():
-            return {
-                "status": "ok",
-                "result": {
-                    "link": {
-                        "title": "帖子标题",
-                        "description": "帖子简介",
-                        "text": json.dumps(
-                            [
-                                {
-                                    "type": "html",
-                                    "text": (
-                                        "<p>正文内容[普通括号][cube_开心]</p>"
-                                        '<img src="https://img.example.com/body.jpg">'
-                                    ),
-                                }
-                            ]
-                        ),
-                        "thumb": "https://img.example.com/cover.jpg",
-                        "user": {
-                            "username": "作者",
-                            "avatar_url": "https://img.example.com/avatar.jpg",
-                        },
-                    },
-                    "comments": [
-                        {
-                            "comment": [
-                                {
-                                    "floor_num": 1,
-                                    "text": "评论内容",
-                                    "user": {"username": "评论用户"},
-                                }
-                            ]
-                        }
-                    ],
-                },
-            }
-
-    async def run():
-        parser = XiaoheiheParser(
-            {"cache_dir": str(tmp_path), "cookies": {}, "performance": {}},
-            FakeDownloader(),
-        )
-
-        async def fake_http_get(_url, **_kwargs):
-            return FakeResponse()
-
-        parser.http_get = fake_http_get
-        return await parser._parse_api(
-            "https://www.xiaoheihe.cn/app/bbs/link/1", "bbs", "1"
-        )
-
-    result = asyncio.run(run())
-    assert result.text == "帖子简介\n\n正文内容[普通括号][cube_开心]"
-    assert len(result.contents) == 2
-    assert result.author is not None and result.author.name == "作者"
-    assert result.extra["render_text_card"] is True
-    assert result.extra["text_card_text"] == "帖子简介\n\n正文内容[普通括号][cube_开心]"
-    assert result.extra["text_card_flow"] == [
-        {
-            "type": "text",
-            "text": "帖子简介\n\n正文内容[普通括号][cube_开心]",
-        },
-        {"type": "image", "url": "https://img.example.com/body.jpg"},
-    ]
-    assert result.extra["delivery_text_card_consume_non_video"] is True
-    assert result.extra["card_emotes"]["[cube_开心]"].endswith("cube_21.png")
-    assert result.delivery is not None
-    assert len(result.delivery.batches) == 1
-    body = result.delivery.batches[0]
-    assert body.mode == "forward"
-    assert isinstance(body.parts[0], ImageContent)
-    assert "帖子标题" in body.parts[1]
-    assert body.parts[2] == "正文内容[普通括号]"
-    assert isinstance(body.parts[3], ImageContent)
-    assert isinstance(body.parts[4], ImageContent)
-    assert "comment_document_task_factory" not in result.extra
-    assert "comment_image_task_factory" not in result.extra
-
-
-def test_xiaoheihe_game_uses_signed_api_without_cookie(tmp_path):
-    calls = []
-
-    class FakeDownloader:
-        def download_img(self, _url, **_kwargs):
-            async def done():
-                return tmp_path / "game.jpg"
-
-            return asyncio.create_task(done())
-
-    class FakeResponse:
-        status_code = 200
-
-        @staticmethod
-        def json():
-            return {
-                "status": "ok",
-                "result": {
-                    "name": "CS2",
-                    "name_en": "Counter-Strike 2",
-                    "about_the_game": "<p>游戏简介</p>",
-                    "score": 9.1,
-                    "release_date": "2023-09-28",
-                    "developers": [{"value": "Valve"}],
-                    "publishers": [{"value": "Valve"}],
-                    "image": "https://img.example.com/game.jpg",
-                    "screenshots": [],
-                },
-            }
-
-    async def run():
-        parser = XiaoheiheParser(
-            {"cache_dir": str(tmp_path), "cookies": {}, "performance": {}},
-            FakeDownloader(),
-        )
-
-        async def fake_http_get(url, **kwargs):
-            calls.append((url, kwargs.get("params")))
-            return FakeResponse()
-
-        parser.http_get = fake_http_get
-        keyword, searched = parser.search_url(
-            "https://www.xiaoheihe.cn/games/detail/730"
-        )
-        return await parser.parse(keyword, searched)
-
-    result = asyncio.run(run())
-    assert len(calls) == 1
-    assert calls[0][0] == "https://api.xiaoheihe.cn/game/get_game_detail"
-    assert calls[0][1]["steam_appid"] == "730"
-    assert calls[0][1]["hkey"]
-    assert result.title == "CS2"
-    assert "游戏简介" in (result.text or "")
-    assert "Valve" in (result.text or "")
-    assert len(result.contents) == 1
-    assert result.delivery is not None
-    assert result.extra["render_text_card"] is True
-    assert "游戏简介" in result.extra["text_card_text"]
-
-
-def test_miyoushe_uses_native_delivery_and_enables_comments(tmp_path):
-    calls = []
-
-    class FakeDownloader:
-        def download_img(self, _url, **_kwargs):
-            async def done():
-                return tmp_path / "miyoushe.jpg"
-
-            return asyncio.create_task(done())
-
-        def download_video(self, _url, **_kwargs):
-            async def done():
-                return tmp_path / "miyoushe.mp4"
-
-            return asyncio.create_task(done())
-
-    class FakeResponse:
-        status_code = 200
-
-        @staticmethod
-        def json():
-            return {
-                "retcode": 0,
-                "data": {
-                    "post": {
-                        "post": {
-                            "post_id": "75247726",
-                            "uid": "42",
-                            "subject": "文章标题",
-                            "content": "<p>第一段</p><p>第二段</p>",
-                            "structured_content": json.dumps(
-                                [
-                                    {
-                                        "insert": {
-                                            "image": "https://img.example.com/cover.jpg"
-                                        }
-                                    },
-                                    {"insert": "第一段\n"},
-                                    {
-                                        "insert": {
-                                            "image": "https://img.example.com/body.jpg"
-                                        }
-                                    },
-                                    {"insert": "第二段\n"},
-                                ],
-                                ensure_ascii=False,
-                            ),
-                            "cover": "https://img.example.com/cover.jpg",
-                            "images": ["https://img.example.com/body.jpg"],
-                            "created_at": 1_700_000_000,
-                        },
-                        "user": {
-                            "uid": "42",
-                            "nickname": "作者",
-                            "avatar_url": "https://img.example.com/avatar.jpg",
-                        },
-                        "vod_list": [
-                            {
-                                "duration": 12,
-                                "resolutions": [
-                                    {
-                                        "width": 640,
-                                        "height": 360,
-                                        "url": "https://video.example.com/demo.mp4",
-                                    }
-                                ],
-                            }
-                        ],
-                    }
-                },
-            }
-
-    async def run():
-        parser = MiyousheParser(
-            {
-                "cache_dir": str(tmp_path),
-                "comments": {"miyoushe": True},
-                "performance": {},
-            },
-            FakeDownloader(),
-        )
-
-        async def fake_http_get(url, **kwargs):
-            calls.append((url, kwargs))
-            return FakeResponse()
-
-        parser.http_get = fake_http_get
-        keyword, searched = parser.search_url(
-            "https://www.miyoushe.com/ys/article/75247726"
-        )
-        return await parser.parse(keyword, searched)
-
-    result = asyncio.run(run())
-    assert calls[0][0] == MiyousheParser.api_url
-    assert calls[0][1]["params"] == {"post_id": "75247726"}
-    assert calls[0][1]["headers"]["DS"]
-    assert result.text == "第一段\n第二段"
-    assert len(result.contents) == 3
-    assert result.delivery is not None
-    assert len(result.delivery.batches) == 2
-    images, video = result.delivery.batches
-    assert images.mode == "forward"
-    assert isinstance(images.parts[0], ImageContent)
-    assert images.parts[1] == "文章标题"
-    assert images.parts[2] == "第一段"
-    assert isinstance(images.parts[3], ImageContent)
-    assert images.parts[4] == "第二段"
-    assert isinstance(video.parts[0], VideoContent)
-    assert "comment_document_task_factory" not in result.extra
-    assert callable(result.extra["comment_image_task_factory"])
-    assert result.extra["render_text_card"] is True
-    assert result.extra["text_card_avatar"].endswith("avatar.jpg")
-    assert result.extra["text_card_media"].endswith("cover.jpg")
-    assert result.extra["text_card_flow"] == [
-        {"type": "text", "text": "第一段"},
-        {"type": "image", "url": "https://img.example.com/body.jpg"},
-        {"type": "text", "text": "第二段"},
-    ]
-    assert result.extra["delivery_text_card_consume_non_video"] is True
 
 
 def test_bilibili_comment_renderer_prefers_astrbot_canvas(tmp_path):
@@ -2021,8 +1408,6 @@ def test_media_only_card_does_not_use_share_url_as_body(tmp_path):
         ("bilibili", "B站动态", "#fb7299"),
         ("douyin", "抖音", "#fe2c55"),
         ("kuaishou", "快手", "#ff4906"),
-        ("miyoushe", "米游社", "#00b8e6"),
-        ("xiaoheihe", "小黑盒", "#ff6a00"),
         ("xiaohongshu", "小红书", "#ff2442"),
         ("weibo", "微博", "#ff8200"),
         ("acfun", "AcFun", "#fd4c5b"),
@@ -2164,8 +1549,8 @@ def test_unified_long_card_orders_body_media_metrics_and_comments():
 
 def test_unified_long_card_renders_ordered_text_and_image_flow_once():
     html = TextCardRenderer(HtmlRenderService()).build_html(
-        platform_key="miyoushe",
-        platform_name="米游社",
+        platform_key="demo",
+        platform_name="演示平台",
         author_name="作者",
         title="图文文章",
         text="不应额外重复的普通正文",
@@ -2379,7 +1764,7 @@ def test_text_card_without_author_does_not_render_empty_avatar(tmp_path):
     asyncio.run(
         TextCardRenderer(HtmlRenderService(fake_html_render)).render_text_card(
             tmp_path / "game.png",
-            platform_name="小黑盒",
+            platform_name="演示平台",
             author_name=None,
             title="游戏标题",
             text="游戏简介",
@@ -3695,14 +3080,6 @@ def test_comment_feed_footers_use_repository_brand(tmp_path):
         cookie = ""
         cache_dir = tmp_path
 
-    class XiaoheiheParserStub:
-        headers = {}
-        cache_dir = tmp_path
-
-    class MiyousheParserStub:
-        headers = {}
-        cache_dir = tmp_path
-
     class FakeCanvas:
         def __init__(self):
             self.documents = []
@@ -3770,65 +3147,10 @@ def test_comment_feed_footers_use_repository_brand(tmp_path):
 
         weibo_feed.fetch = weibo_fetch
 
-        xiaoheihe_canvas = FakeCanvas()
-        xiaoheihe_feed = XiaoheiheCommentFeed(
-            XiaoheiheParserStub(),
-            xiaoheihe_canvas,
-            limit=1,
-        )
-        xiaoheihe_contents = await xiaoheihe_feed.build_images(
-            "5",
-            [
-                {"comment": "malformed"},
-                {
-                    "comment": [
-                        {
-                            "floor_num": 2,
-                            "text": "评论",
-                            "user": {"username": "用户"},
-                        }
-                    ]
-                },
-            ],
-            work_title="标题",
-            cover="",
-            owner_id="",
-            total=2,
-        )
-
-        miyoushe_canvas = FakeCanvas()
-        miyoushe_feed = MiyousheCommentFeed(
-            MiyousheParserStub(),
-            miyoushe_canvas,
-            limit=1,
-        )
-
-        async def miyoushe_fetch(_post_id):
-            return SimpleNamespace(
-                items=[
-                    {
-                        "reply": {"content": "评论", "created_at": 1},
-                        "user": {"uid": "1", "nickname": "用户"},
-                        "stat": {"like_num": 2},
-                    }
-                ],
-                total=2,
-                has_more=False,
-            )
-
-        miyoushe_feed.fetch = miyoushe_fetch
-
         results = await asyncio.gather(
             bili_feed.build_images(2, 1, video_title="标题", video_cover=""),
             douyin_feed.build_images("3", work_title="标题", cover=""),
             weibo_feed.build_images("4", work_title="标题", cover="", owner_id=""),
-            asyncio.sleep(0, result=xiaoheihe_contents),
-            miyoushe_feed.build_images(
-                "6",
-                work_title="标题",
-                cover="",
-                owner_id="",
-            ),
         )
         await asyncio.gather(
             *(content.get_path() for contents in results for content in contents)
@@ -3837,8 +3159,6 @@ def test_comment_feed_footers_use_repository_brand(tmp_path):
             bili_canvas,
             douyin_canvas,
             weibo_canvas,
-            xiaoheihe_canvas,
-            miyoushe_canvas,
         )
 
     canvases = asyncio.run(run())
@@ -3851,8 +3171,6 @@ def test_comment_layout_cache_versions_invalidate_pre_fix_images():
     assert BiliCommentFeed.CACHE_VERSION == "bili_comment_v14_unified_clean"
     assert DouyinCommentFeed.CACHE_VERSION == "douyin_comment_v13_unified_clean"
     assert WeiboCommentFeed.CACHE_VERSION == "weibo_comment_v13_unified_clean"
-    assert XiaoheiheCommentFeed.CACHE_VERSION == "xiaoheihe_comment_v7_unified_clean"
-    assert MiyousheCommentFeed.CACHE_VERSION == "miyoushe_comment_v7_unified_clean"
 
 
 def test_manifest_has_a_reviewable_upstream_baseline():
@@ -4122,7 +3440,7 @@ def test_body_card_media_never_replaces_single_source_image(tmp_path):
 
 @pytest.mark.parametrize(
     ("platform_name", "display_name"),
-    [("miyoushe", "米游社"), ("xiaoheihe", "小黑盒")],
+    [("demo", "演示平台")],
 )
 def test_native_graphic_posts_render_as_one_direct_image(
     tmp_path,
@@ -4195,6 +3513,7 @@ def test_native_graphic_posts_render_as_one_direct_image(
                 {"type": "image", "url": "https://img.example.com/body.png"},
             ],
             "delivery_text_card_consume_non_video": True,
+            "native_delivery": True,
         },
     )
     event = Event()
@@ -4273,7 +3592,7 @@ def test_native_one_image_flow_keeps_video_separate(tmp_path):
     body_image = PluginImageContent(body_path)
     video = PluginVideoContent(video_path)
     result = ParseResult(
-        platform=Platform(name="xiaoheihe", display_name="小黑盒"),
+        platform=Platform(name="demo", display_name="演示平台"),
         title="帖子标题",
         text="富文本正文",
         contents=[cover, body_image, video],
@@ -4292,6 +3611,7 @@ def test_native_one_image_flow_keeps_video_separate(tmp_path):
                 {"type": "image", "url": "https://img.example.com/body.png"},
             ],
             "delivery_text_card_consume_non_video": True,
+            "native_delivery": True,
         },
     )
     event = Event()
@@ -4314,7 +3634,7 @@ def test_native_one_image_flow_keeps_video_separate(tmp_path):
     assert len(card_chain) == 2
     assert isinstance(card_chain[0], Reply)
     assert isinstance(card_chain[1], MessageImage)
-    assert Path(card_chain[1].file).name.startswith("text_card_xiaoheihe_")
+    assert Path(card_chain[1].file).name.startswith("text_card_demo_")
     assert any(isinstance(chain[0], MessageVideo) for chain in event.sent)
 
 
@@ -4550,7 +3870,7 @@ def test_one_flow_card_failure_restores_native_text_and_images(tmp_path):
 
     source = PluginImageContent(source_path)
     result = ParseResult(
-        platform=Platform(name="miyoushe", display_name="米游社"),
+        platform=Platform(name="demo", display_name="演示平台"),
         title="文章标题",
         text="文章正文",
         contents=[source],
@@ -4567,6 +3887,7 @@ def test_one_flow_card_failure_restores_native_text_and_images(tmp_path):
                 {"type": "image", "url": "https://img.example.com/body.jpg"},
             ],
             "delivery_text_card_consume_non_video": True,
+            "native_delivery": True,
         },
     )
     event = Event()
@@ -4747,7 +4068,7 @@ def test_native_video_comments_also_wait_until_video_send_finishes(tmp_path):
 
     video = VideoContent(video_path)
     result = ParseResult(
-        platform=Platform(name="miyoushe", display_name="米游社"),
+        platform=Platform(name="demo", display_name="演示平台"),
         contents=[video],
         delivery=DeliveryPlan([DeliveryBatch([video])]),
         extra={
@@ -4771,7 +4092,7 @@ def test_native_video_comments_also_wait_until_video_send_finishes(tmp_path):
     assert len(event.sent) == 2
     assert isinstance(event.sent[0][0], MessageVideo)
     assert isinstance(event.sent[1][0], Nodes)
-    assert event.sent[1][0].nodes[0].content[0].text == "米游社 · 热门评论"
+    assert event.sent[1][0].nodes[0].content[0].text == "演示平台 · 热门评论"
 
 
 def test_comment_failure_does_not_block_video(tmp_path):
@@ -5677,24 +4998,24 @@ def test_native_video_delivery_keeps_text_and_video_without_body_card(tmp_path):
 
     video = PluginVideoContent(video_path)
     result = ParseResult(
-        platform=Platform(name="miyoushe", display_name="米游社"),
+        platform=Platform(name="demo", display_name="演示平台"),
         title="文章标题",
         text="文章正文",
         contents=[video],
         delivery=DeliveryPlan(
             [
-                DeliveryBatch(["识别：米游社\n文章正文"]),
+                DeliveryBatch(["识别：演示平台\n文章正文"]),
                 DeliveryBatch([video]),
             ]
         ),
-        extra={"render_text_card": True},
+        extra={"render_text_card": True, "native_delivery": True},
     )
     event = Event()
     asyncio.run(plugin._send_parse_result(event, result))
 
     assert len(event.sent) == 2
     assert isinstance(event.sent[0][0], Plain)
-    assert event.sent[0][0].text == "识别：米游社\n文章正文"
+    assert event.sent[0][0].text == "识别：演示平台\n文章正文"
     assert isinstance(event.sent[1][0], MessageVideo)
 
 
@@ -5788,7 +5109,13 @@ def test_plugin_initializes_and_registers_aiocqhttp_parsers(tmp_path):
         "xigua": True,
         "pipixia": True,
         "weishi": True,
+        "xiaoheihe": True,
+        "miyoushe": True,
     }
+    config["comments"].update({"xiaoheihe": True, "miyoushe": True})
+    config["cookies"].update(
+        {"xiaoheihe_cookie": "retired-cookie", "weibo_cookie": "keep-cookie"}
+    )
     config["integrations"] = {"tieba_api_base": "http://example.invalid/api"}
 
     async def run_lifecycle():
@@ -5798,7 +5125,8 @@ def test_plugin_initializes_and_registers_aiocqhttp_parsers(tmp_path):
             await plugin.initialize()
             try:
                 assert "b23.tv" in plugin.parser_map
-                assert "miyoushe.com" in plugin.parser_map
+                assert "miyoushe.com" not in plugin.parser_map
+                assert "xiaoheihe.cn" not in plugin.parser_map
                 assert "tieba.baidu.com" not in plugin.parser_map
                 assert "y.qq.com" not in plugin.parser_map
                 assert "kugou.com" not in plugin.parser_map
@@ -5821,14 +5149,35 @@ def test_plugin_initializes_and_registers_aiocqhttp_parsers(tmp_path):
                 assert "xigua" not in plugin.config["platforms"]
                 assert "pipixia" not in plugin.config["platforms"]
                 assert "weishi" not in plugin.config["platforms"]
+                for retired_platform in ("xiaoheihe", "miyoushe"):
+                    assert retired_platform not in plugin.config["platforms"]
+                    assert retired_platform not in plugin.config["comments"]
+                assert "xiaoheihe_cookie" not in plugin.config["cookies"]
+                assert plugin.config["cookies"]["weibo_cookie"] == "keep-cookie"
+                saved_config = json.loads(
+                    (tmp_path / "parser_x_config.json").read_text(encoding="utf-8-sig")
+                )
+                assert "xiaoheihe_cookie" not in saved_config["cookies"]
+                for retired_platform in ("xiaoheihe", "miyoushe"):
+                    assert retired_platform not in saved_config["platforms"]
+                    assert retired_platform not in saved_config["comments"]
+                assert {
+                    parser.platform.name for parser in plugin.parser_map.values()
+                } == {
+                    "bilibili",
+                    "douyin",
+                    "kuaishou",
+                    "weibo",
+                    "xiaohongshu",
+                    "acfun",
+                    "netease_music",
+                }
                 assert "integrations" not in plugin.config
                 assert plugin.parser_map["b23.tv"].enable_comment_card is False
                 assert plugin.render_service.available
                 bili = plugin.parser_map["b23.tv"]
                 douyin = plugin.parser_map["douyin"]
                 weibo = plugin.parser_map["weibo.com"]
-                miyoushe = plugin.parser_map["miyoushe.com"]
-                xiaoheihe = plugin.parser_map["xiaoheihe.cn"]
                 xiaohongshu = plugin.parser_map["xhslink.com"]
                 assert bili.render_service is plugin.render_service
                 assert bili.comment_canvas.render_service is plugin.render_service
@@ -5837,14 +5186,8 @@ def test_plugin_initializes_and_registers_aiocqhttp_parsers(tmp_path):
                 assert douyin.comment_canvas.render_service is plugin.render_service
                 assert weibo.render_service is plugin.render_service
                 assert weibo.comment_canvas.render_service is plugin.render_service
-                assert miyoushe.render_service is plugin.render_service
-                assert miyoushe.comment_canvas.render_service is plugin.render_service
-                assert xiaoheihe.render_service is plugin.render_service
-                assert xiaoheihe.comment_canvas.render_service is plugin.render_service
-                assert xiaohongshu.render_service is plugin.render_service
-                assert (
-                    xiaohongshu.comment_canvas.render_service is plugin.render_service
-                )
+                assert not hasattr(xiaohongshu, "render_service")
+                assert not hasattr(xiaohongshu, "comment_canvas")
                 assert {route for route, *_ in context.web_apis} == {
                     "/astrbot_plugin_parser_x/debug/status",
                     "/astrbot_plugin_parser_x/debug/start",

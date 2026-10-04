@@ -50,21 +50,6 @@ KUAISHOU_CARD_THEME = PlatformCardTheme(
     accent_soft="#fff2ec",
 )
 
-MIYOUSHE_CARD_THEME = PlatformCardTheme(
-    key="miyoushe",
-    display_name="米游社",
-    glyph="米",
-    accent="#00b8e6",
-    accent_soft="#e9faff",
-)
-
-XIAOHEIHE_CARD_THEME = PlatformCardTheme(
-    key="xiaoheihe",
-    display_name="小黑盒",
-    glyph="盒",
-    accent="#ff6a00",
-    accent_soft="#fff3ec",
-)
 
 XIAOHONGSHU_CARD_THEME = PlatformCardTheme(
     key="xiaohongshu",
@@ -109,13 +94,6 @@ _THEME_ALIASES = {
     "抖音": DOUYIN_CARD_THEME,
     "kuaishou": KUAISHOU_CARD_THEME,
     "快手": KUAISHOU_CARD_THEME,
-    "miyoushe": MIYOUSHE_CARD_THEME,
-    "mihoyo": MIYOUSHE_CARD_THEME,
-    "米游社": MIYOUSHE_CARD_THEME,
-    "米哈游": MIYOUSHE_CARD_THEME,
-    "xiaoheihe": XIAOHEIHE_CARD_THEME,
-    "heybox": XIAOHEIHE_CARD_THEME,
-    "小黑盒": XIAOHEIHE_CARD_THEME,
     "xiaohongshu": XIAOHONGSHU_CARD_THEME,
     "xhs": XIAOHONGSHU_CARD_THEME,
     "小红书": XIAOHONGSHU_CARD_THEME,
@@ -151,11 +129,9 @@ __all__ = [
     "DEFAULT_CARD_THEME",
     "DOUYIN_CARD_THEME",
     "KUAISHOU_CARD_THEME",
-    "MIYOUSHE_CARD_THEME",
     "NETEASE_MUSIC_CARD_THEME",
     "PlatformCardTheme",
     "WEIBO_CARD_THEME",
-    "XIAOHEIHE_CARD_THEME",
     "XIAOHONGSHU_CARD_THEME",
     "resolve_card_theme",
 ]

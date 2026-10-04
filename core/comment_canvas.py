@@ -7,9 +7,7 @@ from typing import Literal
 
 from .card_theme import (
     DOUYIN_CARD_THEME,
-    MIYOUSHE_CARD_THEME,
     WEIBO_CARD_THEME,
-    XIAOHEIHE_CARD_THEME,
     PlatformCardTheme,
 )
 from .comment_style import COMMENT_HEADER_ICON, standalone_comment_css
@@ -68,8 +66,6 @@ def _comment_theme(
 
 DOUYIN_THEME = _comment_theme(DOUYIN_CARD_THEME, portrait_cover=True)
 WEIBO_THEME = _comment_theme(WEIBO_CARD_THEME)
-XIAOHEIHE_THEME = _comment_theme(XIAOHEIHE_CARD_THEME)
-MIYOUSHE_THEME = _comment_theme(MIYOUSHE_CARD_THEME)
 
 
 @dataclass(slots=True)
@@ -385,8 +381,6 @@ __all__ = [
     "CommentRichPart",
     "CommentTheme",
     "DOUYIN_THEME",
-    "MIYOUSHE_THEME",
     "SocialCommentCanvas",
     "WEIBO_THEME",
-    "XIAOHEIHE_THEME",
 ]

@@ -9,8 +9,6 @@
       "kuaishou": {"description": "快手", "type": "bool", "default": true},
       "weibo": {"description": "微博", "type": "bool", "default": true},
       "xiaohongshu": {"description": "小红书", "type": "bool", "default": true},
-      "miyoushe": {"description": "米游社", "type": "bool", "default": true},
-      "xiaoheihe": {"description": "小黑盒", "type": "bool", "default": true},
       "acfun": {"description": "AcFun（yt-dlp）", "type": "bool", "default": true},
       "netease_music": {"description": "网易云音乐（yt-dlp）", "type": "bool", "default": true}
     }
@@ -28,8 +26,6 @@
         "default": true
       },
       "weibo": {"description": "微博视频评论区", "type": "bool", "default": true},
-      "xiaoheihe": {"description": "小黑盒视频评论区", "type": "bool", "default": true},
-      "miyoushe": {"description": "米游社视频评论区", "type": "bool", "default": true},
       "display_count": {
         "description": "热门评论数量",
         "hint": "按平台热门顺序最多展示多少条主评论，楼中楼首条回复不计入此数量。",
@@ -39,7 +35,7 @@
       },
       "filter": {
         "description": "评论内容过滤",
-        "hint": "统一应用于五个平台的视频评论区；先过滤候选评论，再按热门顺序补足展示数量。",
+        "hint": "统一应用于B站、抖音和微博的视频评论区；先过滤候选评论，再按热门顺序补足展示数量。",
         "type": "object",
         "items": {
           "enabled": {
@@ -161,12 +157,6 @@
       "weibo_cookie": {
         "description": "微博 Cookie",
         "hint": "可选；公开微博和热门评论通常无需登录，受限内容可使用该登录态。",
-        "type": "text",
-        "default": ""
-      },
-      "xiaoheihe_cookie": {
-        "description": "小黑盒 Cookie",
-        "hint": "可选；公开帖子和游戏会先请求签名接口，受限内容或触发验证码时可配置登录态。",
         "type": "text",
         "default": ""
       },

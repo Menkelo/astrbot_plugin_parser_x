@@ -9,34 +9,16 @@ from astrbot.api import logger
 
 BILIBILI_EMOTE_URL = "https://api.bilibili.com/x/emote/package"
 BILIBILI_EMOTE_PANEL_URL = "https://api.bilibili.com/x/emote/user/panel/web"
-MIYOUSHE_EMOTE_URL = "https://bbs-api.miyoushe.com/misc/api/emoticon_set"
-XIAOHEIHE_EMOTE_URL = "https://api.xiaoheihe.cn/bbs/app/api/emojis/list"
 
-_MIYOUSHE_TOKEN_RE = re.compile(r"_\([^()\n]{1,64}\)")
 _SQUARE_TOKEN_RE = re.compile(r"\[[^\[\]\n]{1,64}\]")
 _SQUARE_TOKEN_PLATFORMS = {
     "bilibili",
     "douyin",
     "weibo",
-    "xiaoheihe",
 }
 
 # The official catalog APIs are the primary source. These small fallbacks keep the
 # most common expressions usable during a transient API failure.
-_MIYOUSHE_FALLBACK = {
-    "米游姬-期待": (
-        "https://img-static.mihoyo.com/communityweb/upload/"
-        "6adaac5ed9b16311259d3bbb6c108125.png"
-    ),
-    "米游姬-吃瓜": (
-        "https://img-static.mihoyo.com/communityweb/upload/"
-        "613a2b262af0319edde21587b88a9c6e.png"
-    ),
-    "米游兔-加油": (
-        "https://upload-bbs.miyoushe.com/upload/2023/01/18/"
-        "5857b8a3d4023bd05954225b0d578845_8473504187038159665.png"
-    ),
-}
 
 _BILIBILI_FALLBACK = {
     "[doge]": (
@@ -56,27 +38,9 @@ _BILIBILI_FALLBACK = {
     ),
 }
 
-_XIAOHEIHE_FALLBACK = {
-    "cube_开心": "https://imgheybox.max-c.com/heybox/emoji/cube_21.png",
-    "cube_喜欢": "https://imgheybox.max-c.com/heybox/emoji/cube_14.png",
-    "cube_滑稽": "https://imgheybox.max-c.com/heybox/emoji/cube_34.png",
-    "cube_doge": "https://imgheybox.max-c.com/heybox/emoji/cube_13.png",
-    "cube_赞": "https://imgheybox.max-c.com/heybox/emoji/cube_41.png",
-}
-
-
-def _normalise_miyoushe_name(value: str) -> str:
-    value = value.strip()
-    value = re.sub(r"[\s_—–－]+", "-", value)
-    return re.sub(r"-+", "-", value).strip("-")
-
 
 def clean_emote_token(platform_key: str, token: str) -> str:
     value = str(token or "").strip()
-    if platform_key == "miyoushe":
-        if value.startswith("_(") and value.endswith(")"):
-            value = value[2:-1]
-        return _normalise_miyoushe_name(value)
     if platform_key in _SQUARE_TOKEN_PLATFORMS:
         if value.startswith("[") and value.endswith("]"):
             value = value[1:-1]
@@ -87,10 +51,6 @@ def clean_emote_token(platform_key: str, token: str) -> str:
 def fallback_emote_map(platform_key: str) -> dict[str, str]:
     if platform_key == "bilibili":
         return dict(_BILIBILI_FALLBACK)
-    if platform_key == "miyoushe":
-        return dict(_MIYOUSHE_FALLBACK)
-    if platform_key == "xiaoheihe":
-        return dict(_XIAOHEIHE_FALLBACK)
     return {}
 
 
@@ -99,8 +59,6 @@ def _register(
     platform_key: str,
     name: object,
     url: object,
-    *,
-    overwrite: bool = True,
 ) -> None:
     name_text = str(name or "").strip()
     url_text = str(url or "").strip()
@@ -110,28 +68,7 @@ def _register(
     for key in keys:
         if not key:
             continue
-        if overwrite:
-            output[key] = url_text
-        else:
-            output.setdefault(key, url_text)
-
-
-def build_miyoushe_emote_map(payload: object) -> dict[str, str]:
-    if not isinstance(payload, dict):
-        return {}
-    data = payload.get("data")
-    if not isinstance(data, dict):
-        return {}
-
-    output: dict[str, str] = {}
-    for group in data.get("list") or []:
-        if not isinstance(group, dict):
-            continue
-        for item in group.get("list") or []:
-            if not isinstance(item, dict):
-                continue
-            _register(output, "miyoushe", item.get("name"), item.get("icon"))
-    return output
+        output[key] = url_text
 
 
 def build_bilibili_emote_map(payload: object) -> dict[str, str]:
@@ -157,37 +94,6 @@ def build_bilibili_emote_map(payload: object) -> dict[str, str]:
     return output
 
 
-def build_xiaoheihe_emote_map(payload: object) -> dict[str, str]:
-    if not isinstance(payload, dict):
-        return {}
-    result = payload.get("result")
-    if not isinstance(result, dict):
-        return {}
-
-    output: dict[str, str] = {}
-    for group in result.get("emoji_groups") or []:
-        if not isinstance(group, dict):
-            continue
-        group_code = str(group.get("group_code") or "").strip()
-        for item in group.get("emojis") or []:
-            if not isinstance(item, dict):
-                continue
-            code = str(item.get("code") or item.get("name") or "").strip()
-            image = item.get("img") or item.get("url")
-            if group_code and code:
-                _register(output, "xiaoheihe", f"{group_code}_{code}", image)
-            # Code-only aliases are useful for old payloads, but do not replace an
-            # earlier group when two packs use the same display name.
-            _register(
-                output,
-                "xiaoheihe",
-                code,
-                image,
-                overwrite=False,
-            )
-    return output
-
-
 def resolve_emote_url(
     platform_key: str,
     token: str,
@@ -208,13 +114,7 @@ def iter_emote_matches(
     platform_key: str,
     emotes: Mapping[str, str] | None = None,
 ) -> Iterator[tuple[int, int, str, str]]:
-    pattern = (
-        _MIYOUSHE_TOKEN_RE
-        if platform_key == "miyoushe"
-        else _SQUARE_TOKEN_RE
-        if platform_key in _SQUARE_TOKEN_PLATFORMS
-        else None
-    )
+    pattern = _SQUARE_TOKEN_RE if platform_key in _SQUARE_TOKEN_PLATFORMS else None
     if pattern is None:
         return
     for matched in pattern.finditer(text or ""):
@@ -251,8 +151,6 @@ def select_text_emotes(
 async def load_platform_emotes(
     parser: Any,
     platform_key: str,
-    *,
-    gids: int | str = 2,
 ) -> dict[str, str]:
     cache_attr = f"_parser_x_{platform_key}_emote_map"
     deadline_attr = f"{cache_attr}_deadline"
@@ -264,85 +162,60 @@ async def load_platform_emotes(
 
     output = fallback_emote_map(platform_key)
     http_get = getattr(parser, "http_get", None)
-    if not callable(http_get):
+    if platform_key != "bilibili" or not callable(http_get):
         setattr(parser, cache_attr, output)
         setattr(parser, deadline_attr, now + 10 * 60)
         return output
 
     try:
-        if platform_key == "bilibili":
-            request_headers = dict(getattr(parser, "headers", None) or {})
-            bili_cookie = str(getattr(parser, "bili_ck", "") or "").strip()
-            if bili_cookie:
-                request_headers["Cookie"] = bili_cookie
-            response = await http_get(
-                BILIBILI_EMOTE_URL,
-                params={"business": "reply", "ids": "1"},
-                headers=request_headers,
-                timeout=8,
-                retries=1,
-            )
-            parsed = build_bilibili_emote_map(response.json())
-            if bili_cookie:
-                try:
-                    panel_response = await http_get(
-                        BILIBILI_EMOTE_PANEL_URL,
-                        params={"business": "reply"},
+        request_headers = dict(getattr(parser, "headers", None) or {})
+        bili_cookie = str(getattr(parser, "bili_ck", "") or "").strip()
+        if bili_cookie:
+            request_headers["Cookie"] = bili_cookie
+        response = await http_get(
+            BILIBILI_EMOTE_URL,
+            params={"business": "reply", "ids": "1"},
+            headers=request_headers,
+            timeout=8,
+            retries=1,
+        )
+        parsed = build_bilibili_emote_map(response.json())
+        if bili_cookie:
+            try:
+                panel_response = await http_get(
+                    BILIBILI_EMOTE_PANEL_URL,
+                    params={"business": "reply"},
+                    headers=request_headers,
+                    timeout=8,
+                    retries=1,
+                )
+                panel_payload = panel_response.json()
+                parsed.update(build_bilibili_emote_map(panel_payload))
+                packages = (
+                    (panel_payload.get("data") or {}).get("packages") or []
+                    if isinstance(panel_payload, dict)
+                    else []
+                )
+                package_ids = [
+                    str(package.get("id"))
+                    for package in packages
+                    if isinstance(package, dict)
+                    and package.get("id") not in (None, "", 1, "1")
+                ]
+                if package_ids:
+                    owned_response = await http_get(
+                        BILIBILI_EMOTE_URL,
+                        params={
+                            "business": "reply",
+                            "ids": ",".join(dict.fromkeys(package_ids)),
+                        },
                         headers=request_headers,
                         timeout=8,
                         retries=1,
                     )
-                    panel_payload = panel_response.json()
-                    parsed.update(build_bilibili_emote_map(panel_payload))
-                    packages = (
-                        (panel_payload.get("data") or {}).get("packages") or []
-                        if isinstance(panel_payload, dict)
-                        else []
-                    )
-                    package_ids = [
-                        str(package.get("id"))
-                        for package in packages
-                        if isinstance(package, dict)
-                        and package.get("id") not in (None, "", 1, "1")
-                    ]
-                    if package_ids:
-                        owned_response = await http_get(
-                            BILIBILI_EMOTE_URL,
-                            params={
-                                "business": "reply",
-                                "ids": ",".join(dict.fromkeys(package_ids)),
-                            },
-                            headers=request_headers,
-                            timeout=8,
-                            retries=1,
-                        )
-                        parsed.update(build_bilibili_emote_map(owned_response.json()))
-                except Exception as exc:
-                    logger.debug(f"[bilibili] 用户表情包读取失败，保留公共表情: {exc}")
-        elif platform_key == "miyoushe":
-            response = await http_get(
-                MIYOUSHE_EMOTE_URL,
-                params={"gids": str(gids)},
-                headers=getattr(parser, "headers", None),
-                timeout=8,
-                retries=1,
-            )
-            parsed = build_miyoushe_emote_map(response.json())
-        elif platform_key == "xiaoheihe":
-            response = await http_get(
-                XIAOHEIHE_EMOTE_URL,
-                params={
-                    "web_version": "2.5",
-                    "x_app": "heybox_website",
-                    "_time": int(time.time()),
-                },
-                headers=getattr(parser, "headers", None),
-                timeout=8,
-                retries=1,
-            )
-            parsed = build_xiaoheihe_emote_map(response.json())
-        else:
-            parsed = {}
+                    parsed.update(build_bilibili_emote_map(owned_response.json()))
+            except Exception as exc:
+                logger.debug(f"[bilibili] 用户表情包读取失败，保留公共表情: {exc}")
 
         if getattr(response, "status_code", 200) >= 400:
             raise RuntimeError(f"HTTP {response.status_code}")
@@ -359,8 +232,6 @@ async def load_platform_emotes(
 
 __all__ = [
     "build_bilibili_emote_map",
-    "build_miyoushe_emote_map",
-    "build_xiaoheihe_emote_map",
     "clean_emote_token",
     "contains_platform_emotes",
     "fallback_emote_map",

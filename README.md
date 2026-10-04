@@ -26,11 +26,6 @@ Parser X 是面向 AstrBot `aiocqhttp`（OneBot v11）的国内平台分享链�
   发布时间兼容秒和毫秒时间戳，空正文不会回填分享链接，平台内部的 `[话题]` 标记会清理
   为标准 `#话题#`。评论区抓取已整体移除：签名评论接口依赖账号登录态，存在触发风控封号的
   风险，任何笔记都不再请求或发送评论区。
-- 米游社：文章正文、封面、正文配图和官方表情按富文本原始顺序合成为一张图片；含视频时先
-  发送主内容和源视频，再发送独立评论图，用户自定义评论表情和 Unicode Emoji 会按图片渲染。
-- 小黑盒：帖子概要、富文本正文、配图和平台表情合成为一张图片，不再拆分或重复发送节点；
-  含视频时先发送主内容和源视频，再发送独立评论图。客户端本地缓存路径会被过滤；
-  公开内容会先尝试签名接口，失败后回退公开游戏接口或官方分享页，Cookie 仅用于受限内容。
 
 ### yt-dlp 兼容层
 
@@ -41,7 +36,9 @@ Parser X 是面向 AstrBot `aiocqhttp`（OneBot v11）的国内平台分享链�
 
 插件不注册 TikTok、Twitter/X、Instagram、YouTube、Apple Music、Spotify 等国外平台路由，
 也不注册微信视频号、QQ 音乐、酷狗音乐、汽水音乐和通用网页 AI 总结功能。
-西瓜视频、皮皮虾、微视与贴吧同样不再注册，也不会保留配置开关或兼容层入口。
+西瓜视频、皮皮虾、微视、贴吧、小黑盒与米游社同样不再注册，也不会保留配置开关或兼容层入口。
+
+升级后会自动清除小黑盒、米游社的旧平台与评论开关，以及小黑盒 Cookie。
 
 各平台均可在 AstrBot 插件配置页单独启停。完整的上游功能映射和未移植项见
 [docs/UPSTREAM_COMPATIBILITY.md](docs/UPSTREAM_COMPATIBILITY.md)。
@@ -55,9 +52,8 @@ https://github.com/Menkelo/astrbot_plugin_parser_x
 ```
 
 运行环境还应提供 `ffmpeg`，用于音视频合并、格式转换和 H.264 发送兜底。正文卡仅用于
-纯文本微博、B站图文动态以及小黑盒与米游社的图文一体长卡；其余带媒体的作品直接发送
-源媒体。独立评论区图片、正文卡与这两个平台的图文一体图片均使用 AstrBot 官方
-`html_render`（Canvas/T2I）渲染。
+纯文本微博和 B站图文动态；其余带媒体的作品直接发送源媒体。独立评论区图片与正文卡
+均使用 AstrBot 官方 `html_render`（Canvas/T2I）渲染。
 
 ## 使用
 
@@ -89,10 +85,8 @@ https://github.com/Menkelo/astrbot_plugin_parser_x
 - `cookies.douyin_ck`、`cookies.bili_ck`：原生解析器 Cookie。
 - `cookies.weibo_cookie`：可选微博登录态；公开热门评论通常无需配置。
 - `cookies.ytdlp_cookie_file`：Netscape 格式 Cookie 文件，用于需要登录的平台。
-- `cookies.xiaoheihe_cookie`：可选的小黑盒登录态；公开内容未配置时也会先尝试签名接口。
-- `comments.bilibili`、`comments.douyin`、`comments.weibo`、`comments.xiaoheihe`、
-  `comments.miyoushe`：各平台视频评论区开关；所有平台的纯图文、图集和纯文字作品都不会
-  抓取或发送评论。小红书评论区已移除，不再提供开关。
+- `comments.bilibili`、`comments.douyin`、`comments.weibo`：各平台视频评论区开关；
+  所有平台的纯图文、图集和纯文字作品都不会抓取或发送评论。小红书评论区已移除，不再提供开关。
 - `comments.display_count`：最多展示的热门评论总数。
 - `comments.filter.*`：视频评论共享过滤。默认使用平衡 `@` 处理、二维码图片过滤、明显广告组合
   评分和重复评论去重；二维码检测失败时保留评论，低信息评论过滤默认关闭。
@@ -106,7 +100,7 @@ https://github.com/Menkelo/astrbot_plugin_parser_x
 挂载评论任务，也不会请求或发送评论区。评论抓取、渲染和下载可与视频并行，但实际评论消息会
 等待主内容投递结束，确保先发送视频/主内容，再发送评论区。评论使用独立合并转发，第一节点为
 平台评论标题，后续每张评论图各占一个节点；转发失败时降级逐条发送，评论失败不会阻塞视频。
-五个平台的普通 Unicode Emoji 会渲染为 Twemoji，CDN 不可用时保留原字符；各平台自定义表情
+B站、抖音和微博的普通 Unicode Emoji 会渲染为 Twemoji，CDN 不可用时保留原字符；各平台自定义表情
 继续使用官方目录。
 
 评论适配完成后会先经过统一过滤层，再截取 `comments.display_count`：平衡模式会清除单个
@@ -130,6 +124,8 @@ python tools/check_upstream.py
 避免盲目覆盖本地适配层。
 
 ## 开发与检查
+
+同类开源项目的源码调研与后续改进建议见 [docs/PARSER_RESEARCH.md](docs/PARSER_RESEARCH.md)。
 
 ```bash
 python -m compileall -q .
