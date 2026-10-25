@@ -192,12 +192,6 @@ class ParserXPlugin(Star):
         behavior = self.config.get("behavior", {})
         return behavior if isinstance(behavior, dict) else {}
 
-    def _response_enabled(self) -> bool:
-        return bool(self._behavior().get("response_enabled", True))
-
-    def _should_respond(self, event: AstrMessageEvent) -> bool:
-        return self._response_enabled() and self._session_key(event) not in self._disabled_sessions()
-
     @staticmethod
     def _session_key(event: AstrMessageEvent) -> str:
         origin = event.unified_msg_origin
@@ -2094,8 +2088,6 @@ class ParserXPlugin(Star):
             return
         if not isinstance(event, AiocqhttpMessageEvent):
             return
-        if not self._should_respond(event):
-            return
         umo = event.unified_msg_origin
         text = self._text_from_event(event)
 
@@ -2135,7 +2127,8 @@ class ParserXPlugin(Star):
                 )
                 # 只在此刻贴表情：解析真的产出了结果。
                 # 直播间/被跳过的链接会走 SkipParseException，永远贴不到表情。
-                if not notified and isinstance(event, AiocqhttpMessageEvent):
+                if (self._behavior().get("reaction_enabled", True)
+                        and not notified and isinstance(event, AiocqhttpMessageEvent)):
                     if hasattr(event.message_obj, "message_id"):
                         notified = True
                         asyncio.create_task(

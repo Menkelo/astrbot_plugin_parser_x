@@ -66,7 +66,8 @@ def migrate_config(config: MutableMapping[str, Any]) -> bool:
         if value and value not in normalized:
             normalized.append(value)
     behavior["disabled_sessions"] = normalized
-    behavior["response_enabled"] = bool(behavior.get("response_enabled", True))
+    behavior.pop("response_enabled", None)
+    behavior["reaction_enabled"] = parse_bool(behavior.get("reaction_enabled"), True)
     behavior.pop("show_download_fail_tip", None)
     config["behavior"] = behavior
     for key in (

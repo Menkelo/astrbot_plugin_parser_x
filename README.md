@@ -63,7 +63,8 @@ python -m playwright install chromium
 
 ### 常用配置
 
-- **响应消息解析**（`behavior.response_enabled`）：默认开启。关闭后不响应或解析 QQ 消息；调试台仍可使用。
+- **表情回应**（`behavior.reaction_enabled`）：默认开启。解析成功后给原消息添加表情；关闭仅取消表情，链接解析和媒体发送照常。
+- **评论数量**（`comments.display_count`）：默认 10 条，范围 1–20；楼中楼不占主评论数量。
 - **热门评论 / 卡片开关**（`comments.enabled`）：默认开启。关闭后不生成或发送插件生成的卡片，也不复用旧卡片；原始媒体与原生正文不受影响。
 - **视频源编码偏好**（`performance.video_codec`）：可选 `auto`、`hevc`、`avc`，默认 `hevc`。自动模式保留各平台原选择；明确偏好只从已提供且可识别编码的源中选择，没有目标编码就回退，**不强制转码**。只有单一源或 CDN 镜像的平台保持原源。
 - **平台 Cookie**（`cookies.*`）：按需填写，见下节。

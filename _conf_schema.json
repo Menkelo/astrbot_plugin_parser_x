@@ -113,9 +113,9 @@
     "description": "会话解析管理",
     "type": "object",
     "items": {
-      "response_enabled": {
-        "description": "响应消息解析",
-        "hint": "默认开启。关闭后不响应 QQ 消息，也不解析其中的分享链接；调试台不受影响。",
+      "reaction_enabled": {
+        "description": "表情回应",
+        "hint": "默认开启。解析成功后给原消息添加表情；关闭仅取消表情，不影响链接解析和媒体发送。",
         "type": "bool",
         "default": true
       },
