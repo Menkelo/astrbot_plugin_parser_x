@@ -1,4 +1,23 @@
 {
+  "behavior": {
+    "description": "会话解析管理",
+    "type": "object",
+    "items": {
+      "reaction_enabled": {
+        "description": "表情回应",
+        "hint": "默认开启。解析成功后给原消息添加表情；关闭仅取消表情，不影响链接解析和媒体发送。",
+        "type": "bool",
+        "default": true
+      },
+      "disabled_sessions": {
+        "description": "已关闭解析的会话",
+        "hint": "群聊直接填写群号，每项一个，对所有接入的机器人生效；也可使用 /开启解析、/关闭解析 管理。私聊记录保留完整会话标识。",
+        "type": "list",
+        "default": [],
+        "collapsed": true
+      }
+    }
+  },
   "comments": {
     "description": "热门评论",
     "hint": "各支持平台统一控制；缺少有效登录态或必要参数时自动跳过，失败不影响原始媒体。",
@@ -108,25 +127,6 @@
       }
     },
     "invisible": true
-  },
-  "behavior": {
-    "description": "会话解析管理",
-    "type": "object",
-    "items": {
-      "reaction_enabled": {
-        "description": "表情回应",
-        "hint": "默认开启。解析成功后给原消息添加表情；关闭仅取消表情，不影响链接解析和媒体发送。",
-        "type": "bool",
-        "default": true
-      },
-      "disabled_sessions": {
-        "description": "已关闭解析的会话",
-        "hint": "群聊直接填写群号，每项一个，对所有接入的机器人生效；也可使用 /开启解析、/关闭解析 管理。私聊记录保留完整会话标识。",
-        "type": "list",
-        "default": [],
-        "collapsed": true
-      }
-    }
   },
   "data_dir": {
     "description": "数据目录",
