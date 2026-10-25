@@ -47,8 +47,7 @@
   },
   "cookies": {
     "description": "平台登录态",
-    "hint": "粘贴已登录网页请求的完整 Cookie（不含 Cookie: 前缀）。建议使用小号，勿分享配置或缓存。",
-    "obvious_hint": true,
+    "hint": "粘贴已登录网页请求的完整 Cookie（不含 Cookie: 前缀），建议使用小号，勿分享配置或缓存。",
     "type": "object",
     "items": {
       "douyin_ck": {
