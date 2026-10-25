@@ -5,11 +5,12 @@ import hashlib
 import json
 import re
 import uuid
-from pathlib import Path
 
 from astrbot.api import logger
 
 from .async_cache import AsyncSingleFlight
+from . import cache_policy
+from .cache_policy import reusable_card
 from .comment_canvas import CommentDocument
 from .comment_settings import parse_bool
 from .data import ImageContent, ParseResult
@@ -58,8 +59,9 @@ class CardServiceMixin:
         if isinstance(comments, dict) and not parse_bool(comments.get("enabled", True), True):
             return None
         cached_card = result.extra.get("_disk_card_path")
-        if isinstance(cached_card, Path) and cached_card.is_file() and cached_card.stat().st_size:
+        if reusable_card(cached_card):
             return _GeneratedCardContent(cached_card)
+        result.extra.pop("_disk_card_path", None)
         for name in ("comment_document_cache", "comment_render_cache"):
             if not hasattr(self, name):
                 setattr(self, name, AsyncSingleFlight())
@@ -75,7 +77,7 @@ class CardServiceMixin:
             result.platform.name, result.platform.display_name,
             result.author.name if result.author else None,
             result.title, result.text, result.extra_info, result.timestamp, result.url, extra,
-            "text_card_unified_v13_preserve_mentions",
+            cache_policy.CACHE_BEHAVIOR_VERSION,
         ]
         cache_key = hashlib.sha256(
             json.dumps(identity, sort_keys=True, ensure_ascii=False, default=str).encode()
@@ -136,11 +138,8 @@ class CardServiceMixin:
             r"[^A-Za-z0-9_-]+", "_", result.platform.name or "text"
         ).strip("_") or "text"
         stable_path = self.cache_dir / f"text_card_{platform_slug}_{cache_key}.png"
-        try:
-            if stable_path.is_file() and stable_path.stat().st_size > 0:
-                return ImageContent(stable_path), True
-        except OSError:
-            pass
+        if reusable_card(stable_path):
+            return ImageContent(stable_path), True
 
         # 评论区：仅支持 text_card_comment_factory（返回 CommentDocument）
         # 统一渲染器内联评论区，无需 PIL 拼接、无需下载评论图。

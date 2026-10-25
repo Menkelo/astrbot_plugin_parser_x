@@ -168,7 +168,32 @@ async def exec_ffmpeg_cmd(cmd: list[str]) -> None:
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.PIPE,
         )
-        _, stderr = await process.communicate()
+        try:
+            _, stderr = await process.communicate()
+        except asyncio.CancelledError:
+            async def reap():
+                if process.returncode is None:
+                    try:
+                        process.terminate()
+                    except ProcessLookupError:
+                        pass
+                try:
+                    await asyncio.wait_for(process.communicate(), timeout=3)
+                except asyncio.TimeoutError:
+                    if process.returncode is None:
+                        try:
+                            process.kill()
+                        except ProcessLookupError:
+                            pass
+                    await process.communicate()
+            cleanup = asyncio.create_task(reap())
+            while not cleanup.done():
+                try:
+                    await asyncio.shield(cleanup)
+                except asyncio.CancelledError:
+                    continue
+            cleanup.result()
+            raise
         return_code = process.returncode
     except FileNotFoundError:
         raise RuntimeError("ffmpeg 未安装或无法找到可执行文件")

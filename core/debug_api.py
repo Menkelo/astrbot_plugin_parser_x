@@ -16,6 +16,7 @@ from .comment_settings import parse_bool
 from .debug_page import (
     DebugCaptureEvent,
     DebugMessageSerializer,
+    DebugSessionLimitError,
     debug_issue_event,
     serialize_parse_result,
 )
@@ -188,14 +189,25 @@ class DebugApiMixin:
                 action="请检查链接是否完整，并确认对应平台已在插件配置中开启。",
             )
 
-        session = await self.debug_sessions.create(
-            owner=owner,
-            runner=lambda emit: self._run_debug_page_parse(
-                text,
+        try:
+            session = await self.debug_sessions.create(
                 owner=owner,
-                emit=emit,
-            ),
-        )
+                runner=lambda emit: self._run_debug_page_parse(
+                    text,
+                    owner=owner,
+                    emit=emit,
+                ),
+            )
+        except DebugSessionLimitError as exc:
+            scope = "当前用户" if exc.scope == "owner" else "调试台全局"
+            return self._debug_page_error_response(
+                code="session_limit_reached",
+                title="调试任务数量已达上限",
+                stage="会话",
+                message=f"{scope}最多同时运行 {exc.limit} 个调试任务。",
+                action="请先取消已有任务，或等待任务完成后重试。",
+                status_code=429,
+            )
         return json_response(
             {
                 "session_id": session.session_id,

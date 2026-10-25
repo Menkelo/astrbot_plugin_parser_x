@@ -17,6 +17,7 @@ from pathlib import Path
 from types import UnionType
 from typing import Any, Literal, Union, get_args, get_origin, get_type_hints
 
+from .cache_policy import CACHE_RETENTION_SECONDS, reusable_card
 from .data import (
     AudioContent, Author, DeliveryBatch, DeliveryPlan, DynamicContent, FileContent,
     GraphicsContent, ImageContent, ParseResult, Platform, VideoContent,
@@ -65,6 +66,8 @@ class _Codec:
         actual = path.stat().st_size
         if actual <= 0 or (size is not None and actual != size):
             raise ValueError("Missing, empty, or truncated media")
+        if path.name.startswith("text_card_") and not reusable_card(path):
+            raise ValueError("Expired generated card")
         return path
 
     async def encode(self, value, depth=0):
@@ -111,6 +114,8 @@ class _Codec:
                         raise ValueError("Extra keys must be strings")
                     if "cookie" in key.casefold() or key == "_disk_result_key":
                         continue
+                    if key == "_disk_card_path" and not reusable_card(item):
+                        raise ValueError("Expired or invalid card marker")
                     encoded = await self.encode(item, depth + 1)
                     if encoded is not _SKIP:
                         data[key] = encoded
@@ -138,7 +143,10 @@ class _Codec:
         if kind == "ref":
             return self.decoded[value["id"]]
         if kind == "dict":
-            return {key: self.decode(item, depth + 1) for key, item in value["value"].items()}
+            data = {key: self.decode(item, depth + 1) for key, item in value["value"].items()}
+            if "_disk_card_path" in data and not reusable_card(data["_disk_card_path"]):
+                raise ValueError("Expired or invalid card marker")
+            return data
         if kind == "list":
             return [self.decode(item, depth + 1) for item in value["value"]]
         if kind == "data":
@@ -158,7 +166,7 @@ class _Codec:
 
 class DiskResultCache:
     VERSION = 1
-    TTL_SECONDS = 24 * 60 * 60
+    TTL_SECONDS = CACHE_RETENTION_SECONDS
 
     def __init__(self, cache_dir: Path):
         self.cache_dir = Path(cache_dir).resolve()

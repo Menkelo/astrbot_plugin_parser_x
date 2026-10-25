@@ -12,6 +12,7 @@ from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import (
     AiocqhttpMessageEvent,
 )
 
+from .core import cache_policy
 from .core.arbiter import EmojiLikeArbiter
 from .core.clean import CacheCleaner
 from .core.card_service import CardServiceMixin
@@ -457,7 +458,7 @@ class ParserXPlugin(CardServiceMixin, DeliveryMixin, DebugApiMixin, Star):
         disk_key = None
         if hasattr(self, "cache_dir"):
             from .core.disk_result_cache import DiskResultCache
-            identity = ["disk_result_v2", _config_signature(config),
+            identity = [cache_policy.CACHE_BEHAVIOR_VERSION, _config_signature(config),
                         type(parser).__module__, type(parser).__qualname__,
                         keyword, searched.group(0), searched.groups(), text.strip()]
             disk_key = hashlib.sha256(json.dumps(identity, ensure_ascii=False, default=str).encode()).hexdigest()

@@ -336,58 +336,122 @@ class DebugSession:
     task: asyncio.Task[None] | None = None
     created_at: float = field(default_factory=time.monotonic)
     ended: bool = False
+    expired: bool = False
+    expiry_handle: asyncio.TimerHandle | None = None
+
+
+class DebugSessionLimitError(RuntimeError):
+    """Admission refused without starting a debug runner."""
+
+    def __init__(self, scope: str, limit: int) -> None:
+        self.scope = scope
+        self.limit = limit
+        super().__init__(f"Debug session {scope} active limit ({limit}) reached")
 
 
 class DebugSessionManager:
+    MAX_ACTIVE = 4
+    MAX_ACTIVE_PER_OWNER = 2
+    MAX_EVENTS = 256
+    MAX_FINISHED = 16
+
     def __init__(self, *, ttl: float = 1200) -> None:
-        self.ttl = max(60.0, float(ttl))
+        self.ttl = max(0.001, float(ttl))
         self._sessions: dict[str, DebugSession] = {}
 
     @staticmethod
-    def _finish(session: DebugSession) -> None:
+    def _request_cancel(session: DebugSession) -> None:
+        if (
+            session.task is not None
+            and not session.task.done()
+            and not session.task.cancelling()
+        ):
+            session.task.cancel()
+
+    def _expire(self, session: DebugSession) -> None:
+        if session.expired:
+            return
+        session.expired = True
+        if session.expiry_handle is not None:
+            session.expiry_handle.cancel()
+        if session.task is not None and not session.task.done():
+            self._request_cancel(session)
+        else:
+            self._sessions.pop(session.session_id, None)
+
+    @staticmethod
+    def _cancel_event(session: DebugSession) -> dict[str, Any]:
+        return debug_issue_event(
+            event="cancelled",
+            code="session_expired" if session.expired else "session_cancelled",
+            title="调试会话已过期" if session.expired else "解析已取消",
+            stage="任务",
+            message="调试任务已停止，不会继续生成消息。",
+            action="可以修改输入内容后重新发送。",
+        )
+
+    def _task_done(self, session: DebugSession) -> None:
+        if not session.ended:
+            self._enqueue(session, self._cancel_event(session))
+            self._finish(session)
+        if session.expired:
+            self._sessions.pop(session.session_id, None)
+        finished = [
+            item for item in self._sessions.values()
+            if item.task is not None and item.task.done()
+        ]
+        for item in finished[:-self.MAX_FINISHED]:
+            if item.expiry_handle is not None:
+                item.expiry_handle.cancel()
+            self._sessions.pop(item.session_id, None)
+
+    @staticmethod
+    def _enqueue(session: DebugSession, payload: dict[str, Any] | None) -> None:
+        # Never wait for an SSE consumer, including from cancellation/finally.
+        if session.queue.full():
+            session.queue.get_nowait()
+        session.queue.put_nowait(payload)
+
+    def _finish(self, session: DebugSession) -> None:
         if session.ended:
             return
         session.ended = True
-        session.queue.put_nowait({"event": "session_end"})
-        session.queue.put_nowait(None)
+        self._enqueue(session, {"event": "session_end"})
+        self._enqueue(session, None)
 
-    async def _cleanup(self) -> None:
+    def _cleanup(self) -> None:
         now = time.monotonic()
-        stale = [
-            session_id
-            for session_id, session in self._sessions.items()
-            if now - session.created_at > self.ttl
-        ]
-        for session_id in stale:
-            await self.cancel(session_id, owner=None)
-            self._sessions.pop(session_id, None)
+        for session in list(self._sessions.values()):
+            if now - session.created_at >= self.ttl:
+                self._expire(session)
 
     async def create(self, *, owner: str, runner: DebugRunner) -> DebugSession:
-        await self._cleanup()
+        # No await between admission and insertion: concurrent creates are atomic.
+        self._cleanup()
+        active = [
+            session for session in self._sessions.values()
+            if session.task is not None and not session.task.done()
+        ]
+        if sum(session.owner == owner for session in active) >= self.MAX_ACTIVE_PER_OWNER:
+            raise DebugSessionLimitError("owner", self.MAX_ACTIVE_PER_OWNER)
+        if len(active) >= self.MAX_ACTIVE:
+            raise DebugSessionLimitError("global", self.MAX_ACTIVE)
         session = DebugSession(
             session_id=secrets.token_urlsafe(18),
             owner=owner,
-            queue=asyncio.Queue(),
+            queue=asyncio.Queue(maxsize=self.MAX_EVENTS),
         )
         self._sessions[session.session_id] = session
 
         async def emit(payload: dict[str, Any]) -> None:
-            await session.queue.put(payload)
+            if not session.ended:
+                self._enqueue(session, payload)
 
         async def run() -> None:
             try:
                 await runner(emit)
             except asyncio.CancelledError:
-                await emit(
-                    debug_issue_event(
-                        event="cancelled",
-                        code="session_cancelled",
-                        title="解析已取消",
-                        stage="任务",
-                        message="调试任务已停止，不会继续生成消息。",
-                        action="可以修改输入内容后重新发送。",
-                    )
-                )
+                await emit(self._cancel_event(session))
                 raise
             except Exception:
                 await emit(
@@ -406,11 +470,18 @@ class DebugSessionManager:
             run(),
             name=f"parser_x_debug_{session.session_id}",
         )
+        session.task.add_done_callback(lambda _task: self._task_done(session))
+        session.expiry_handle = asyncio.get_running_loop().call_later(
+            self.ttl, self._expire, session
+        )
         return session
 
     def get(self, session_id: str, *, owner: str) -> DebugSession | None:
         session = self._sessions.get(str(session_id or ""))
         if session is None or session.owner != owner:
+            return None
+        if session.expired or time.monotonic() - session.created_at >= self.ttl:
+            self._expire(session)
             return None
         return session
 
@@ -419,20 +490,9 @@ class DebugSessionManager:
         if session is None or (owner is not None and session.owner != owner):
             return False
         if session.task is not None and not session.task.done():
-            session.task.cancel()
+            self._request_cancel(session)
             await asyncio.gather(session.task, return_exceptions=True)
-            if not session.ended:
-                session.queue.put_nowait(
-                    debug_issue_event(
-                        event="cancelled",
-                        code="session_cancelled",
-                        title="解析已取消",
-                        stage="任务",
-                        message="调试任务已停止，不会继续生成消息。",
-                        action="可以修改输入内容后重新发送。",
-                    )
-                )
-                self._finish(session)
+            self._task_done(session)
         return True
 
     async def stream(self, session: DebugSession):
@@ -448,15 +508,19 @@ class DebugSessionManager:
                 yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
         finally:
             if session.task is not None and not session.task.done():
-                session.task.cancel()
+                self._request_cancel(session)
                 await asyncio.gather(session.task, return_exceptions=True)
+            if session.expiry_handle is not None:
+                session.expiry_handle.cancel()
             self._sessions.pop(session.session_id, None)
 
     async def close(self) -> None:
         sessions = list(self._sessions.values())
         for session in sessions:
+            if session.expiry_handle is not None:
+                session.expiry_handle.cancel()
             if session.task is not None and not session.task.done():
-                session.task.cancel()
+                self._request_cancel(session)
         await asyncio.gather(
             *(session.task for session in sessions if session.task is not None),
             return_exceptions=True,
