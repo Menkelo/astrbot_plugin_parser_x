@@ -33,7 +33,7 @@ def test_debug_api_methods_live_in_a_small_mixin_not_the_plugin():
         node for node in layer_tree.body
         if isinstance(node, ast.ClassDef) and node.name == "DebugApiMixin"
     )
-    assert [ast.unparse(base) for base in plugin.bases] == ["DeliveryMixin", "DebugApiMixin", "Star"]
+    assert [ast.unparse(base) for base in plugin.bases] == ["CardServiceMixin", "DeliveryMixin", "DebugApiMixin", "Star"]
     assert not mixin.bases
     plugin_methods = {
         node.name for node in plugin.body

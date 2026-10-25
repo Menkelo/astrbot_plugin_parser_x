@@ -20,8 +20,7 @@ DELIVERY_METHODS = (
     "_deliver_parse_result",
 )
 MAIN_METHODS = {
-    "_send_parse_result", "_build_text_card_content",
-    "_build_text_card_content_uncached", "_text_card_body", "_bounded_timeout",
+    "_send_parse_result",
     "_collect_parser_matches", "_parse_with_cache", "on_message",
 }
 
@@ -37,7 +36,7 @@ def test_delivery_methods_live_in_a_coherent_mixin_not_the_plugin():
     mixin = next(node for node in layer_tree.body
                  if isinstance(node, ast.ClassDef) and node.name == "DeliveryMixin")
     assert [ast.unparse(base) for base in plugin.bases] == [
-        "DeliveryMixin", "DebugApiMixin", "Star",
+        "CardServiceMixin", "DeliveryMixin", "DebugApiMixin", "Star",
     ]
     assert not mixin.bases
     plugin_methods = {node.name for node in plugin.body
