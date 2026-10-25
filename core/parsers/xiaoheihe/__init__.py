@@ -437,7 +437,7 @@ class XiaoHeiHeParser(BaseParser):
     @handle(
         "xiaoheihe",
         r"https?://api\.xiaoheihe\.cn/v3/bbs/app/api/web/share\?"
-        r"[^\s]*(?:\?|&)link_id=([0-9a-fA-F]+)",
+        r"(?:[^\s&#]*&)*link_id=([0-9a-fA-F]+)(?=&|#|\s|$)",
     )
     async def parse_post(self, searched: re.Match[str]) -> ParseResult:
         link_id = searched.group(1)

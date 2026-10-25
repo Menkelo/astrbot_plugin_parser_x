@@ -413,7 +413,17 @@ def _walk_json_urls(obj: Any) -> list[str]:
 
 
 def _json_url_priority(url: str) -> int | None:
-    low = url.lower()
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+    allowed = ("bilibili.com", "b23.tv", "bili2233.cn", "douyin.com", "iesdouyin.com",
+               "xhslink.com", "xhslink.cn", "xiaohongshu.com", "kuaishou.com",
+               "chenzhongtech.com", "weibo.com", "weibo.cn", "xiaoheihe.cn", "acfun.cn")
+    if parsed.scheme not in {"http", "https"} or not any(host == domain or host.endswith("." + domain) for domain in allowed):
+        return None
+    low = host + parsed.path.lower() + ("?" + parsed.query.lower() if parsed.query else "")
+    if host in {"acfun.cn", "www.acfun.cn", "m.acfun.cn"}:
+        return 15
+
 
     if re.search(r"bilibili\.com/(?:video/)?(?:bv[0-9a-z]{10}|av\d{6,})", low):
         return 0
@@ -517,12 +527,13 @@ def extract_json_url(data: dict | str | None) -> str | None:
         for key1, key2 in keys_to_check:
             val = meta.get(key1, {}).get(key2)
             if val and isinstance(val, str):
-                for url in _iter_urls_from_text(val):
-                    return url.replace("&amp;", "&")
+                found = _pick_supported_json_url(_iter_urls_from_text(val))
+                if found:
+                    return found
 
     found_url = _recursive_find_xhs_url(data)
     if found_url:
-        return found_url.replace("&amp;", "&")
+        return _pick_supported_json_url([found_url])
 
     return None
 

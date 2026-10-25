@@ -143,8 +143,16 @@ class AcFunParser(YtDlpParser):
         # Use the raw uploader, never strip a potentially genuine "Unknown@" nickname.
         return info.uploader or info.channel or "未知作者"
 
+    @handle("acfun.cn", r"https?://(?:www\.|m\.)?acfun\.cn/v/\?(?:[^\s<>#&]+&)*ac=\d+(?:&[^\s<>]*)?")
     @handle("acfun.cn", r"https?://(?:www\.|m\.)?acfun\.cn/v/ac\d+[^\s<>]*")
     async def parse_acfun(self, searched: Match[str]):
+        if "/v/?" in searched.group(0):
+            from urllib.parse import parse_qs, urlsplit
+            video_id = parse_qs(urlsplit(searched.group(0)).query).get("ac", [""])[0]
+            if not video_id.isdigit():
+                raise ParseException("无效的 AcFun 作品编号")
+            _, searched = self.search_url(f"https://www.acfun.cn/v/ac{video_id}")
+
         result = await self._parse_ytdlp(searched)
         # Public page metadata is more accurate than yt-dlp's synthetic channel name.
         # Decode only the assigned JSON value: the script contains other objects too.
