@@ -215,7 +215,7 @@ def test_remux_helper_rejects_empty_output(tmp_path, monkeypatch):
         async def fake_exec(cmd):
             Path(cmd[-1]).write_bytes(b"")
 
-        monkeypatch.setattr("astrbot_plugin_parser_x.main.exec_ffmpeg_cmd", fake_exec)
+        monkeypatch.setattr("astrbot_plugin_parser_x.core.delivery.exec_ffmpeg_cmd", fake_exec)
         with pytest.raises(RuntimeError):
             await plugin._remux_fresh_copy(source)
 
