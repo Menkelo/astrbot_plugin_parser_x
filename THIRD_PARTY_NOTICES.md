@@ -1,45 +1,37 @@
-# Third-party notices
+# 第三方来源与许可声明
 
 ## rconsole-plugin
 
-- Repository: https://github.com/zhiyu1998/rconsole-plugin
-- License: Mulan Permissive Software License, Version 2
-- Use in this project: feature inventory, platform coverage and compatibility baseline. Parser X does not bundle the
-  Yunzai runtime or copy its JavaScript modules verbatim. `core/parsers/douyin/a_bogus.py` is a modified,
-  clean Python adaptation of the behavior in `utils/a-bogus.cjs`; the complete applicable Mulan PSL v2 text is included below in this notice.
+- 来源仓库：https://github.com/zhiyu1998/rconsole-plugin
+- 许可证：木兰宽松许可证，第 2 版（Mulan PSL v2）
+- 本项目用途：功能范围、平台覆盖与兼容行为的参考。Parser X 不包含 Yunzai 运行时，也未直接照搬其 JavaScript 模块。`core/parsers/douyin/a_bogus.py` 是对 `utils/a-bogus.cjs` 相关行为进行修改后的 Python 实现；适用许可证的完整中英文原文附于本文下方。
 
 ## astrbot_plugin_r_parser
 
-- Repository: https://github.com/Menkelo/astrbot_plugin_r_parser
-- License: MIT License (copyright notice retained in `LICENSE`)
-- Use in this project: historical OneBot delivery and lifecycle reference only. The B站评论区
-  implementation is independently adapted from the upstream `rconsole-plugin` behavior and does
-  not reuse that repository's B站评论模块。
+- 来源仓库：https://github.com/Menkelo/astrbot_plugin_r_parser
+- 许可证：MIT 许可证（版权声明保留在 `LICENSE` 中）
+- 本项目用途：历史 OneBot 投递和生命周期实现的参考。B站评论区实现根据上游 `rconsole-plugin` 的行为独立适配，未复用该仓库的 B站评论模块。
 
-## AstrBot documentation and source
+## AstrBot 文档与源码
 
-- Repository: https://github.com/AstrBotDevs/AstrBot
-- Documentation: https://docs.astrbot.app/
-- Use in this project: public plugin API, metadata, storage and aiocqhttp integration contract.
+- 来源仓库：https://github.com/AstrBotDevs/AstrBot
+- 文档：https://docs.astrbot.app/
+- 本项目用途：公共插件 API、元数据、存储及 aiocqhttp 集成约定的参考。
 
 ## zxing-cpp
 
-- Repository: https://github.com/zxing-cpp/zxing-cpp
-- License: Apache License 2.0
-- Use in this project: detect QR codes in user-supplied comment images before rendering video comment cards.
-  Detection is local, bounded by image size and timeouts, and fails open when an image cannot be decoded.
+- 来源仓库：https://github.com/zxing-cpp/zxing-cpp
+- 许可证：Apache 许可证 2.0
+- 本项目用途：渲染评论卡片前，检测评论配图中的二维码。检测在本地完成，并限制图片大小和执行时间；图片无法解码时保留，不因检测失败而过滤。
 
 ## Twemoji
 
-- Repository: https://github.com/jdecked/twemoji
-- Code license: MIT License
-- Graphics license: Creative Commons Attribution 4.0 International (CC BY 4.0)
-- Use in this project: render Unicode Emoji in body and video-comment cards through the Twemoji 15.1 SVG
-  assets served by jsDelivr. Parser X does not bundle the graphics; image load failures replace the image with
-  its original Unicode character. Twemoji graphics are provided by Twitter and project contributors.
+- 来源仓库：https://github.com/jdecked/twemoji
+- 代码许可证：MIT 许可证
+- 图形许可证：知识共享署名 4.0 国际许可协议（CC BY 4.0）
+- 历史用途：曾通过 jsDelivr 提供的 Twemoji 15.1 SVG 资源渲染正文和视频评论卡片中的 Unicode 表情，未将图形资源打包分发；加载失败时回退为原始 Unicode 字符。图形由 Twitter 和项目贡献者提供。当前 Unicode 表情使用本地字体，不再请求 Twemoji CDN；此处保留历史来源说明。
 
-
-## Mulan PSL v2 — complete license text
+## 木兰宽松许可证第 2 版——完整原文
 
 <details>
 <summary>木兰宽松许可证，第2版 / Mulan Permissive Software License, Version 2</summary>

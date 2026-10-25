@@ -1,18 +1,18 @@
-# Test organization
+# 测试目录说明
 
-Run from the plugin checkout with its parent on `PYTHONPATH`:
+在插件 Git 检出目录中执行，并将其父目录加入 `PYTHONPATH`：
 
 ```sh
 PYTHONPATH=.. python -m pytest tests
 ```
 
-The suite deliberately exercises both historical `core.*` imports and package-qualified `astrbot_plugin_parser_x.*` imports. Keep the checkout as the working directory; no test modifies `sys.path` or aliases runtime modules. Test directories are Python packages and shared test helpers use explicit relative imports.
+测试同时覆盖历史 `core.*` 导入和完整包名 `astrbot_plugin_parser_x.*` 导入。请以插件目录为工作目录；测试不会修改 `sys.path` 或为运行模块设置别名。各测试目录是 Python 包，共享辅助代码使用显式相对导入。
 
-## Functional groups and move map
+## 功能分组与迁移对照
 
-All original `tests/test_<name>.py` files moved unchanged in basename to the directory below. No tests were deleted, merged, or renamed; class/function names and parameter IDs remain intact.
+原有 `tests/test_<name>.py` 按下表分组，文件名保持不变。没有删除、合并或重命名测试，测试类、函数和参数标识均保留。
 
-| Directory | Original filename stems (`test_` prefix and `.py` suffix omitted) |
+| 目录 | 原文件名主体（省略 `test_` 前缀及 `.py` 后缀） |
 | --- | --- |
 | `acfun/` | acfun_comment, acfun_emote_catalog, acfun_emote_resilience, acfun_integration, acfun_metadata_correct, acfun_pure_emotes, acfun_ubb |
 | `cache/` | cache_policy_repair, cache_simple_delivery_review, comment_cache_review, comment_card_cache, disk_result_cache, disk_results_integration, result_cache, simple_card_disk_cache |
@@ -26,16 +26,16 @@ All original `tests/test_<name>.py` files moved unchanged in basename to the dir
 | `rendering/` | body_image_scaling, card_flow, card_guard, card_polish, card_service_layer, failed_comment_gallery, optical_spacing, reference_layout, timestamp_highlight, visual_refresh |
 | `routing/` | emoji_ack, factory_routing, live_guard, nonwork_guard, reaction_toggle, routing |
 
-`routing/test_routing.py` retains the historical broad regression suite, including its helper-delegating entry points. Splitting that module would be a separate behavioral refactor, not a file-organization change. Source/schema assertions in relocated modules now traverse two parents to the plugin root instead of one.
+`routing/test_routing.py` 保留历史综合回归用例及其辅助调用。拆分该文件应作为独立重构处理，不混入目录整理。移动后的源码和配置断言使用两级父目录定位插件根目录。
 
-## Shared helper relationships
+## 共享辅助代码关系
 
-- `cache/test_comment_card_cache.py` provides `plugin` and `result` to `cache/test_comment_cache_review.py`, `cache/test_simple_card_disk_cache.py`, and `cache/test_cache_policy_repair.py`.
-- `delivery/test_unified_delivery.py` provides plugin/event/document/forward inspection helpers to `cache/test_cache_simple_delivery_review.py`, `cache/test_disk_results_integration.py`, `cache/test_simple_card_disk_cache.py`, `cache/test_cache_policy_repair.py`, and `delivery/test_disabled_summary_delivery.py`.
-- `routing/test_routing.py` calls the existing parametrized video-completion regression and comment/forward failure helpers in `delivery/test_unified_delivery.py` inside historical test functions, preserving collection without importing additional tests into module globals.
-- `delivery/test_media_completion.py` provides `Downloads`, `Event`, `_FakeCardRenderer`, and `config` to `delivery/test_large_album_forward.py`.
-- `comments/test_comment_filter.py` provides `_entry`, `_filter`, and `_text` to `comments/test_mention_preservation.py`.
-- `routing/test_emoji_ack.py` provides `_plugin` to `routing/test_reaction_toggle.py`.
-- `parsers/test_kuaishou_comment.py` provides `make_feed` and `raw` to `parsers/test_kuaishou_media_repair.py`.
+- `cache/test_comment_card_cache.py` 为同组的缓存复用、简单磁盘缓存和策略修复测试提供 `plugin`、`result`。
+- `delivery/test_unified_delivery.py` 为缓存集成和投递降级测试提供插件、事件、评论文档及转发节点检查辅助代码。
+- `routing/test_routing.py` 在测试函数内部调用统一投递测试的辅助代码，不将其他测试导入模块全局，避免重复收集。
+- `delivery/test_media_completion.py` 为大图集投递测试提供 `Downloads`、`Event`、`_FakeCardRenderer` 和 `config`。
+- `comments/test_comment_filter.py` 为提及保留测试提供 `_entry`、`_filter`、`_text`。
+- `routing/test_emoji_ack.py` 为表情开关测试提供 `_plugin`。
+- `parsers/test_kuaishou_comment.py` 为快手媒体修复测试提供 `make_feed` 和 `raw`。
 
-For collection comparisons, map each moved node ID back through the table (or compare basename plus the complete `::class::test[param-id]` suffix). Directory prefixes necessarily change; all other identity components must match as a multiset.
+对比迁移前后的收集结果时，可按文件名与完整 `::class::test[param-id]` 后缀比较。目录前缀会变化，其余标识及各自出现次数应保持一致。
