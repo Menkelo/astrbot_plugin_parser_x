@@ -9,7 +9,7 @@ import re
 import pytest
 
 from astrbot_plugin_parser_x.core.disk_result_cache import DiskResultCache
-from test_comment_card_cache import plugin, result
+from .test_comment_card_cache import plugin, result
 
 
 @pytest.mark.parametrize('reuse', ['stable', 'marker'])
@@ -78,7 +78,7 @@ def test_card_retention_boundary_and_reads_do_not_touch_write_time(tmp_path, age
 
 
 def test_expired_result_does_not_rebind_older_card(tmp_path):
-    from test_unified_delivery import CaptureEvent, make_plugin, document
+    from ..delivery.test_unified_delivery import CaptureEvent, make_plugin, document
 
     async def run():
         calls = []

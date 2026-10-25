@@ -1,6 +1,6 @@
 """Independent review regressions for cache admission and disk validation."""
 import asyncio
-from test_comment_card_cache import plugin, result
+from .test_comment_card_cache import plugin, result
 from astrbot_plugin_parser_x.core.comment_canvas import CommentDocument, WEIBO_THEME
 
 

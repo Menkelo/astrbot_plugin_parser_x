@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 from packaging.requirements import Requirement
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 PACKAGE = "astrbot_plugin_parser_x"
 
 

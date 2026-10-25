@@ -211,7 +211,7 @@ def test_fixed_cache_policy_applies_to_real_expiration_and_eviction():
 def test_session_management_remains_visible_and_filter_is_not_a_setting():
     import json
     from pathlib import Path
-    schema = json.loads((Path(__file__).parents[1] / "_conf_schema.json").read_text())
+    schema = json.loads((Path(__file__).parents[2] / "_conf_schema.json").read_text())
     assert not schema["behavior"].get("invisible", False)
     assert not schema["behavior"]["items"]["disabled_sessions"].get("invisible", False)
     assert set(schema["comments"]["items"]) == {"enabled", "display_count"}

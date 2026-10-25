@@ -1,6 +1,6 @@
 import asyncio
 import pytest
-from test_emoji_ack import _plugin
+from .test_emoji_ack import _plugin
 
 @pytest.mark.asyncio
 async def test_disabled_reaction_keeps_parse_and_delivery(monkeypatch):

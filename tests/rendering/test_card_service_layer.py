@@ -13,7 +13,7 @@ CARD_METHODS = (
 
 
 def test_card_methods_live_in_a_coherent_mixin_not_the_plugin():
-    root = Path(__file__).resolve().parents[1]
+    root = Path(__file__).resolve().parents[2]
     layer_path = root / "core" / "card_service.py"
     assert layer_path.is_file(), "card preparation must have its own coherent layer"
     main_tree = ast.parse((root / "main.py").read_text(encoding="utf-8"))

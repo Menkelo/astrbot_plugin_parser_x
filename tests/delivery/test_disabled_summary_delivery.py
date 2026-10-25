@@ -6,7 +6,7 @@ from astrbot.api.message_components import Image, Nodes, Plain, Video
 from astrbot_plugin_parser_x.core.data import (
     DeliveryBatch, DeliveryPlan, ImageContent, ParseResult, Platform, VideoContent,
 )
-from test_unified_delivery import CaptureEvent, document, forwarded_parts, make_plugin
+from .test_unified_delivery import CaptureEvent, document, forwarded_parts, make_plugin
 
 
 def delivered_parts(event):

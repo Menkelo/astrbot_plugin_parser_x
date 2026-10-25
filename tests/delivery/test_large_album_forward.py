@@ -6,7 +6,7 @@ from astrbot.api.message_components import Image, Nodes
 from astrbot_plugin_parser_x.core.data import DeliveryBatch, DeliveryPlan
 from astrbot_plugin_parser_x.core.parsers import DouyinParser
 from astrbot_plugin_parser_x.main import ParserXPlugin
-from test_media_completion import Downloads, Event, _FakeCardRenderer, config
+from .test_media_completion import Downloads, Event, _FakeCardRenderer, config
 
 
 @pytest.mark.parametrize('native_plan', [False, True])

@@ -4,7 +4,7 @@ import asyncio
 import pytest
 
 from astrbot_plugin_parser_x.core.async_cache import AsyncSingleFlight
-from test_comment_card_cache import plugin, result
+from .test_comment_card_cache import plugin, result
 
 
 def test_singleflight_retains_no_completed_values():
@@ -41,7 +41,7 @@ def test_card_download_does_not_refresh_mtime_but_source_media_does(tmp_path):
 @pytest.mark.parametrize('native', [False, True])
 @pytest.mark.parametrize('kind', ['image', 'video'])
 def test_disabled_comments_preserve_source_and_native_text(tmp_path, native, kind):
-    from test_unified_delivery import CaptureEvent, forwarded_parts, make_plugin
+    from ..delivery.test_unified_delivery import CaptureEvent, forwarded_parts, make_plugin
     from astrbot.api.message_components import Image, Plain, Video
     from astrbot_plugin_parser_x.core.data import (
         DeliveryBatch, DeliveryPlan, ImageContent, ParseResult, Platform, VideoContent,

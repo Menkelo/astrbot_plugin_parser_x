@@ -4,7 +4,7 @@ from pathlib import Path
 
 
 def test_no_retired_delivery_or_temporary_diagnostic_entrypoints():
-    root = Path(__file__).resolve().parents[1]
+    root = Path(__file__).resolve().parents[2]
     trees = [ast.parse((root / name).read_text(encoding='utf-8'))
              for name in ('main.py', 'core/delivery.py')]
     names = {node.name for tree in trees for node in ast.walk(tree)

@@ -3,7 +3,7 @@ import asyncio
 import pytest
 from astrbot.api.message_components import Image, Video, Nodes
 from astrbot_plugin_parser_x.core.data import DeliveryPlan, DeliveryBatch, ImageContent, VideoContent, ParseResult, Platform
-from test_unified_delivery import make_plugin, CaptureEvent, forwarded_parts, document
+from ..delivery.test_unified_delivery import make_plugin, CaptureEvent, forwarded_parts, document
 
 @pytest.mark.parametrize('native', [False, True])
 @pytest.mark.parametrize('video', [False, True])

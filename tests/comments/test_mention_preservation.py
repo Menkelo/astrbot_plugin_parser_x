@@ -1,6 +1,6 @@
 import asyncio
 import pytest
-from test_comment_filter import _entry, _filter, _text
+from .test_comment_filter import _entry, _filter, _text
 from core.comment_canvas import CommentRichPart
 
 @pytest.mark.parametrize('text',['@用户 这段说得很有道理','@甲 @乙 这两个步骤必须一起执行','这是给 @用户 的具体建议'])

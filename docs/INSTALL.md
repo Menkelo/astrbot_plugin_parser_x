@@ -4,6 +4,12 @@
 
 仅支持 AstrBot 的 **aiocqhttp / OneBot v11**。推荐通过 AstrBot WebUI 的插件管理器安装仓库，或由管理员按 AstrBot 插件目录规范安装源码。插件不会自动安装系统软件、浏览器或浏览器系统库。
 
+## 测试目录与安装归档
+
+测试源码保留在 Git 仓库，按功能分组，仅供开发验证，插件运行不会自动执行测试。GitHub 源码 ZIP 通过 `.gitattributes` 的 `export-ignore` 排除 `tests/`；正常使用 HTTPS GitHub 仓库地址并走源码 ZIP 安装时不包含测试。wheel 同样不包含测试。
+
+直接 `git clone`、使用 Git 传输安装或保留已有插件目录时，不保证排除已有测试；Git 忽略规则不会删除已安装文件。开发者应克隆仓库运行测试，而不是使用已排除测试的源码 ZIP。开发测试目录说明见 [tests/README.md](../tests/README.md)（仅 Git 检出中可用）。
+
 ## 外部依赖（必须由管理员准备）
 
 1. 在运行 AstrBot 的容器/主机安装 **ffmpeg**，确保 AstrBot 进程的 `PATH` 能找到它。
@@ -112,7 +118,7 @@ wheel 使用 `astrbot_plugin_parser_x` 包命名空间，而不是把 `core` 泄
 
 ```bash
 python -m pip install 'setuptools>=61' wheel pytest packaging
-python -m pytest -q tests/test_factory_packaging.py
+python -m pytest -q tests/contracts/test_factory_packaging.py
 ```
 
 测试在临时目录复制白名单源文件后调用构建后端，检查 wheel/sdist 的命名空间、入口/资源、依赖一致性及运行数据排除；不下载浏览器、不联网调用平台接口、不加载生产插件，也不修改生产环境。

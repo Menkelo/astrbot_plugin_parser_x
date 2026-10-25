@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 
-ROOT = Path(__file__).parents[1]
+ROOT = Path(__file__).parents[2]
 
 
 def test_debug_mode_controls_preserve_existing_dom_references():

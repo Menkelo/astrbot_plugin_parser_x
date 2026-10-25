@@ -20,7 +20,7 @@ DEBUG_API_METHODS = (
 
 
 def test_debug_api_methods_live_in_a_small_mixin_not_the_plugin():
-    root = Path(__file__).resolve().parents[1]
+    root = Path(__file__).resolve().parents[2]
     layer_path = root / "core" / "debug_api.py"
     assert layer_path.is_file(), "debug API must have its own coherent layer"
     main_tree = ast.parse((root / "main.py").read_text(encoding="utf-8"))

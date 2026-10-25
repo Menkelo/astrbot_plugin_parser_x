@@ -10,7 +10,7 @@ def test_video_cover_is_forwarded_to_unified_card(tmp_path):
     assert result.extra.get('text_card_media') == 'https://cdn.example/cover.jpg'
 
 def test_real_headurl_field_embedded_for_root_and_reply():
-    from test_kuaishou_comment import make_feed, raw
+    from .test_kuaishou_comment import make_feed, raw
     feed, _ = make_feed([
         {'result':1,'rootCommentsV2':[raw(headurl='http://cdn.example/root.jpg',hasSubComments=True)],'pcursorV2':'no_more'},
         {'result':1,'subCommentsV2':[raw(2,'真实回复',headurl='http://cdn.example/reply.jpg')],'pcursorV2':'no_more'},
@@ -26,7 +26,7 @@ def test_real_headurl_field_embedded_for_root_and_reply():
     assert len(seen)==2
 
 def test_avatar_http_response_becomes_offline_image_data_uri():
-    from test_kuaishou_comment import make_feed,raw
+    from .test_kuaishou_comment import make_feed,raw
     import base64
     feed,_=make_feed([{'result':1,'rootCommentsV2':[raw(headurl='http://cdn.example/avatar.png')],'pcursorV2':'no_more'}])
     png=base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aS9sAAAAASUVORK5CYII=')

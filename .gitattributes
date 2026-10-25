@@ -1,0 +1,2 @@
+# Keep development tests in Git while excluding them from source install archives.
+/tests export-ignore

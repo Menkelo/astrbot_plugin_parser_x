@@ -440,7 +440,7 @@ def test_foreign_platform_routes_are_not_registered():
         & keywords
     )
     schema = json.loads(
-        (Path(__file__).parents[1] / "_conf_schema.json").read_text(encoding="utf-8")
+        (Path(__file__).parents[2] / "_conf_schema.json").read_text(encoding="utf-8")
     )
     platform_keys = set(schema.get("platforms", {}).get("items", {}))
     assert (
@@ -473,20 +473,20 @@ def test_tieba_is_fully_removed_from_routes_and_configuration():
         for keyword, _ in parser._key_patterns
     }
     schema = json.loads(
-        (Path(__file__).parents[1] / "_conf_schema.json").read_text(encoding="utf-8")
+        (Path(__file__).parents[2] / "_conf_schema.json").read_text(encoding="utf-8")
     )
 
     assert "tieba.baidu.com" not in keywords
     assert "platforms" not in schema
     assert "integrations" not in schema
-    assert not (Path(__file__).parents[1] / "core" / "parsers" / "tieba.py").exists()
+    assert not (Path(__file__).parents[2] / "core" / "parsers" / "tieba.py").exists()
 
 
 def test_retired_ytdlp_platforms_are_fully_removed():
     classes = BaseParser.get_all_subclass()
     keywords = {keyword for parser in classes for keyword, _ in parser._key_patterns}
     schema = json.loads(
-        (Path(__file__).parents[1] / "_conf_schema.json").read_text(encoding="utf-8")
+        (Path(__file__).parents[2] / "_conf_schema.json").read_text(encoding="utf-8")
     )
 
     assert (
@@ -507,7 +507,7 @@ def test_retired_ytdlp_platforms_are_fully_removed():
 
 def test_config_schema_uses_latest_astrbot_panel_features():
     schema = json.loads(
-        (Path(__file__).parents[1] / "_conf_schema.json").read_text(encoding="utf-8")
+        (Path(__file__).parents[2] / "_conf_schema.json").read_text(encoding="utf-8")
     )
     assert "rendering" not in schema
     assert "rendering" not in schema
@@ -529,7 +529,7 @@ def test_config_schema_uses_latest_astrbot_panel_features():
 
 def test_local_render_legacy_assets_stay_removed():
     # 历史防线：不再有 live_renderer 模块，也不再有无沙箱的持久化浏览器上下文。
-    repo_root = Path(__file__).parents[1]
+    repo_root = Path(__file__).parents[2]
     source_files = [repo_root / "main.py", *(repo_root / "core").rglob("*.py")]
     source = "\n".join(path.read_text(encoding="utf-8") for path in source_files)
     assert not (repo_root / "core" / "live_renderer.py").exists()
@@ -537,7 +537,7 @@ def test_local_render_legacy_assets_stay_removed():
 
 
 def test_local_render_backend_is_the_only_browser_touchpoint():
-    repo_root = Path(__file__).parents[1]
+    repo_root = Path(__file__).parents[2]
     # Playwright 只允许出现在本地渲染后端这一个模块里，别的模块（尤其是渲染网关）
     # 不得直接碰浏览器。
     browser_modules = [
@@ -4159,22 +4159,22 @@ def test_one_flow_card_failure_restores_native_text_and_images(tmp_path):
 def test_video_comments_wait_until_main_video_send_finishes(tmp_path):
     # Both native and non-native document paths are exercised by the shared
     # parametrized regression suite; this keeps the historical entry point.
-    from test_unified_delivery import test_ready_comment_card_waits_for_video_completion
+    from ..delivery.test_unified_delivery import test_ready_comment_card_waits_for_video_completion
     test_ready_comment_card_waits_for_video_completion(tmp_path, False)
 
 
 def test_native_video_comments_also_wait_until_video_send_finishes(tmp_path):
-    from test_unified_delivery import test_ready_comment_card_waits_for_video_completion
+    from ..delivery.test_unified_delivery import test_ready_comment_card_waits_for_video_completion
     test_ready_comment_card_waits_for_video_completion(tmp_path, True)
 
 
 def test_comment_failure_does_not_block_video(tmp_path):
-    from test_unified_delivery import assert_comment_failure_preserves_video
+    from ..delivery.test_unified_delivery import assert_comment_failure_preserves_video
     assert_comment_failure_preserves_video(tmp_path, "failure")
 
 
 def test_comment_forward_failure_falls_back_to_title_and_images(tmp_path):
-    from test_unified_delivery import assert_forward_failure_preserves_card
+    from ..delivery.test_unified_delivery import assert_forward_failure_preserves_card
     assert_forward_failure_preserves_card(tmp_path)
 
 
@@ -5061,7 +5061,7 @@ def test_plugin_initializes_and_registers_aiocqhttp_parsers(tmp_path):
             self.web_apis.append((route, handler, methods, description))
 
     schema = json.loads(
-        (Path(__file__).parents[1] / "_conf_schema.json").read_text(encoding="utf-8")
+        (Path(__file__).parents[2] / "_conf_schema.json").read_text(encoding="utf-8")
     )
     config = AstrBotConfig(
         config_path=str(tmp_path / "parser_x_config.json"),

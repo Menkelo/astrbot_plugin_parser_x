@@ -27,7 +27,7 @@ def _response_json(response) -> dict:
 
 
 def test_debug_switch_defaults_to_disabled_and_page_assets_exist():
-    root = Path(__file__).parents[1]
+    root = Path(__file__).parents[2]
     schema = json.loads((root / "_conf_schema.json").read_text(encoding="utf-8"))
     debug_html = (root / "pages" / "debug" / "index.html").read_text(encoding="utf-8")
     debug_app = (root / "pages" / "debug" / "app.js").read_text(encoding="utf-8")

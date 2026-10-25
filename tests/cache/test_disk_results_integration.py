@@ -2,7 +2,7 @@ import asyncio
 import re
 from pathlib import Path
 import pytest
-from test_unified_delivery import make_plugin, CaptureEvent
+from ..delivery.test_unified_delivery import make_plugin, CaptureEvent
 from astrbot_plugin_parser_x.core.data import ParseResult, Platform, VideoContent
 
 
@@ -30,7 +30,7 @@ async def test_disk_result_survives_fresh_plugin_without_parser_request(tmp_path
 
 @pytest.mark.asyncio
 async def test_card_and_media_restored_without_fetch_or_render(tmp_path):
-    from test_unified_delivery import document
+    from ..delivery.test_unified_delivery import document
     calls=[]
     video=tmp_path/'video.mp4';video.write_bytes(b'v'*200)
     class Parser:
