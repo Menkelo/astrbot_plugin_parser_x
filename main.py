@@ -310,7 +310,8 @@ class ParserXPlugin(Star):
     @staticmethod
     def _comment_forward_segments(result: ParseResult, card_segment) -> list:
         """Only video works get a separate comment-forward preview heading."""
-        if result.has_video and callable(result.extra.get("text_card_comment_factory")):
+        if result.has_video and (callable(result.extra.get("text_card_comment_factory"))
+                                 or result.extra.get("_disk_has_comments")):
             return [Plain(f"{result.platform.display_name} · 热门评论"), card_segment]
         return [card_segment]
 
@@ -378,6 +379,9 @@ class ParserXPlugin(Star):
         comments = getattr(self, "config", {}).get("comments", {})
         if isinstance(comments, dict) and not parse_bool(comments.get("enabled", True), True):
             return None
+        cached_card = result.extra.get("_disk_card_path")
+        if isinstance(cached_card, Path) and cached_card.is_file() and cached_card.stat().st_size:
+            return _GeneratedCardContent(cached_card)
         for name in ("comment_document_cache", "comment_render_cache"):
             if not hasattr(self, name):
                 setattr(self, name, AsyncSingleFlight())
@@ -385,7 +389,7 @@ class ParserXPlugin(Star):
         # same work. Include every renderer input and settings, never raw cookies.
         extra = {
             key: value for key, value in result.extra.items()
-            if not callable(value) and not isinstance(value, asyncio.Future)
+            if not key.startswith("_disk_") and not callable(value) and not isinstance(value, asyncio.Future)
         }
         identity = [
             _config_signature(getattr(self, "config", {})), include_comments,
@@ -399,12 +403,14 @@ class ParserXPlugin(Star):
             json.dumps(identity, sort_keys=True, ensure_ascii=False, default=str).encode()
         ).hexdigest()
 
-        card, _ = await self.comment_render_cache.get(
+        card, complete = await self.comment_render_cache.get(
             cache_key,
             lambda: self._build_text_card_content_uncached(
                 result, include_comments=include_comments, cache_key=cache_key
             ),
         )
+        if complete and card is not None:
+            result.extra["_disk_card_path"] = await card.get_path()
         return _GeneratedCardContent(card.path_task) if card is not None else None
 
     async def _build_text_card_content_uncached(
@@ -976,6 +982,24 @@ class ParserXPlugin(Star):
                     await event.send(event.chain_result([segment]))
 
     async def _send_parse_result(self, event: AstrMessageEvent, result: ParseResult):
+        await self._deliver_parse_result(event, result)
+        key = result.extra.get("_disk_result_key")
+        if key and result.extra.get("cache_result") is not False:
+            comments = getattr(self, "config", {}).get("comments", {})
+            cards_enabled = not isinstance(comments, dict) or parse_bool(comments.get("enabled", True), True)
+            if (not cards_enabled or not result.extra.get("render_text_card")
+                    or result.extra.get("_disk_card_path")):
+                from .core.disk_result_cache import DiskResultCache
+                result.extra["_disk_has_comments"] = bool(
+                    result.extra.get("_disk_has_comments")
+                    or callable(result.extra.get("text_card_comment_factory"))
+                )
+                try:
+                    await DiskResultCache(self.cache_dir).save(key, result)
+                except Exception as exc:
+                    logger.warning(f"解析结果缓存保存失败: {type(exc).__name__}")
+
+    async def _deliver_parse_result(self, event: AstrMessageEvent, result: ParseResult):
         """Deliver source media and one unified body/comment card per parse."""
         show_download_fail_tip = self._show_download_fail_tip()
         node_uin = str(event.get_sender_id())
@@ -2075,9 +2099,21 @@ class ParserXPlugin(Star):
         cache = getattr(self, "result_cache", None)
         if cache is None:
             cache = self.result_cache = ParseResultCache()
-        return await cache.parse(
-            parser, keyword, searched, text, getattr(self, "config", {})
-        )
+        config = getattr(self, "config", {})
+        disk_key = None
+        if hasattr(self, "cache_dir"):
+            from .core.disk_result_cache import DiskResultCache
+            identity = ["disk_result_v2", _config_signature(config),
+                        type(parser).__module__, type(parser).__qualname__,
+                        keyword, searched.group(0), searched.groups(), text.strip()]
+            disk_key = hashlib.sha256(json.dumps(identity, ensure_ascii=False, default=str).encode()).hexdigest()
+            restored = DiskResultCache(self.cache_dir).load(disk_key)
+            if restored is not None:
+                return restored
+        result = await cache.parse(parser, keyword, searched, text, config)
+        if disk_key:
+            result.extra["_disk_result_key"] = disk_key
+        return result
 
 
     @filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP)
