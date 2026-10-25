@@ -53,6 +53,7 @@ def test_migration_preserves_user_data_and_removes_retired_controls():
     assert config["performance"] == {"video_codec": "avc"}
     assert config["behavior"] == {
         "disabled_sessions": ["current", "legacy"],
+        "response_enabled": True,
     }
     assert config["debug"]["enabled"] is True
     for key in (
@@ -94,6 +95,7 @@ def test_migration_legacy_fields_and_new_fields_have_clear_precedence():
     assert config["comments"]["enabled"] is False
     assert config["behavior"] == {
         "disabled_sessions": ["old"],
+        "response_enabled": True,
     }
     config = {
         "comments": {

@@ -192,6 +192,12 @@ class ParserXPlugin(Star):
         behavior = self.config.get("behavior", {})
         return behavior if isinstance(behavior, dict) else {}
 
+    def _response_enabled(self) -> bool:
+        return bool(self._behavior().get("response_enabled", True))
+
+    def _should_respond(self, event: AstrMessageEvent) -> bool:
+        return self._response_enabled() and self._session_key(event) not in self._disabled_sessions()
+
     @staticmethod
     def _session_key(event: AstrMessageEvent) -> str:
         origin = event.unified_msg_origin
@@ -2087,6 +2093,8 @@ class ParserXPlugin(Star):
         if self._debug_mode_enabled():
             return
         if not isinstance(event, AiocqhttpMessageEvent):
+            return
+        if not self._should_respond(event):
             return
         umo = event.unified_msg_origin
         text = self._text_from_event(event)
