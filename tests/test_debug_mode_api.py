@@ -3,7 +3,7 @@ import json
 from unittest.mock import patch
 
 import pytest
-from astrbot_plugin_parser_x import main as module
+from astrbot_plugin_parser_x.core import debug_api as module
 from astrbot_plugin_parser_x.main import ParserXPlugin
 
 

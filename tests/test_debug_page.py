@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, patch
 
 from astrbot.api.message_components import Image, Node, Nodes, Plain
 from astrbot_plugin_parser_x import main as main_module
+from astrbot_plugin_parser_x.core import debug_api as debug_api_module
 from astrbot_plugin_parser_x.main import PLUGIN_NAME, ParserXPlugin
 
 from core.data import ParseResult, Platform
@@ -118,7 +119,7 @@ def test_debug_page_is_available_when_exclusive_mode_is_disabled():
 
     async def run():
         with (
-            patch.object(main_module, "request", FakeRequest()),
+            patch.object(debug_api_module, "request", FakeRequest()),
             patch.object(
                 plugin,
                 "_run_debug_page_parse",
@@ -156,7 +157,7 @@ def test_debug_page_rejects_a_request_without_dashboard_page_owner():
     )
 
     async def run():
-        with patch.object(main_module, "request", request_without_owner):
+        with patch.object(debug_api_module, "request", request_without_owner):
             response = await plugin.debug_page_status()
         await plugin.debug_sessions.close()
         return response
