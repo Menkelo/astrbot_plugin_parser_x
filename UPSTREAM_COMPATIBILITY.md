@@ -22,8 +22,6 @@
 | 插件自更新 | 不适用 | - | 由 AstrBot 插件管理器负责 |
 | Redis 信任用户/海外开关 | 不适用 | - | 改用 AstrBot 配置与会话开关 |
 
-0.9.0 媒体补全的行为、测试与实网验收边界见 [MEDIA_COMPLETION.md](MEDIA_COMPLETION.md)。
-
 ## 评论区范围
 
 - 已适配：B站、抖音（需要 `douyin_ck`）、微博
