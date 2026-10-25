@@ -6,7 +6,7 @@ version: 0.0.1
 author: Menkelo
 support_platforms:
   - aiocqhttp
-astrbot_version: ">=4.17,<5"
+astrbot_version: ">=4.26.0,<5"
 repo: https://github.com/Menkelo/astrbot_plugin_parser_x
 tags:
   - parser
