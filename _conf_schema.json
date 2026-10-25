@@ -1,0 +1,142 @@
+{
+  "comments": {
+    "description": "热门评论",
+    "hint": "各支持平台统一控制；缺少有效登录态或必要参数时自动跳过，失败不影响原始媒体。",
+    "type": "object",
+    "items": {
+      "enabled": {
+        "description": "启用热门评论",
+        "type": "bool",
+        "default": true
+      },
+      "display_count": {
+        "description": "热门评论数量",
+        "hint": "按平台热门顺序最多展示多少条主评论，楼中楼首条回复不计入此数量。",
+        "type": "int",
+        "slider": {
+          "min": 1,
+          "max": 20,
+          "step": 1
+        },
+        "default": 10
+      }
+    }
+  },
+  "performance": {
+    "description": "视频取流",
+    "hint": "媒体单个资源上限固定为 100 MB。",
+    "type": "object",
+    "items": {
+      "video_codec": {
+        "description": "B站视频编码偏好",
+        "hint": "HEVC 体积通常更小；若协议端或客户端兼容性不好请选择 AVC。",
+        "type": "string",
+        "options": [
+          "auto",
+          "hevc",
+          "avc"
+        ],
+        "labels": [
+          "自动选择",
+          "优先 HEVC / H.265",
+          "优先 AVC / H.264"
+        ],
+        "default": "hevc"
+      }
+    }
+  },
+  "cookies": {
+    "description": "平台登录态",
+    "hint": "填写浏览器请求中的原始 Cookie 字符串；部分平台会在插件缓存中生成供下载器使用的 Cookie 文件。建议使用专用小号，勿分享配置或缓存。",
+    "obvious_hint": true,
+    "type": "object",
+    "items": {
+      "douyin_ck": {
+        "description": "抖音 Cookie",
+        "hint": "用于作品解析和热门评论；评论总开关开启且登录态有效时才尝试抓取。建议使用专用小号。",
+        "type": "text",
+        "default": ""
+      },
+      "bili_ck": {
+        "description": "Bilibili Cookie",
+        "hint": "用于提升 B站接口稳定性、动态解析与可用清晰度。",
+        "type": "text",
+        "default": ""
+      },
+      "weibo_cookie": {
+        "description": "微博 Cookie",
+        "hint": "公开微博可匿名尝试解析；当前插件抓取热门评论需填写有效 Cookie 并开启评论总开关，受限内容仍取决于账号权限与平台风控。",
+        "type": "text",
+        "default": ""
+      },
+      "xiaohongshu_cookie": {
+        "description": "小红书 Cookie",
+        "hint": "用于作品解析和热门评论；评论总开关开启且登录态有效时才尝试抓取。建议使用专用小号。",
+        "type": "text",
+        "default": ""
+      },
+      "xiaoheihe_cookie": {
+        "description": "小黑盒 Cookie",
+        "hint": "小黑盒接口有风控，不填时大概率无法解析（返回 show_captcha）。请在已登录小黑盒网页的浏览器里打开开发者工具，复制任意请求的完整 Cookie 粘贴到此处。建议使用专用小号，失效后及时更新。",
+        "type": "text",
+        "default": ""
+      },
+      "kuaishou_cookie": {
+        "description": "快手 Cookie",
+        "hint": "可选；填写已登录快手网页请求中的原始 Cookie 字符串。用于热门评论接口，留空按匿名模式尝试；匿名或登录态均可能受平台风控限制，失败只跳过评论，不影响原始媒体。建议使用专用小号。",
+        "type": "text",
+        "default": ""
+      },
+      "acfun_cookie": {
+        "description": "AcFun Cookie",
+        "hint": "可选；粘贴已登录 AcFun 浏览器请求中的完整 Cookie 字符串（如 key=value; key2=value2），不要粘贴 Cookie: 前缀、JSON 或 Netscape 文件。用于视频解析、下载、页面元数据及评论接口；留空按匿名模式尝试，不能绕过权限或风控。",
+        "type": "text",
+        "default": ""
+      }
+    }
+  },
+  "debug": {
+    "description": "Canvas 调试台",
+    "hint": "仅调试模式通过调试页管理。",
+    "type": "object",
+    "items": {
+      "enabled": {
+        "description": "只响应调试页面",
+        "hint": "默认关闭。关闭时调试台和普通消息均可解析；开启后仅接受 Parser X 调试页请求，QQ 与其他消息适配器中的分享链接不再触发解析。",
+        "type": "bool",
+        "default": false,
+        "invisible": true
+      }
+    },
+    "invisible": true
+  },
+  "behavior": {
+    "description": "会话解析管理",
+    "type": "object",
+    "items": {
+      "disabled_sessions": {
+        "description": "已关闭解析的会话",
+        "hint": "通常无需手动编辑；可在对应会话中使用 /开启解析、/关闭解析 管理。",
+        "type": "list",
+        "default": [],
+        "collapsed": true
+      }
+    }
+  },
+  "data_dir": {
+    "description": "数据目录",
+    "type": "string",
+    "invisible": true
+  },
+  "cache_dir": {
+    "description": "缓存目录",
+    "type": "string",
+    "invisible": true
+  },
+  "config_slim_migrated": {
+    "description": "精简配置迁移标记",
+    "type": "bool",
+    "default": false,
+    "invisible": true
+  }
+}

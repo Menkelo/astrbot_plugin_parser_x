@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Parser X 调试会话</title>
+    <link rel="stylesheet" href="./style.css?v=0.5.25" />
+  </head>
+  <body>
+    <main class="stage">
+      <section class="qq-window" aria-labelledby="conversation-title">
+        <header class="qq-titlebar">
+          <div class="contact">
+            <div class="contact-avatar" aria-hidden="true">
+              <span>PX</span>
+              <i></i>
+            </div>
+            <div class="contact-copy">
+              <div class="contact-name-row">
+                <h1 id="conversation-title">Parser X</h1>
+                <span class="pc-label">PC QQ</span>
+              </div>
+              <p id="run-subtitle">正在连接插件</p>
+            </div>
+          </div>
+
+          <div class="titlebar-controls">
+          <div id="mode-status" class="mode-status is-loading" role="status">
+            <span class="status-dot" aria-hidden="true"></span>
+            <span id="mode-status-text">读取状态</span>
+          </div>
+        <section class="mode-panel" aria-label="调试模式设置">
+          <div class="mode-setting">
+            <div>
+              <label id="mode-toggle-label" for="mode-toggle">仅响应调试页面</label>
+              <p id="mode-notice" class="mode-notice" role="status" aria-live="polite">正在读取模式…</p>
+            </div>
+            <button id="mode-toggle" class="mode-toggle" type="button" role="switch"
+              aria-checked="false" aria-labelledby="mode-toggle-label"
+              aria-describedby="mode-notice" disabled>读取中…</button>
+          </div>
+          <button id="mode-retry" class="quiet-button" type="button" hidden>重新读取状态</button>
+        </section>
+          </div>
+        </header>
+
+        <div id="qq-chat-body" class="qq-chat-body">
+          <div id="empty-state" class="empty-state">
+            <div class="empty-avatar" aria-hidden="true">PX</div>
+            <h2>在这里直接测试解析</h2>
+            <p>把原本要发送到 QQ 的分享文本粘贴到下方输入框。</p>
+          </div>
+          <div id="message-timeline" class="message-timeline" aria-live="polite"></div>
+        </div>
+
+        <form id="parse-form" class="qq-composer">
+          <textarea
+            id="share-text"
+            name="share-text"
+            rows="3"
+            maxlength="20000"
+            placeholder="输入分享文本或链接"
+            aria-label="分享文本或链接"
+            spellcheck="false"
+          ></textarea>
+          <div class="composer-footer">
+            <span class="composer-hint">Ctrl + Enter 发送</span>
+            <span id="char-count" class="char-count">0 / 20000</span>
+            <div class="composer-actions">
+              <button id="cancel-button" class="quiet-button" type="button" hidden disabled>
+                取消
+              </button>
+              <button id="clear-button" class="quiet-button" type="button">
+                清空
+              </button>
+              <button id="run-button" class="send-button" type="submit" disabled>
+                发送
+              </button>
+            </div>
+          </div>
+        </form>
+      </section>
+    </main>
+
+    <div id="toast" class="toast" role="alert" aria-live="assertive" hidden></div>
+    <script type="module" src="./app.js?v=0.5.25"></script>
+  </body>
+</html>

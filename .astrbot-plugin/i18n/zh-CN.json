@@ -1,0 +1,8 @@
+{
+  "pages": {
+    "debug": {
+      "title": "解析调试台",
+      "description": "在 AstrBot Canvas 插件页面中运行真实解析流程并预览 QQ 消息结构。"
+    }
+  }
+}

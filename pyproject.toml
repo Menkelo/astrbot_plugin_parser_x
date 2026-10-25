@@ -1,0 +1,59 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "astrbot_plugin_parser_x"
+version = "0.0.1"
+description = "AstrBot 国内平台链接解析插件"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+# One source of truth for WebUI installs and Python distribution metadata.
+dynamic = ["dependencies"]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-asyncio>=0.21",
+    "pytest-cov>=4.0",
+    "ruff>=0.1",
+]
+
+[tool.setuptools]
+# The checkout itself is the AstrBot plugin package, not a top-level core package.
+package-dir = {astrbot_plugin_parser_x = "."}
+packages = [
+    "astrbot_plugin_parser_x",
+    "astrbot_plugin_parser_x.core",
+    "astrbot_plugin_parser_x.core.parsers",
+    "astrbot_plugin_parser_x.core.parsers.bilibili",
+    "astrbot_plugin_parser_x.core.parsers.douyin",
+    "astrbot_plugin_parser_x.core.parsers.xiaoheihe",
+]
+include-package-data = false
+
+[tool.setuptools.dynamic]
+dependencies = {file = ["requirements.txt"]}
+
+[tool.setuptools.package-data]
+astrbot_plugin_parser_x = [
+    "_conf_schema.json", "metadata.yaml", "requirements.txt", "logo.png",
+    "LICENSE", "THIRD_PARTY_NOTICES.md", "licenses/*.txt",
+    "pages/debug/*.html", "pages/debug/*.js", "pages/debug/*.css",
+    "assets/fonts/*.woff2",
+]
+
+[tool.ruff]
+line-length = 88
+target-version = "py310"
+exclude = [".venv-parserx", ".venv-parserx314"]
+
+[tool.ruff.lint]
+select = ["F", "I"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]

@@ -1,0 +1,34 @@
+# Python 字节码缓存
+__pycache__/
+*.py[cod]
+*$py.class
+
+# 打包 / 分发
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# 虚拟环境
+.venv/
+.venv-*/
+venv/
+env/
+
+# 插件运行期数据（缓存、下载产物、cookie 等）
+data/
+cache_dir/
+*.log
+
+# 编辑器 / 系统
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# 插件自带的渲染字体（随插件分发，勿忽略）
+!assets/fonts/
+!assets/fonts/*.woff2
+
+# pytest 缓存
+.pytest_cache/

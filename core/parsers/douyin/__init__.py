@@ -1,0 +1,857 @@
+import asyncio
+import re
+import time
+from pathlib import Path
+from typing import TYPE_CHECKING, ClassVar
+from urllib.parse import parse_qs, urlparse
+
+import msgspec
+from astrbot.api import logger
+from astrbot.core.config.astrbot_config import AstrBotConfig
+
+from ...card_flow import apply_author_block, build_card_extra
+from ...comment_settings import CommentSettings
+from ...data import DynamicContent
+from ...download import Downloader
+from ...html_renderer import HtmlRenderService
+from ...utils import cookies_str_to_netscape
+from ...nonwork_guard import is_nonwork_url
+from ..base import BaseParser, ParseException, Platform, SkipParseException, handle
+from ..gallery import first_media_url, live_photo, motion_url, ordered_media_plan
+from .comment_feed import DouyinCommentFeed
+from .extractor import (
+    extract_id_from_query,
+    extract_router_data_json_str,
+    extract_static_image_urls_deep,
+    pick_primary_aweme,
+)
+
+if TYPE_CHECKING:
+    from ...data import ParseResult
+
+
+class DouyinParser(BaseParser):
+    platform: ClassVar[Platform] = Platform(name="douyin", display_name="抖音")
+    DAILY_UNSUPPORTED_TEXT: ClassVar[str] = "无法解析抖音限时日常内容"
+    UNRECOGNIZED_TEXT: ClassVar[str] = (
+        "插件无法识别到当前抖音内容（可能是私密、已删除或需登录可见的作品），请换一个试试！"
+    )
+
+    def __init__(self, config: AstrBotConfig, downloader: Downloader):
+        super().__init__(config, downloader)
+
+        self.cookies = ""
+        self._cookiefile: Path | None = None
+        ck_conf = config.get("cookies", {})
+        if isinstance(ck_conf, dict):
+            self.cookies = ck_conf.get("douyin_ck", "")
+
+        if self.cookies:
+            self._set_cookies(self.cookies)
+            self._cookiefile = self._write_cookiefile(self.cookies)
+
+        comment_settings = CommentSettings.from_config(config, "douyin")
+        self.enable_comment_card = comment_settings.enabled
+        self.comment_limit = comment_settings.display_count
+        self.comment_timeout = comment_settings.timeout
+        self.render_service = HtmlRenderService.from_config(config)
+        self.comment_feed = DouyinCommentFeed(
+            self,
+            limit=self.comment_limit,
+        )
+
+    def set_render_service(self, render_service: HtmlRenderService) -> None:
+        self.render_service = render_service
+
+    def _comment_extra(
+        self,
+        aweme_id: str,
+        *,
+        title: str,
+        cover: str | None,
+        owner: dict | None,
+    ) -> dict:
+        if not self.enable_comment_card or not self.cookies or not aweme_id:
+            return {}
+
+        async def build_comment_document():
+            return await self.comment_feed.build_document(
+                str(aweme_id),
+                work_title=title,
+                cover=cover,
+                owner=owner or {},
+            )
+
+        return {
+            "text_card_comment_factory": build_comment_document,
+            "comment_timeout": self.comment_timeout,
+        }
+
+    def _set_cookies(self, cookies: str):
+        cleaned = cookies.replace("\n", "").replace("\r", "").strip()
+        if cleaned:
+            self.ios_headers["Cookie"] = cleaned
+            self.android_headers["Cookie"] = cleaned
+
+    def _write_cookiefile(self, cookies: str) -> Path | None:
+        """
+        将用户配置的 douyin_ck 写成 yt-dlp 可读的 Netscape cookiefile，
+        供 _parse_with_ytdlp 兜底时传给 ytdlp_extract_info / download_video。
+        """
+        if not cookies:
+            return None
+        try:
+            path = self.cache_dir / "douyin_cookies.txt"
+            path.write_text(
+                cookies_str_to_netscape(cookies),
+                encoding="utf-8",
+            )
+            return path
+        except Exception as e:
+            logger.warning(f"[Douyin] cookie 文件写入失败: {e}")
+            return None
+
+    @staticmethod
+    def _build_iesdouyin_url(ty: str, vid: str) -> str:
+        return f"https://www.iesdouyin.com/share/{ty}/{vid}"
+
+    @staticmethod
+    def _build_m_douyin_url(ty: str, vid: str) -> str:
+        return f"https://m.douyin.com/share/{ty}/{vid}"
+
+    @staticmethod
+    def _is_live_url(url: str) -> bool:
+        u = (url or "").lower()
+        live_keys = [
+            "live.douyin.com",
+            "webcast.douyin.com",
+            "webcast.amemv.com",
+            "/live/",
+            "reflow/",
+            "live_room",
+            "enterfrom=live",
+        ]
+        return any(k in u for k in live_keys)
+
+    @staticmethod
+    def _is_profile_url(url: str | None) -> bool:
+        """
+        抖音用户主页（非作品）判定。
+
+        用户主页落点形如：
+        - https://www.iesdouyin.com/share/user/MS4wLjABAAAA...
+        - https://www.douyin.com/user/MS4wLjABAAAA...?sec_uid=...
+        - https://www.douyin.com/user/self?showTab=post
+
+        这类链接不是作品，解析必然失败；且主页的 sec_uid 是
+        "MS4wLjABAAAA..." 这种非纯数字串，以前会被 extract_id_from_query
+        末尾的 `/(\\d+)$` 规则误当成作品 ID，最后抛出
+        "短链解析失败，无法识别最终链接"，把一句"不用解析"变成了报错。
+        """
+        u = (url or "").strip().lower()
+        if not u:
+            return False
+        if re.search(r"(?:douyin|iesdouyin)\.com/(?:share/)?(?:user|profile)/", u):
+            return True
+        if re.search(r"douyin\.com/@[^/?#]+", u):
+            return True
+        return "sec_uid=" in u and not re.search(r"/share/(?:video|note|slides)/", u)
+
+    def _create_image_contents_with_headers(
+        self, urls: list[str], headers: dict[str, str]
+    ):
+        """
+        兼容不同版本 BaseParser.create_image_contents：
+        - 支持 ext_headers 就带 headers；
+        - 不支持就退回旧调用。
+        """
+        if not urls:
+            return []
+
+        try:
+            return self.create_image_contents(urls, ext_headers=headers)
+        except TypeError:
+            return self.create_image_contents(urls)
+
+    @staticmethod
+    def _dedupe_urls(urls: list[str]) -> list[str]:
+        seen: set[str] = set()
+        out: list[str] = []
+
+        for u in urls:
+            if not u or u in seen:
+                continue
+            seen.add(u)
+            out.append(u)
+
+        return out
+
+    @staticmethod
+    def _is_audio_like_url(url: str) -> bool:
+        low = (url or "").lower()
+        return any(
+            x in low
+            for x in (
+                ".mp3",
+                ".m4a",
+                ".aac",
+                ".wav",
+                "mime_type=audio",
+                "ies-music",
+            )
+        )
+
+    @staticmethod
+    def _is_video_like_url(url: str) -> bool:
+        low = (url or "").lower()
+        if DouyinParser._is_audio_like_url(url):
+            return False
+        if DouyinParser._has_url_as_video_id(url):
+            return False
+        return any(
+            x in low
+            for x in (
+                ".mp4",
+                ".m3u8",
+                "video_id=",
+                "mime_type=video",
+                "/video/",
+                "playwm",
+                "aweme/v1/play",
+                "api-play",
+                "is_play_url=1",
+            )
+        )
+
+    @staticmethod
+    def _has_url_as_video_id(url: str) -> bool:
+        try:
+            query = parse_qs(urlparse(url).query)
+        except Exception:
+            return False
+
+        for key in ("video_id", "vid"):
+            for value in query.get(key) or []:
+                if isinstance(value, str) and value.lower().startswith(
+                    ("http://", "https://")
+                ):
+                    return True
+
+        return False
+
+    @staticmethod
+    def _has_image_album(aweme: dict) -> bool:
+        images = aweme.get("images")
+        return isinstance(images, list) and len(images) > 0
+
+    @classmethod
+    def _unsupported_daily_result(cls) -> "ParseResult":
+        return cls.result(
+            text=cls.DAILY_UNSUPPORTED_TEXT,
+            extra={"plain_text_only": True},
+        )
+
+    @staticmethod
+    def _looks_like_daily_share_url(text: str | None) -> bool:
+        if not text:
+            return False
+
+        candidates = re.findall(r"https?://[^\s\"'<>]+", text)
+        if not candidates:
+            candidates = [text]
+
+        for candidate in candidates:
+            try:
+                query = parse_qs(urlparse(candidate).query, keep_blank_values=True)
+            except Exception:
+                continue
+
+            activity_text = " ".join(query.get("activity_info") or []).lower()
+            extra_text = " ".join(query.get("share_extra_params") or []).lower()
+            compact_extra = re.sub(r"\s+", "", extra_text)
+
+            has_social_activity = any(
+                key in activity_text
+                for key in (
+                    "social_author_id",
+                    "social_share_id",
+                    "social_share_time",
+                    "social_share_user_id",
+                )
+            )
+            has_daily_schema = (
+                '"schema_type":"1"' in compact_extra
+                or "'schema_type':'1'" in compact_extra
+            )
+            has_empty_title_type = any(
+                value == "" for value in query.get("titleType") or []
+            )
+
+            if has_social_activity and has_daily_schema and has_empty_title_type:
+                return True
+
+        return False
+
+    @staticmethod
+    def _is_fresh_cookies_error(error: Exception) -> bool:
+        text = str(error).lower()
+        return "fresh cookies" in text and "needed" in text
+
+    @staticmethod
+    def _is_cookie_error(error: Exception) -> bool:
+        text = str(error).lower()
+        return any(kw in text for kw in ("cookie", "douyin_ck", "fresh cookies"))
+
+    @staticmethod
+    def _is_profile_share_text(text: str | None) -> bool:
+        """
+        从分享文案判断链接指向的是"某人主页"而不是某个作品。
+
+        抖音"分享主页"的固定文案：
+        长按复制此条消息，打开抖音搜索，查看TA的更多作品。
+        这类文案里的短链落点是 /share/user/<sec_uid>，本来就不该解析。
+        """
+        if not text:
+            return False
+        if "更多作品" in text:
+            return True
+        low = text.lower()
+        return "复制此条消息，打开抖音搜索" in low and "的" in low
+
+    @classmethod
+    def _is_unsupported_share_text(cls, text: str | None) -> bool:
+        """分享文案已明示"无需解析"（用户主页）时，直接跳过。"""
+        return cls._is_profile_share_text(text)
+
+    def _terminal_parse_exception(self, error: Exception) -> ParseException:
+        """
+        把兜底链路的原始报错转换成用户可读提示。
+
+        抖音对私密/已删除/需登录可见的作品，无论有没有带 cookie，
+        yt-dlp 都统一抛 "Fresh cookies ... are needed"，文本里带 cookie 字样。
+        以前只要命中 cookie 关键词就提示"未配置 douyin_ck"，
+        对已经配好 cookie 的用户是纯误导。只有确实没配 cookie 时才提示去配置，
+        否则一律按"内容无法识别"处理。
+        """
+        if not self.cookies and self._is_cookie_error(error):
+            return ParseException("未配置抖音 cookie (douyin_ck)，无法解析")
+        return ParseException(self.UNRECOGNIZED_TEXT)
+
+    async def _ytdlp_fallback(self, vid: str):
+        """ytdlp 是最后一道兜底，它失败即为终态，不再向用户暴露原始报错。"""
+        try:
+            return await self._parse_with_ytdlp(vid)
+        except SkipParseException:
+            raise
+        except Exception as e:
+            logger.warning(f"[Douyin] ytdlp 兜底失败 vid={vid}: {e}")
+            raise self._terminal_parse_exception(e) from e
+
+    async def _resolve_final_url_by_head(self, url: str) -> str | None:
+        """
+        抖音短链只需要最终落点。优先用 HEAD 跟随跳转，避免像 get_final_url
+        那样把整页 HTML 正文全部下载下来再丢弃（短链解析的主要耗时点）。
+        HEAD 被拒或拿不到可用 URL 时返回 None，调用方回退到 GET 方案。
+        """
+        try:
+            resp = await self.client.head(
+                url,
+                headers=self.ios_headers,
+                allow_redirects=True,
+                timeout=5,
+                verify=False,
+            )
+        except Exception as e:
+            logger.debug(f"[Douyin] HEAD 短链解析失败: {url} | {e}")
+            return None
+
+        if getattr(resp, "status_code", 0) >= 400:
+            return None
+
+        final_url = str(getattr(resp, "url", "") or "").strip()
+        if not final_url or final_url == url:
+            return None
+
+        return final_url
+
+    def _is_short_link_target_unsupported(self, url: str | None) -> bool:
+        """短链落点是否属于"无需解析"的链接（直播 / 用户主页等）。"""
+        return is_nonwork_url(url) or self._is_live_url(url or "") or self._is_profile_url(url)
+
+    @handle("v.douyin", r"v\.douyin\.com/[a-zA-Z0-9_\-]+")
+    @handle("jx.douyin", r"jx\.douyin\.com/[a-zA-Z0-9_\-]+")
+    async def _parse_short_link(self, searched: re.Match[str]):
+        short_url = f"https://{searched.group(0)}"
+
+        # 分享文案已经明示是"主页/直播"时，连跳转都不必做。
+        if self._is_unsupported_share_text(searched.string):
+            raise SkipParseException()
+
+        # HEAD 优先（不下载正文），失败再退回完整 GET 跟随重定向。
+        _t0 = time.monotonic()
+        final_url = await self._resolve_final_url_by_head(short_url)
+        if not final_url:
+            final_url = await self.get_final_url(
+                short_url,
+                headers=self.ios_headers,
+                timeout=8,
+                retries=1,
+            )
+            logger.debug(
+                f"[Douyin][计时] 短链解析(HEAD失败→GET兜底) "
+                f"{time.monotonic() - _t0:.2f}s → {final_url}"
+            )
+        else:
+            logger.debug(
+                f"[Douyin][计时] 短链解析(HEAD) "
+                f"{time.monotonic() - _t0:.2f}s → {final_url}"
+            )
+
+        if self._is_short_link_target_unsupported(final_url):
+            logger.debug(f"[Douyin] 短链落点为直播/用户主页，跳过长链解析 {final_url}")
+            raise SkipParseException()
+
+        try:
+            keyword, m = self.search_url(final_url)
+        except Exception:
+            keyword, m = None, None
+
+        if keyword and m:
+            try:
+                return await self.parse(keyword, m)
+            except SkipParseException:
+                raise
+            except Exception as e:
+                logger.warning(f"[Douyin] 短链路由后解析失败，尝试ID兜底: {e}")
+
+        vid = extract_id_from_query(final_url)
+        if vid and not self._is_short_link_target_unsupported(final_url):
+            try:
+                return await self._parse_by_id_fallback(vid)
+            except SkipParseException:
+                raise
+            except Exception as e:
+                if self._looks_like_daily_share_url(
+                    final_url
+                ) and self._is_fresh_cookies_error(e):
+                    return self._unsupported_daily_result()
+                logger.warning(f"[Douyin] 短链ID兜底失败: {e} | 最终链接: {final_url}")
+                raise self._terminal_parse_exception(e) from e
+
+        raise ParseException(f"短链解析失败，无法识别最终链接: {final_url}")
+
+    @handle(
+        "modal_id",
+        r"(?:https?://)?(?:www\.)?douyin\.com/\S*[?&]modal_id=(?P<vid>\d+)",
+    )
+    async def _parse_modal(self, searched: re.Match[str]):
+        # www.douyin.com/jingxuan?modal_id=xxx 这类"精选/弹窗"链接：
+        # 视频 ID 在 query 的 modal_id 里，路径不是 /video/ 或 /note/，
+        # 此前所有 handler 都匹配不上 → 整条消息被静默忽略、无任何响应。
+        # 直接取出 ID，走稳定的 m / iesdouyin 解析路径。
+        vid = searched.group("vid")
+        if not vid:
+            raise ParseException("未能从链接中提取抖音视频 ID(modal_id)")
+        return await self._parse_by_id_fallback(vid)
+
+    @handle("douyin", r"douyin\.com/(?P<ty>video|note)/(?P<vid>\d+)")
+    @handle("iesdouyin", r"iesdouyin\.com/share/(?P<ty>slides|video|note)/(?P<vid>\d+)")
+    @handle("m.douyin", r"m\.douyin\.com/share/(?P<ty>slides|video|note)/(?P<vid>\d+)")
+    async def _parse_douyin(self, searched: re.Match[str]):
+        ty, vid = searched.group("ty"), searched.group("vid")
+
+        if ty == "slides":
+            return await self.parse_slides(vid)
+
+        # 移动端分享域名(m / iesdouyin)更稳定，www.douyin.com 反爬较重。
+        # 以前是串行逐个尝试，m 慢或失败就要等满单域名超时(8s)才试下一个，
+        # 最坏可累计 ~24s。现改为三域名并发竞速：谁先成功用谁、取消其余，
+        # 总耗时≈最快可用域名的单次耗时。
+        try:
+            return await self._race_parse_video(
+                [
+                    self._build_m_douyin_url(ty, vid),
+                    self._build_iesdouyin_url(ty, vid),
+                    f"https://www.douyin.com/{ty}/{vid}",
+                ],
+                vid,
+            )
+        except SkipParseException:
+            raise
+        except Exception as last_err:
+            logger.warning(f"[Douyin] 直连解析失败，切换 ytdlp 兜底: {last_err}")
+            return await self._ytdlp_fallback(vid)
+
+    async def _parse_by_id_fallback(self, vid: str):
+        # video / note 两种类型 × m / iesdouyin 两个域名，共 4 个候选。
+        # 旧实现 4 个串行 await，最坏累计 ~32s；改为全部并发竞速。
+        candidates = [self._build_m_douyin_url(ty, vid) for ty in ("video", "note")] + [
+            self._build_iesdouyin_url(ty, vid) for ty in ("video", "note")
+        ]
+
+        try:
+            return await self._race_parse_video(candidates, vid)
+        except SkipParseException:
+            raise
+        except Exception as last_err:
+            logger.warning(
+                f"[Douyin] _parse_by_id_fallback 失败，切换 ytdlp: {last_err}"
+            )
+            return await self._ytdlp_fallback(vid)
+
+    async def _fetch_router_resp(self, url: str, timeout: int = 8):
+        """
+        仅负责抓取抖音分享页并做直播/状态码校验，返回响应对象。
+        与解析处理拆开，便于多域名竞速。
+        """
+        if self._is_live_url(url):
+            raise SkipParseException()
+
+        resp = await self.http_get(
+            url,
+            headers=self.ios_headers,
+            allow_redirects=True,
+            timeout=timeout,
+            retries=1,
+        )
+
+        if resp.status_code != 200:
+            raise ParseException(f"页面请求失败 Status: {resp.status_code}")
+
+        final_resp_url = str(getattr(resp, "url", "") or "")
+        if self._is_live_url(final_resp_url):
+            raise SkipParseException()
+
+        return resp
+
+    async def _race_parse_video(self, urls: list[str], vid: str):
+        """
+        多域名并发竞速解析：同时向所有候选分享域名发起抓取，
+        谁先成功就用谁，立即取消其余在途请求。
+
+        这是抖音解析提速的关键点：旧实现是串行 for 循环逐个 await，
+        m.douyin 一旦慢/失败就要等满单域名超时(8s)才试下一个，最坏
+        3 个域名串行可累计 ~24s。改为并发后总耗时≈最快可用域名的单次耗时。
+
+        语义保持与原串行版本一致：
+        - 任一域名抛 SkipParseException(直播等) → 立即上抛，不再等其它；
+        - 全部失败 → 抛出最后一个非 Skip 异常，交由上层走 ytdlp 兜底。
+        """
+        urls = [u for u in urls if u]
+        if not urls:
+            raise ParseException("没有可用的抖音解析域名")
+
+        _start = time.monotonic()
+
+        tasks = [
+            asyncio.create_task(self.parse_video(url, vid), name=f"douyin_parse:{url}")
+            for url in urls
+        ]
+        pending = set(tasks)
+        last_err: Exception | None = None
+        result = None
+
+        try:
+            while pending:
+                done, pending = await asyncio.wait(
+                    pending, return_when=asyncio.FIRST_COMPLETED
+                )
+                for task in done:
+                    try:
+                        result = task.result()
+                    except SkipParseException:
+                        # 直播等场景：语义上应直接跳过，不再尝试其它域名。
+                        raise
+                    except Exception as e:
+                        last_err = e
+                        continue
+
+                    if result is not None:
+                        logger.debug(
+                            f"[Douyin][计时] 并发解析成功 {task.get_name()} "
+                            f"/ {time.monotonic() - _start:.2f}s"
+                        )
+                        return result
+        finally:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            # 回收已取消任务，避免 "Task was destroyed but it is pending" 噪声。
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+        logger.debug(
+            f"[Douyin][计时] 并发解析全部失败 / {time.monotonic() - _start:.2f}s"
+        )
+        if last_err:
+            raise last_err
+        raise ParseException("抖音多域名解析均失败")
+
+    async def parse_video(self, url: str, vid: str):
+        resp = await self._fetch_router_resp(url)
+        try:
+            return self._process_router_resp(resp, vid)
+        except ParseException as e:
+            if "未找到 aweme 数据" in str(e):
+                logger.debug(f"[Douyin] SSR 无数据，回退 detail API: {vid}")
+                return await self._parse_via_detail_api(vid)
+            raise
+
+    async def _parse_via_detail_api(self, vid: str):
+        """
+        抖音分享页 SSR 改版后不再内嵌 aweme 数据，回退到 detail API。
+        需要 PC UA + Referer + Cookie。
+
+        图文作品(notes)在默认参数下会被 filter_reason="images_base" 过滤，
+        加 aid=6383 可绕过该过滤，返回完整图文数据。
+        """
+        if not self.cookies:
+            raise ParseException("detail API 需要 cookie，但未配置 douyin_ck")
+
+        base_headers = {
+            "User-Agent": self.headers.get("User-Agent", ""),
+            "Referer": "https://www.douyin.com/",
+            "Cookie": self.cookies,
+        }
+
+        # 先用默认参数；图文被过滤时带 aid=6383 重试
+        for params in (
+            {"aweme_id": vid},
+            {"aweme_id": vid, "aid": "6383"},
+        ):
+            resp = await self.http_get(
+                "https://www.douyin.com/aweme/v1/web/aweme/detail/",
+                params=params,
+                headers=base_headers,
+                allow_redirects=True,
+                timeout=10,
+                retries=1,
+            )
+
+            if resp.status_code != 200:
+                continue
+
+            try:
+                data = msgspec.json.decode(resp.text)
+            except Exception as e:
+                raise ParseException(f"detail API JSON 解析失败: {e}")
+
+            aweme = data.get("aweme_detail") if isinstance(data, dict) else None
+            if aweme and isinstance(aweme, dict):
+                return self._build_result_from_aweme(aweme, vid)
+
+            filter_reason = ""
+            fd = data.get("filter_detail") if isinstance(data, dict) else None
+            if isinstance(fd, dict):
+                filter_reason = fd.get("filter_reason") or ""
+
+            if "images" not in filter_reason:
+                # 不是图文过滤导致的空，没必要再试 aid=6383
+                raise ParseException("detail API 未返回 aweme_detail")
+
+        raise ParseException("detail API 未返回 aweme_detail (图文过滤已绕过仍为空)")
+
+    def _process_router_resp(self, resp, vid: str):
+        from .video import recursive_collect_videos
+
+        raw_data = msgspec.json.decode(extract_router_data_json_str(resp.text))
+        targets = recursive_collect_videos(raw_data, prefer_vid=vid, limit=50)
+        if not targets:
+            raise ParseException("未找到 aweme 数据")
+
+        aweme = pick_primary_aweme(targets, vid)
+        return self._build_result_from_aweme(aweme, vid)
+
+    def _gallery_contents(self, aweme: dict, headers: dict):
+        post = aweme.get("image_post_info")
+        post = post if isinstance(post, dict) else {}
+        items = (
+            post.get("images")
+            or post.get("image_list")
+            or aweme.get("images")
+            or aweme.get("image_list")
+            or aweme.get("image_infos")
+            or []
+        )
+        contents = []
+        seen = set()
+        for item in items if isinstance(items, list) else []:
+            if not isinstance(item, dict):
+                continue
+            still = next(
+                (
+                    url
+                    for key in (
+                        "url_list",
+                        "origin_image",
+                        "display_image",
+                        "download_url_list",
+                    )
+                    if (url := first_media_url(item.get(key)))
+                ),
+                None,
+            )
+            motion = motion_url(item.get("video")) or motion_url(item)
+            if not still and isinstance(item.get("video"), dict):
+                still = first_media_url(item["video"].get("cover"))
+            key = ("live" if motion else "image", motion or still)
+            if not key[1] or key in seen:
+                continue
+            seen.add(key)
+            if motion:
+                contents.append(live_photo(self, motion, still, headers=headers))
+            elif still:
+                contents.extend(
+                    self._create_image_contents_with_headers([still], headers)
+                )
+        return contents
+
+    def _build_result_from_aweme(self, aweme: dict, vid: str, *, media_headers=None):
+        """从单个 aweme dict 构建 ParseResult，SSR 与 detail API 共用。"""
+        from .video import VideoData
+
+        meta = msgspec.convert(aweme, VideoData)
+
+        headers = media_headers or self.ios_headers
+        contents = []
+        gallery = self._gallery_contents(aweme, headers)
+        image_urls = meta.image_urls or extract_static_image_urls_deep(aweme)
+
+        if gallery:
+            contents.extend(gallery)
+
+        elif meta.video_url and self._is_video_like_url(meta.video_url):
+            task = self.downloader.download_video(
+                meta.video_url,
+                video_name=f"douyin_{meta.id or vid}.mp4",
+                ext_headers=headers,
+            )
+            contents.append(
+                self.create_video_content(
+                    task,
+                    None,
+                    meta.video.duration if meta.video else 0,
+                )
+            )
+
+        elif image_urls:
+            contents.extend(
+                self._create_image_contents_with_headers(
+                    image_urls,
+                    headers,
+                )
+            )
+
+        author = self.create_author(
+            meta.author.nickname,
+            meta.avatar_url,
+            ext_headers=headers,
+        )
+        comment_cover = meta.cover_url or (image_urls[0] if image_urls else None)
+        extra = self._comment_extra(
+            meta.id or vid,
+            title=meta.desc,
+            cover=comment_cover,
+            owner=aweme.get("author") if isinstance(aweme, dict) else None,
+        )
+        delivery = None
+        if any(isinstance(item, DynamicContent) for item in contents):
+            delivery = ordered_media_plan(contents)
+            extra["native_delivery"] = True
+        # 图文与视频都出正文卡：媒体本身直发/进投递计划，
+        # 卡片作为「头图 + 正文」与评论区一起进合并转发。
+        # 抖音正文是整块描述、图片附在后面，故 flow 为「正文 + 图…」：
+        # 单图升为头图，多图按堆叠处理（图片单独发）。
+        extra = build_card_extra(
+            [("text", meta.desc or ""), *[("image", url) for url in image_urls]],
+            cover=meta.cover_url,
+            is_video=bool(meta.video_url),
+            extra=extra,
+        )
+        # 卡片署名行：头像 + 发布日期（抖音接口不返回归属地）
+        extra = apply_author_block(
+            extra,
+            avatar=meta.avatar_url,
+            timestamp=meta.create_time,
+        )
+        return self.result(
+            title=meta.desc,
+            author=author,
+            contents=contents,
+            delivery=delivery,
+            timestamp=meta.create_time,
+            url=f"https://www.douyin.com/video/{meta.id or vid}",
+            extra=extra,
+        )
+
+    async def parse_slides(self, video_id: str):
+        resp = await self.http_get(
+            "https://www.iesdouyin.com/web/api/v2/aweme/slidesinfo/",
+            params={"aweme_ids": f"[{video_id}]", "request_source": "200"},
+            headers=self.android_headers,
+            allow_redirects=True,
+            timeout=10,
+            retries=1,
+        )
+        if resp.status_code >= 400:
+            raise ParseException(f"API Error: {resp.status_code}")
+        payload = msgspec.json.decode(resp.content)
+        details = payload.get("aweme_details") if isinstance(payload, dict) else None
+        if not details or not isinstance(details[0], dict):
+            raise ParseException("图集数据为空")
+        result = self._build_result_from_aweme(
+            details[0], video_id, media_headers=self.android_headers
+        )
+        result.url = f"https://www.douyin.com/note/{video_id}"
+        return result
+
+    async def _parse_with_ytdlp(self, vid: str):
+        if not self.cookies:
+            raise ParseException("未配置抖音 cookie (douyin_ck)")
+
+        url = f"https://www.douyin.com/video/{vid}"
+        cookiefile = self._cookiefile
+
+        try:
+            info = await self.downloader.ytdlp_extract_info(url, cookiefile)
+        except Exception as e:
+            if self._looks_like_daily_share_url(
+                self.source_text
+            ) and self._is_fresh_cookies_error(e):
+                return self._unsupported_daily_result()
+            raise
+
+        contents = []
+
+        if info.duration:
+            task = self.downloader.download_video(
+                url,
+                use_ytdlp=True,
+                video_name=f"douyin_{vid}.mp4",
+                cookiefile=cookiefile,
+            )
+            contents.append(
+                self.create_video_content(
+                    task,
+                    None,
+                    info.duration,
+                )
+            )
+
+        title = info.title or "抖音视频"
+        author_name = info.uploader or "抖音用户"
+        author = self.create_author(author_name)
+        extra = self._comment_extra(
+            vid,
+            title=title,
+            cover=info.thumbnail,
+            owner={"nickname": author_name},
+        )
+        return self.result(
+            title=title,
+            text=info.description or "",
+            author=author,
+            contents=contents,
+            timestamp=info.timestamp,
+            url=url,
+            extra=extra,
+        )

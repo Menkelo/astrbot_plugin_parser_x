@@ -1,0 +1,913 @@
+import asyncio
+import socket
+import time
+from asyncio import Task, create_task
+from collections.abc import Callable, Coroutine
+from functools import wraps
+from pathlib import Path
+from typing import Any, ParamSpec, TypeVar
+from urllib.parse import urlparse
+from uuid import uuid4
+from weakref import WeakValueDictionary
+
+import aiohttp
+import yt_dlp
+from astrbot.api import logger
+from astrbot.core.config.astrbot_config import AstrBotConfig
+from curl_cffi import CurlHttpVersion
+from curl_cffi.requests import AsyncSession, RequestsError
+from msgspec import Struct, convert
+from tqdm.asyncio import tqdm
+
+from .config_policy import MAX_CONCURRENT_DOWNLOADS, SOURCE_MAX_SIZE_MB
+from .constants import COMMON_HEADER, IOS_HEADER
+from .exception import DownloadException, ParseException, SizeLimitException
+from .utils import (
+    LimitedSizeDict,
+    generate_file_name,
+    maybe_close_session,
+    merge_av,
+    safe_unlink,
+)
+
+P = ParamSpec("P")
+T = TypeVar("T")
+
+# Weak values retain a lock only while an owner or waiter is using it.
+_DESTINATION_LOCKS: WeakValueDictionary[tuple[Any, Path], asyncio.Lock] = (
+    WeakValueDictionary()
+)
+
+_IMAGE_SUFFIXES = (
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".apng",
+    ".gif",
+    ".webp",
+    ".avif",
+    ".heic",
+    ".heif",
+    ".bmp",
+    ".tif",
+    ".tiff",
+    ".ico",
+    ".svg",
+)
+
+
+def _image_suffix_from_url(url: str) -> str:
+    suffix = Path(urlparse(url).path).suffix.lower()
+    return suffix if suffix in _IMAGE_SUFFIXES else ".jpg"
+
+
+def _detect_image_suffix(file_path: Path) -> str | None:
+    try:
+        with file_path.open("rb") as image_file:
+            head = image_file.read(64 * 1024)
+    except OSError:
+        return None
+
+    if head.startswith((b"GIF87a", b"GIF89a")):
+        return ".gif"
+    if head.startswith(b"\x89PNG\r\n\x1a\n"):
+        return ".apng" if b"acTL" in head else ".png"
+    if head.startswith(b"\xff\xd8\xff"):
+        return ".jpg"
+    if head.startswith(b"BM"):
+        return ".bmp"
+    if head.startswith((b"II*\x00", b"MM\x00*")):
+        return ".tif"
+    if head.startswith(b"\x00\x00\x01\x00"):
+        return ".ico"
+    if len(head) >= 12 and head.startswith(b"RIFF") and head[8:12] == b"WEBP":
+        return ".webp"
+    if len(head) >= 12 and head[4:8] == b"ftyp":
+        brand = head[8:12]
+        if brand in {b"avif", b"avis"}:
+            return ".avif"
+        if brand in {b"heic", b"heix", b"hevc", b"hevx", b"mif1", b"msf1"}:
+            return ".heic"
+
+    text_head = head.lstrip(b"\xef\xbb\xbf\x00\t\r\n ").lower()
+    if text_head.startswith(b"<svg") or (
+        text_head.startswith(b"<?xml") and b"<svg" in text_head
+    ):
+        return ".svg"
+    return None
+
+
+def _normalize_image_extension(file_path: Path) -> Path:
+    detected = _detect_image_suffix(file_path)
+    if not detected:
+        return file_path
+
+    current = file_path.suffix.lower()
+    equivalent_suffixes = {
+        ".jpg": {".jpg", ".jpeg"},
+        ".png": {".png"},
+        ".apng": {".apng"},
+        ".tif": {".tif", ".tiff"},
+        ".heic": {".heic", ".heif"},
+    }
+    if current in equivalent_suffixes.get(detected, {detected}):
+        return file_path
+
+    corrected_path = file_path.with_suffix(detected)
+    try:
+        file_path.replace(corrected_path)
+    except OSError as exc:
+        logger.warning(
+            f"图片格式识别为 {detected}，但修正缓存后缀失败: {file_path.name} | {exc}"
+        )
+        return file_path
+
+    logger.debug(
+        f"已按真实图片格式修正缓存后缀: {file_path.name} -> {corrected_path.name}"
+    )
+    return corrected_path
+
+
+def auto_task(func: Callable[P, Coroutine[Any, Any, T]]) -> Callable[P, Task[T]]:
+    @wraps(func)
+    def wrapper(*args: P.args, **kwargs: P.kwargs) -> Task[T]:
+        coro = func(*args, **kwargs)
+        name = " | ".join(str(arg) for arg in args if isinstance(arg, str))
+        return create_task(coro, name=func.__name__ + " | " + name)
+
+    return wrapper
+
+
+class VideoInfo(Struct):
+    title: str | None = None
+    channel: str | None = None
+    uploader: str | None = None
+    duration: float | None = None
+    timestamp: int | None = None
+    thumbnail: str | None = None
+    description: str | None = None
+    channel_id: str | None = None
+
+    @property
+    def author_name(self) -> str:
+        c = self.channel or "Unknown"
+        u = self.uploader or ""
+        return f"{c}@{u}" if u else c
+
+
+class Downloader:
+    """
+    全能下载器
+    策略优先级: curl_cffi -> aiohttp -> yt-dlp
+    """
+
+    def __init__(self, config: AstrBotConfig):
+        self.config = config
+        self.cache_dir = Path(config["cache_dir"])
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+
+        self.default_max_size = SOURCE_MAX_SIZE_MB
+
+        self.headers: dict[str, str] = COMMON_HEADER.copy()
+        self.info_cache: LimitedSizeDict[str, VideoInfo] = LimitedSizeDict()
+
+        concurrency = MAX_CONCURRENT_DOWNLOADS
+        self.sem = asyncio.Semaphore(concurrency)
+        logger.info(f"下载器已初始化，最大并发数: {concurrency}")
+
+        self.douyin_strategy_idx = 0
+
+        # 抖音图集按 impersonate 策略复用的长生命周期 session，
+        # 避免每张图都新建/销毁 session 造成重复 TLS 握手。
+        self._douyin_sessions: dict[str, AsyncSession] = {}
+
+        self.session = AsyncSession(
+            impersonate="chrome120",
+            timeout=300,
+            headers=self.headers,
+            verify=False,
+            http_version=CurlHttpVersion.V1_1,
+        )
+
+    def _get_douyin_session(
+        self, impersonate: str, headers: dict[str, str]
+    ) -> AsyncSession:
+        """
+        按 impersonate 复用 curl_cffi session。
+        headers 仍在每次 .get() 时单独传入，这里只缓存连接/指纹层。
+        """
+        sess = self._douyin_sessions.get(impersonate)
+        if sess is None:
+            sess = AsyncSession(
+                impersonate=impersonate,
+                timeout=30,
+                verify=False,
+                http_version=CurlHttpVersion.V1_1,
+            )
+            self._douyin_sessions[impersonate] = sess
+        return sess
+
+    @staticmethod
+    def _ensure_parent_dir(file_path: Path) -> None:
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+
+    @auto_task
+    async def streamd(
+        self,
+        url: str,
+        *,
+        file_name: str | None = None,
+        ext_headers: dict[str, str] | None = None,
+        max_size_mb: int | None = None,
+    ) -> Path:
+        if not file_name:
+            file_name = generate_file_name(url)
+
+        file_path = self.cache_dir / file_name
+
+        limit = max_size_mb if max_size_mb is not None else self.default_max_size
+        key = (asyncio.get_running_loop(), file_path.resolve())
+        lock = _DESTINATION_LOCKS.setdefault(key, asyncio.Lock())
+        _start = time.monotonic()
+        async with lock:
+            if file_path.exists():
+                if file_path.stat().st_size >= 100:
+                    if limit and file_path.stat().st_size > limit * 1024 * 1024:
+                        raise SizeLimitException(f"媒体大小超过限制({limit}MB)")
+                    return file_path
+                file_path.unlink(missing_ok=True)
+
+            self._ensure_parent_dir(file_path)
+            # Preserve the suffix for yt-dlp and media tools that infer formats.
+            staging = file_path.with_name(
+                f".{file_path.stem}.{uuid4().hex}.part{file_path.suffix}"
+            )
+            try:
+                async with self.sem:
+                    if "douyinpic.com" in url:
+                        result = await self._download_douyin_image(
+                            url, staging, file_name, limit
+                        )
+                    else:
+                        headers = self.headers.copy()
+                        if ext_headers:
+                            headers.update(ext_headers)
+                        result = await self._download_generic(
+                            url, staging, file_name, headers, limit
+                        )
+                size = result.stat().st_size
+                if size < 100:
+                    raise DownloadException("下载文件过小，可能是无效文件")
+                if limit and size > limit * 1024 * 1024:
+                    raise SizeLimitException(f"媒体大小超过限制({limit}MB)")
+                result.replace(file_path)
+                result = file_path
+            finally:
+                staging.unlink(missing_ok=True)
+
+        try:
+            size_mb = result.stat().st_size / 1024 / 1024
+            logger.debug(
+                f"[下载] {file_name} {size_mb:.2f}MB / {time.monotonic() - _start:.2f}s"
+            )
+        except Exception:
+            pass
+        return result
+
+    async def _download_douyin_image(
+        self,
+        url: str,
+        file_path: Path,
+        file_name: str,
+        limit: int,
+    ) -> Path:
+        try:
+            u = urlparse(url)
+            self_referer = f"{u.scheme}://{u.netloc}/"
+        except Exception:
+            self_referer = "https://www.douyin.com/"
+
+        strategies = [
+            {
+                "name": "PC-Clean",
+                "impersonate": "chrome120",
+                "headers": {"User-Agent": COMMON_HEADER["User-Agent"]},
+            },
+            {
+                "name": "PC-SelfReferer",
+                "impersonate": "chrome120",
+                "headers": {
+                    "User-Agent": COMMON_HEADER["User-Agent"],
+                    "Referer": self_referer,
+                    "Accept": "image/webp,image/apng,image/*,*/*;q=0.8",
+                },
+            },
+            {
+                "name": "Mobile-Safari",
+                "impersonate": "safari15_3",
+                "headers": {
+                    "User-Agent": IOS_HEADER["User-Agent"],
+                    "Accept": "*/*",
+                },
+            },
+        ]
+
+        start_idx = self.douyin_strategy_idx
+        strategy_count = len(strategies)
+        last_error = None
+
+        for i in range(strategy_count):
+            current_idx = (start_idx + i) % strategy_count
+            strategy = strategies[current_idx]
+
+            try:
+                temp_session = self._get_douyin_session(
+                    strategy["impersonate"],
+                    strategy["headers"],
+                )
+                response = await temp_session.get(
+                    url,
+                    headers=strategy["headers"],
+                    stream=True,
+                )
+
+                if response.status_code >= 400:
+                    if response.status_code in [502, 503, 504]:
+                        await asyncio.sleep(1)
+                    raise RequestsError(
+                        f"HTTP {response.status_code}", response=response
+                    )
+
+                await self._save_response_to_file(response, file_path, file_name, limit)
+
+                if self.douyin_strategy_idx != current_idx:
+                    self.douyin_strategy_idx = current_idx
+
+                if i > 0:
+                    logger.debug(
+                        f"[抖音图片] 策略 {strategy['name']} 第{i + 1}次尝试成功 {file_name}"
+                    )
+                return file_path
+
+            except Exception as e:
+                last_error = e
+                await safe_unlink(file_path)
+                if i == strategy_count - 1:
+                    logger.warning(
+                        f"[抖音图片] curl 策略全部失败: {e}，尝试 aiohttp 兜底"
+                    )
+                continue
+
+        try:
+            fallback_headers = {
+                "User-Agent": COMMON_HEADER["User-Agent"],
+                "Referer": self_referer,
+            }
+            return await self._download_with_aiohttp(
+                url,
+                file_path,
+                file_name,
+                fallback_headers,
+                limit,
+            )
+        except Exception as e:
+            logger.error(f"[抖音图片] aiohttp 兜底失败: {e}")
+            raise DownloadException("抖音图片下载失败") from last_error
+
+    async def _download_generic(
+        self,
+        url: str,
+        file_path: Path,
+        file_name: str,
+        headers: dict,
+        limit: int,
+    ) -> Path:
+        max_retries = 3
+        last_error: Exception | None = None
+
+        for attempt in range(max_retries):
+            current_headers = headers.copy()
+
+            try:
+                response = await self.session.get(
+                    url,
+                    headers=current_headers,
+                    stream=True,
+                )
+
+                if response.status_code >= 400:
+                    if response.status_code == 403 and "Referer" in current_headers:
+                        current_headers.pop("Referer", None)
+                        response = await self.session.get(
+                            url,
+                            headers=current_headers,
+                            stream=True,
+                        )
+
+                    if response.status_code >= 400:
+                        raise RequestsError(
+                            f"HTTP {response.status_code}", response=response
+                        )
+
+                content_type = response.headers.get("Content-Type", "")
+                if "text/html" in content_type or "application/json" in content_type:
+                    if not file_name.endswith((".html", ".json", ".txt")):
+                        is_strict_referer = any(
+                            d in url for d in ["bilivideo.com", "douyin.com"]
+                        )
+
+                        if "Referer" in current_headers and not is_strict_referer:
+                            current_headers.pop("Referer", None)
+                            response = await self.session.get(
+                                url,
+                                headers=current_headers,
+                                stream=True,
+                            )
+                            content_type = response.headers.get("Content-Type", "")
+
+                        if (
+                            "text/html" in content_type
+                            or "application/json" in content_type
+                        ):
+                            raise DownloadException(
+                                f"服务端返回了非媒体类型: {content_type}"
+                            )
+
+                await self._save_response_to_file(response, file_path, file_name, limit)
+
+                if file_path.exists() and file_path.stat().st_size < 100:
+                    await safe_unlink(file_path)
+                    raise DownloadException("下载文件过小，可能是无效文件")
+
+                return file_path
+
+            except SizeLimitException:
+                await safe_unlink(file_path)
+                raise
+
+            except Exception as e:
+                last_error = e
+                await safe_unlink(file_path)
+
+                logger.warning(f"curl_cffi 下载失败，尝试 aiohttp 兜底: {url} | {e}")
+
+                try:
+                    return await self._download_with_aiohttp(
+                        url,
+                        file_path,
+                        file_name,
+                        current_headers,
+                        limit,
+                    )
+                except SizeLimitException:
+                    await safe_unlink(file_path)
+                    raise
+                except Exception as aio_e:
+                    await safe_unlink(file_path)
+                    logger.warning(f"aiohttp 兜底失败: {aio_e}")
+
+                if attempt == max_retries - 1:
+                    logger.warning("curl/aiohttp 均失败，尝试最终方案 yt-dlp 下载...")
+                    try:
+                        return await self._download_with_ytdlp_fallback(
+                            url,
+                            file_path,
+                            current_headers,
+                        )
+                    except Exception as yt_e:
+                        logger.error(f"yt-dlp 兜底失败: {yt_e}")
+                        logger.error(f"下载最终失败: {url} | Error: {last_error}")
+                        raise DownloadException("媒体下载失败") from last_error
+
+                await asyncio.sleep(0.6 * (attempt + 1))
+
+        raise DownloadException("媒体下载失败")
+
+    async def _download_with_aiohttp(
+        self,
+        url: str,
+        file_path: Path,
+        file_name: str,
+        headers: dict,
+        limit: int,
+    ) -> Path:
+        conn = aiohttp.TCPConnector(
+            ssl=False,
+            family=socket.AF_INET,
+            ttl_dns_cache=300,
+        )
+        timeout = aiohttp.ClientTimeout(
+            total=120,
+            connect=20,
+            sock_connect=20,
+            sock_read=120,
+        )
+
+        async with aiohttp.ClientSession(
+            headers=headers,
+            connector=conn,
+            timeout=timeout,
+        ) as session:
+            async with session.get(url) as resp:
+                if resp.status >= 400:
+                    raise DownloadException(f"aiohttp HTTP {resp.status}")
+
+                await self._write_chunks_atomic(
+                    resp.content.iter_chunked(1024 * 1024),
+                    resp.headers, file_path, file_name, limit,
+                )
+
+        logger.info(f"aiohttp 兜底下载成功: {file_name}")
+        return file_path
+
+    async def _download_with_ytdlp_fallback(
+        self,
+        url: str,
+        file_path: Path,
+        headers: dict,
+    ) -> Path:
+        # Download beside the target and swap it in at the end: a send that is
+        # already holding the previous file must not lose it mid-download.
+        temp_path = file_path.with_name(
+            f".{file_path.stem}.{uuid4().hex}.ytdlp{file_path.suffix}"
+        )
+        self._ensure_parent_dir(file_path)
+        await safe_unlink(temp_path)
+
+        opts = {
+            "quiet": True,
+            "no_warnings": True,
+            "http_headers": headers,
+            "outtmpl": str(temp_path),
+            "skip_download": False,
+            "hls_use_mpegts": True,
+            "nocheckcertificate": True,
+            "http_chunk_size": 10485760,
+        }
+
+        def run_ytdlp():
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                ydl.download([url])
+
+        worker = asyncio.create_task(asyncio.to_thread(run_ytdlp))
+        try:
+            try:
+                await asyncio.shield(worker)
+            except asyncio.CancelledError:
+                # A thread cannot be cancelled: keep its unique files owned until
+                # it has stopped writing, then discard them without publication.
+                while not worker.done():
+                    try:
+                        await asyncio.shield(worker)
+                    except asyncio.CancelledError:
+                        continue
+                    except Exception:
+                        break
+                if not worker.cancelled():
+                    worker.exception()
+                raise
+
+            candidates = [temp_path, *sorted(temp_path.parent.glob(f"{temp_path.stem}*"))]
+            for candidate in candidates:
+                if candidate.suffix in {".part", ".ytdl", ".tmp"}:
+                    continue
+                if candidate.is_file() and candidate.stat().st_size >= 100:
+                    candidate.replace(file_path)
+                    return file_path
+            raise DownloadException("yt-dlp 兜底下载未生成预期文件")
+        finally:
+            for candidate in temp_path.parent.glob(f"{temp_path.stem}*"):
+                if candidate.is_file():
+                    candidate.unlink(missing_ok=True)
+
+    async def _save_response_to_file(self, response, file_path, file_name, limit_mb):
+        await self._write_chunks_atomic(
+            response.aiter_content(chunk_size=1024 * 1024),
+            response.headers, file_path, file_name, limit_mb,
+        )
+
+    async def _write_chunks_atomic(
+        self, chunks, headers, file_path: Path, file_name: str, limit_mb: int
+    ) -> None:
+        raw_length = headers.get("Content-Length")
+        content_length = int(raw_length) if raw_length is not None else None
+        # Both HTTP clients decode content; wire length then is not output length.
+        encoded = headers.get("Content-Encoding", "identity").lower() != "identity"
+        expected = None if encoded else content_length
+        if limit_mb and expected is not None and expected > limit_mb * 1024 * 1024:
+            raise SizeLimitException(f"媒体大小超过限制({limit_mb}MB)")
+        self._ensure_parent_dir(file_path)
+        staging = file_path.with_name(
+            f".{file_path.stem}.{uuid4().hex}.part{file_path.suffix}"
+        )
+        try:
+            with self.get_progress_bar(file_name, expected) as bar:
+                # Bounded synchronous writes avoid executor writes outliving cancellation.
+                with staging.open("xb") as output:
+                    downloaded = 0
+                    async for chunk in chunks:
+                        downloaded += len(chunk)
+                        if limit_mb and downloaded > limit_mb * 1024 * 1024:
+                            raise SizeLimitException(f"媒体大小超过限制({limit_mb}MB)")
+                        output.write(chunk)
+                        bar.update(len(chunk))
+            if expected is not None and downloaded != expected:
+                raise DownloadException(
+                    f"下载长度不符: 预期 {expected} 字节，实际 {downloaded} 字节"
+                )
+            if downloaded < 100:
+                raise DownloadException("下载文件过小，可能是无效文件")
+            staging.replace(file_path)
+        finally:
+            staging.unlink(missing_ok=True)
+
+    @staticmethod
+    def get_progress_bar(desc: str, total: int | None = None) -> tqdm:
+        return tqdm(
+            total=total,
+            unit="B",
+            unit_scale=True,
+            unit_divisor=1024,
+            dynamic_ncols=True,
+            colour="green",
+            desc=desc,
+            mininterval=1.0,
+            miniters=10,
+        )
+
+    @auto_task
+    async def download_video(
+        self,
+        url: str,
+        *,
+        video_name: str | None = None,
+        ext_headers: dict[str, str] | None = None,
+        use_ytdlp: bool = False,
+        cookiefile: Path | None = None,
+        max_size_mb: int | None = None,
+    ) -> Path:
+        if use_ytdlp:
+            return await self._ytdlp_download_video(
+                url,
+                cookiefile,
+                video_name,
+                max_size_mb=max_size_mb,
+            )
+
+        if video_name is None:
+            video_name = generate_file_name(url, ".mp4")
+
+        return await self.streamd(
+            url,
+            file_name=video_name,
+            ext_headers=ext_headers,
+            max_size_mb=max_size_mb,
+        )
+
+    @auto_task
+    async def download_audio(
+        self,
+        url: str,
+        *,
+        audio_name: str | None = None,
+        ext_headers: dict[str, str] | None = None,
+        use_ytdlp: bool = False,
+        cookiefile: Path | None = None,
+        max_size_mb: int | None = None,
+    ) -> Path:
+        if use_ytdlp:
+            return await self._ytdlp_download_audio(
+                url,
+                cookiefile,
+                audio_name,
+                max_size_mb=max_size_mb,
+            )
+
+        if audio_name is None:
+            audio_name = generate_file_name(url, ".mp3")
+
+        return await self.streamd(
+            url,
+            file_name=audio_name,
+            ext_headers=ext_headers,
+            max_size_mb=max_size_mb,
+        )
+
+    @auto_task
+    async def download_file(
+        self,
+        url: str,
+        *,
+        file_name: str | None = None,
+        ext_headers: dict[str, str] | None = None,
+    ) -> Path:
+        if file_name is None:
+            file_name = generate_file_name(url, ".zip")
+
+        return await self.streamd(url, file_name=file_name, ext_headers=ext_headers)
+
+    @auto_task
+    async def download_img(
+        self,
+        url: str,
+        *,
+        img_name: str | None = None,
+        ext_headers: dict[str, str] | None = None,
+    ) -> Path:
+        if img_name is None:
+            img_name = generate_file_name(url, _image_suffix_from_url(url))
+
+            # Older releases forced every image to ``.jpg``. Reuse and repair those
+            # cached files so animated GIF/WebP images recover without a cache clear.
+            stem = Path(img_name).stem
+            preferred = Path(img_name).suffix.lower()
+            suffixes = (preferred, *(_ for _ in _IMAGE_SUFFIXES if _ != preferred))
+            for suffix in suffixes:
+                cached_path = self.cache_dir / f"{stem}{suffix}"
+                if cached_path.is_file() and cached_path.stat().st_size >= 100:
+                    return _normalize_image_extension(cached_path)
+
+        downloaded_path = await self.streamd(
+            url, file_name=img_name, ext_headers=ext_headers
+        )
+        return _normalize_image_extension(downloaded_path)
+
+    @auto_task
+    async def download_av_and_merge(
+        self,
+        v_url: str,
+        a_url: str,
+        *,
+        output_path: Path,
+        ext_headers: dict[str, str] | None = None,
+        max_size_mb: int | None = None,
+    ) -> Path:
+        try:
+            v_path, a_path = await asyncio.gather(
+                self.download_video(
+                    v_url, ext_headers=ext_headers, max_size_mb=max_size_mb
+                ),
+                self.download_audio(
+                    a_url, ext_headers=ext_headers, max_size_mb=max_size_mb
+                ),
+            )
+            await merge_av(v_path=v_path, a_path=a_path, output_path=output_path)
+            return output_path
+
+        except SizeLimitException:
+            raise
+        except Exception as e:
+            logger.error(f"合并下载失败: {e}")
+            raise DownloadException(f"音视频下载合并失败: {e}")
+
+    async def ytdlp_extract_info(
+        self,
+        url: str,
+        cookiefile: Path | None = None,
+        *,
+        force_generic_extractor: bool = True,
+    ) -> VideoInfo:
+        cache_key = f"{int(force_generic_extractor)}:{url}"
+        if (info := self.info_cache.get(cache_key)) is not None:
+            return info
+
+        opts = {
+            "quiet": True,
+            "skip_download": True,
+            "force_generic_extractor": force_generic_extractor,
+            "cookiefile": None,
+            "noplaylist": True,
+            "playlistend": 1,
+            "nocheckcertificate": True,
+        }
+
+        if cookiefile and cookiefile.is_file():
+            opts["cookiefile"] = str(cookiefile)
+
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            raw = await asyncio.to_thread(ydl.extract_info, url, download=False)
+            if not raw:
+                raise ParseException("获取视频信息失败")
+
+        info = convert(raw, VideoInfo)
+        self.info_cache[cache_key] = info
+        return info
+
+    async def _ytdlp_download_video(
+        self,
+        url: str,
+        cookiefile: Path | None = None,
+        video_name: str | None = None,
+        *,
+        max_size_mb: int | None = None,
+    ) -> Path:
+        _ = await self.ytdlp_extract_info(
+            url,
+            cookiefile,
+            force_generic_extractor=False,
+        )
+
+        if video_name:
+            file_stem = Path(video_name).stem
+        else:
+            file_stem = Path(generate_file_name(url)).stem
+
+        video_path = self.cache_dir / f"{file_stem}.mp4"
+        self._ensure_parent_dir(video_path)
+
+        if video_path.exists() and video_path.stat().st_size > 100:
+            return video_path
+
+        opts = {
+            "outtmpl": str(self.cache_dir / file_stem) + ".%(ext)s",
+            "merge_output_format": "mp4",
+            "format": "best[height<=720]/bestvideo[height<=720]+bestaudio/best",
+            "postprocessors": [
+                {"key": "FFmpegVideoConvertor", "preferedformat": "mp4"}
+            ],
+            "cookiefile": None,
+            "nocheckcertificate": True,
+            "noplaylist": True,
+            "playlistend": 1,
+        }
+
+        limit_mb = max_size_mb or self.default_max_size
+        if limit_mb:
+            opts["max_filesize"] = int(limit_mb * 1024 * 1024)
+
+        if cookiefile and cookiefile.is_file():
+            opts["cookiefile"] = str(cookiefile)
+
+        async with self.sem:
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                await asyncio.to_thread(ydl.download, [url])
+
+        if not video_path.exists():
+            candidates = sorted(self.cache_dir.glob(f"{file_stem}.*"))
+            if candidates:
+                candidates[0].replace(video_path)
+
+        if not video_path.exists() or video_path.stat().st_size < 100:
+            raise DownloadException("yt-dlp 未生成有效视频")
+        if limit_mb and video_path.stat().st_size > limit_mb * 1024 * 1024:
+            await safe_unlink(video_path)
+            raise SizeLimitException(f"媒体大小超过限制({limit_mb}MB)")
+        return video_path
+
+    async def _ytdlp_download_audio(
+        self,
+        url: str,
+        cookiefile: Path | None,
+        audio_name: str | None = None,
+        *,
+        max_size_mb: int | None = None,
+    ) -> Path:
+        if audio_name:
+            file_stem = Path(audio_name).stem
+        else:
+            file_stem = Path(generate_file_name(url)).stem
+
+        audio_path = self.cache_dir / f"{file_stem}.m4a"
+        self._ensure_parent_dir(audio_path)
+
+        if audio_path.exists() and audio_path.stat().st_size > 100:
+            return audio_path
+
+        opts = {
+            "outtmpl": str(self.cache_dir / file_stem) + ".%(ext)s",
+            "format": "bestaudio/best",
+            "postprocessors": [{"key": "FFmpegExtractAudio", "preferredcodec": "m4a"}],
+            "cookiefile": None,
+            "nocheckcertificate": True,
+            "noplaylist": True,
+            "playlistend": 1,
+        }
+
+        limit_mb = max_size_mb or self.default_max_size
+        if limit_mb:
+            opts["max_filesize"] = int(limit_mb * 1024 * 1024)
+
+        if cookiefile and cookiefile.is_file():
+            opts["cookiefile"] = str(cookiefile)
+
+        async with self.sem:
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                await asyncio.to_thread(ydl.download, [url])
+
+        if not audio_path.exists():
+            candidates = sorted(self.cache_dir.glob(f"{file_stem}.*"))
+            if candidates:
+                candidates[0].replace(audio_path)
+
+        if not audio_path.exists() or audio_path.stat().st_size < 100:
+            raise DownloadException("yt-dlp 未生成有效音频")
+        if limit_mb and audio_path.stat().st_size > limit_mb * 1024 * 1024:
+            await safe_unlink(audio_path)
+            raise SizeLimitException(f"媒体大小超过限制({limit_mb}MB)")
+        return audio_path
+
+    async def close(self):
+        await maybe_close_session(self.session)
+        for sess in self._douyin_sessions.values():
+            await maybe_close_session(sess)
+        self._douyin_sessions.clear()

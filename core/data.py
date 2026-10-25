@@ -1,0 +1,268 @@
+from asyncio import Task, shield
+from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Literal, TypedDict
+
+from .topic_text import strip_topic_tags
+
+
+def repr_path_task(path_task: Path | Task[Path]) -> str:
+    if isinstance(path_task, Path):
+        return f"path={path_task.name}"
+    else:
+        return f"task={path_task.get_name()}, done={path_task.done()}"
+
+
+@dataclass(repr=False, slots=True)
+class MediaContent:
+    path_task: Path | Task[Path]
+    _cache_shared: bool = field(default=False, init=False, repr=False)
+
+    async def get_path(self) -> Path:
+        if isinstance(self.path_task, Path):
+            return self.path_task
+        self.path_task = await (
+            shield(self.path_task) if self._cache_shared else self.path_task
+        )
+        return self.path_task
+
+    def __repr__(self) -> str:
+        prefix = self.__class__.__name__
+        return f"{prefix}({repr_path_task(self.path_task)})"
+
+
+@dataclass(repr=False, slots=True)
+class AudioContent(MediaContent):
+    """音频内容"""
+
+    duration: float = 0.0
+
+
+@dataclass(repr=False, slots=True)
+class FileContent(MediaContent):
+    """文件内容"""
+
+    name: str | None = None
+
+
+@dataclass(repr=False, slots=True)
+class VideoContent(MediaContent):
+    """视频内容"""
+
+    cover: Path | Task[Path] | None = None
+    duration: float = 0.0
+
+    # === 新增：是否强制作为文件上传 ===
+    is_file_upload: bool = False
+
+    async def get_cover_path(self) -> Path | None:
+        if self.cover is None:
+            return None
+        if isinstance(self.cover, Path):
+            return self.cover
+        self.cover = await (shield(self.cover) if self._cache_shared else self.cover)
+        return self.cover
+
+    @property
+    def display_duration(self) -> str:
+        minutes = int(self.duration) // 60
+        seconds = int(self.duration) % 60
+        return f"时长: {minutes}:{seconds:02d}"
+
+    def __repr__(self) -> str:
+        repr = f"VideoContent(path={repr_path_task(self.path_task)}"
+        if self.cover is not None:
+            repr += f", cover={repr_path_task(self.cover)}"
+        return repr + ")"
+
+
+@dataclass(repr=False, slots=True)
+class ImageContent(MediaContent):
+    """图片内容"""
+
+    pass
+
+
+@dataclass(repr=False, slots=True)
+class DynamicContent(MediaContent):
+    """动态内容"""
+
+    gif_path: Path | None = None
+    fallback_image: ImageContent | None = None
+
+
+@dataclass(repr=False, slots=True)
+class GraphicsContent(MediaContent):
+    """图文内容"""
+
+    text: str | None = None
+    alt: str | None = None
+
+    def __repr__(self) -> str:
+        repr = f"GraphicsContent(path={repr_path_task(self.path_task)}"
+        if self.text:
+            repr += f", text={self.text}"
+        if self.alt:
+            repr += f", alt={self.alt}"
+        return repr + ")"
+
+
+@dataclass(slots=True)
+class Platform:
+    name: str
+    display_name: str
+
+
+@dataclass(repr=False, slots=True)
+class Author:
+    name: str
+    avatar: Path | Task[Path] | None = None
+    description: str | None = None
+    _cache_shared: bool = field(default=False, init=False, repr=False)
+
+    async def get_avatar_path(self) -> Path | None:
+        if self.avatar is None:
+            return None
+        if isinstance(self.avatar, Path):
+            return self.avatar
+        self.avatar = await (shield(self.avatar) if self._cache_shared else self.avatar)
+        return self.avatar
+
+    def __repr__(self) -> str:
+        repr = f"Author(name={self.name}"
+        if self.avatar:
+            repr += f", avatar_{repr_path_task(self.avatar)}"
+        if self.description:
+            repr += f", description={self.description}"
+        return repr + ")"
+
+
+@dataclass(slots=True)
+class DeliveryBatch:
+    """One explicit outbound message in a platform delivery plan."""
+
+    parts: list[str | MediaContent] = field(default_factory=list)
+    mode: Literal["direct", "forward"] = "direct"
+    reply_original: bool = False
+
+
+@dataclass(slots=True)
+class DeliveryPlan:
+    """Ordered messages used by platforms whose native layout is not a card."""
+
+    batches: list[DeliveryBatch] = field(default_factory=list)
+
+    def media_contents(self) -> list[MediaContent]:
+        contents: list[MediaContent] = []
+        seen: set[int] = set()
+        for batch in self.batches:
+            for part in batch.parts:
+                if not isinstance(part, MediaContent) or id(part) in seen:
+                    continue
+                seen.add(id(part))
+                contents.append(part)
+        return contents
+
+
+@dataclass(repr=False, slots=True)
+class ParseResult:
+    platform: Platform
+    author: Author | None = None
+    title: str | None = None
+    text: str | None = None
+    timestamp: int | None = None
+    url: str | None = None
+
+    contents: list[MediaContent] = field(default_factory=list)
+    delivery: DeliveryPlan | None = None
+
+    extra: dict[str, Any] = field(default_factory=dict)
+    repost: "ParseResult | None" = None
+
+    def __post_init__(self) -> None:
+        # 正文与标题里的话题标签统一去掉（#话题# / #话题[话题]#）。
+        # 抖音这类平台把整段正文放在 title 里，所以 title 也要清。
+        if isinstance(self.text, str) and "#" in self.text:
+            self.text = strip_topic_tags(self.text) or None
+        if isinstance(self.title, str) and "#" in self.title:
+            self.title = strip_topic_tags(self.title) or None
+        # 图文帖同样要有评论区：卡片会把评论区拼到正文下方，
+        # 所以这里不能因为「没有视频」就把取评论的工厂扔掉。
+        # 只有解析器明确标记了不出评论（``suppress_comments``）才清理。
+        if not self.extra.get("suppress_comments"):
+            return
+        for key in (
+            "comment_image_task_factory",
+            "comment_document_task_factory",
+            "text_card_comment_factory",
+            "comment_timeout",
+        ):
+            self.extra.pop(key, None)
+
+    @property
+    def has_video(self) -> bool:
+        media = list(self.contents)
+        if self.delivery is not None:
+            media.extend(self.delivery.media_contents())
+        return any(isinstance(content, VideoContent) for content in media)
+
+    @property
+    def header(self) -> str | None:
+        header = self.platform.display_name
+        if self.author:
+            header += f" @{self.author.name}"
+        if self.title:
+            header += f" | {self.title}"
+        return header
+
+    @property
+    def display_url(self) -> str | None:
+        return f"链接: {self.url}" if self.url else None
+
+    @property
+    def repost_display_url(self) -> str | None:
+        return f"原帖: {self.repost.url}" if self.repost and self.repost.url else None
+
+    @property
+    def extra_info(self) -> str | None:
+        return self.extra.get("info")
+
+    @property
+    async def cover_path(self) -> Path | None:
+        for cont in self.contents:
+            if isinstance(cont, VideoContent):
+                return await cont.get_cover_path()
+        return None
+
+    @property
+    def formatted_datetime(self) -> str | None:
+        # 作为 property 无法接收格式参数，固定使用标准格式。
+        if self.timestamp is None:
+            return None
+        return datetime.fromtimestamp(self.timestamp).strftime("%Y-%m-%d %H:%M:%S")
+
+    def __repr__(self) -> str:
+        return (
+            f"platform: {self.platform.display_name}, "
+            f"timestamp: {self.timestamp}, "
+            f"title: {self.title}, "
+            f"text: {self.text}, "
+            f"url: {self.url}, "
+            f"author: {self.author}, "
+            f"contents: {self.contents}, "
+            f"extra: {self.extra}, "
+            f"repost: <<<<<<<{self.repost}>>>>>>"
+        )
+
+
+class ParseResultKwargs(TypedDict, total=False):
+    title: str | None
+    text: str | None
+    contents: list[MediaContent]
+    delivery: DeliveryPlan | None
+    timestamp: int | None
+    url: str | None
+    author: Author | None
+    extra: dict[str, Any]
+    repost: ParseResult | None
