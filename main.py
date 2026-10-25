@@ -192,6 +192,14 @@ class ParserXPlugin(Star):
         behavior = self.config.get("behavior", {})
         return behavior if isinstance(behavior, dict) else {}
 
+    @staticmethod
+    def _session_key(event: AstrMessageEvent) -> str:
+        origin = event.unified_msg_origin
+        parts = origin.rsplit(":", 2)
+        if len(parts) == 3 and parts[1] == "GroupMessage" and parts[2].isdigit():
+            return parts[2]
+        return origin
+
     def _disabled_sessions(self) -> list:
         sessions = self._behavior().get("disabled_sessions", [])
         if isinstance(sessions, list):
@@ -2082,7 +2090,7 @@ class ParserXPlugin(Star):
         umo = event.unified_msg_origin
         text = self._text_from_event(event)
 
-        if umo in self._disabled_sessions():
+        if self._session_key(event) in self._disabled_sessions():
             return
 
         chain = event.get_messages() or []
@@ -2138,7 +2146,7 @@ class ParserXPlugin(Star):
     @filter.command("开启解析")
     async def open_parser(self, event: AstrMessageEvent):
         """开启当前会话的解析"""
-        umo = event.unified_msg_origin
+        umo = self._session_key(event)
         sessions = self._disabled_sessions()
         if umo in sessions:
             sessions.remove(umo)
@@ -2151,7 +2159,7 @@ class ParserXPlugin(Star):
     @filter.command("关闭解析")
     async def close_parser(self, event: AstrMessageEvent):
         """关闭当前会话的解析"""
-        umo = event.unified_msg_origin
+        umo = self._session_key(event)
         sessions = self._disabled_sessions()
         if umo not in sessions:
             sessions.append(umo)

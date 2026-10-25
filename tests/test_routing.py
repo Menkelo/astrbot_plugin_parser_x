@@ -511,7 +511,7 @@ def test_config_schema_uses_latest_astrbot_panel_features():
     )
     assert "rendering" not in schema
     assert "rendering" not in schema
-    assert schema["cookies"]["obvious_hint"] is True
+    assert not schema["cookies"].get("obvious_hint", False)
     assert schema["performance"]["items"]["video_codec"]["labels"] == [
         "自动选择",
         "优先 HEVC / H.265",

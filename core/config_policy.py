@@ -57,7 +57,15 @@ def migrate_config(config: MutableMapping[str, Any]) -> bool:
         for session in legacy_sessions:
             if session not in sessions:
                 sessions.append(session)
-    behavior["disabled_sessions"] = sessions
+    normalized = []
+    for session in sessions:
+        value = str(session).strip()
+        parts = value.rsplit(":", 2)
+        if len(parts) == 3 and parts[1] == "GroupMessage" and parts[2].isdigit():
+            value = parts[2]
+        if value and value not in normalized:
+            normalized.append(value)
+    behavior["disabled_sessions"] = normalized
     behavior.pop("show_download_fail_tip", None)
     config["behavior"] = behavior
     for key in (
