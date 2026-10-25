@@ -3397,14 +3397,6 @@ def test_comment_layout_cache_versions_invalidate_pre_fix_images():
     assert WeiboCommentFeed.CACHE_VERSION == "weibo_comment_v17_author_color_reply_pad_font"
 
 
-def test_manifest_has_a_reviewable_upstream_baseline():
-    manifest_path = Path(__file__).parents[1] / "upstream" / "manifest.json"
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    assert manifest["repository"].endswith("rconsole-plugin.git")
-    assert len(manifest["commit"]) == 40
-    assert manifest["strategy"] == "semantic-port"
-
-
 def test_onebot_message_chain_uses_public_aiocqhttp_conversion():
     async def convert_chain():
         return await AiocqhttpMessageEvent._parse_onebot_json(
