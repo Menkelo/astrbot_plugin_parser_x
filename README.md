@@ -20,7 +20,7 @@
 
 ## 实机效果
 
-[点击查看 B站实机效果](docs/images/demo-bilibili.png)
+[点击查看 B站实机效果](https://github.com/Menkelo/astrbot_plugin_parser_x/releases/download/demo-assets/demo-bilibili.png)
 
 由 **2026-10-25 的线上插件实例**解析公开作品[《没落模型DeepSeek》](https://www.bilibili.com/video/BV1QHnq6LEqv)实际生成，展示统一卡片、作者/置顶标识、楼中楼、评论多图与时间戳高亮。通过调试台捕获，非设计稿或 QQ 聊天截图，未向群发送测试消息；评论内容与排序会随平台变化。
 
