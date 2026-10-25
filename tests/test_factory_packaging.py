@@ -34,7 +34,7 @@ def archives(tmp_path_factory):
         for path in ROOT.glob(pattern):
             if path.is_file():
                 shutil.copy2(path, source / path.name)
-    for name in ("core", "assets", "pages", "licenses"):
+    for name in ("core", "assets", "pages"):
         if (ROOT / name).is_dir():
             shutil.copytree(ROOT / name, source / name, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
     shutil.copy2(ROOT / "LICENSE", source / "LICENSE")
@@ -67,13 +67,18 @@ def test_wheel_namespace_runtime_resources_and_dependencies(archives):
             "pages/debug/app.js", "pages/debug/style.css", "THIRD_PARTY_NOTICES.md",
         }
         assert {f"{PACKAGE}/{name}" for name in required} <= names
-        for pattern in ("core/**/*.py", "assets/fonts/*.woff2", "licenses/*.txt"):
+        for pattern in ("core/**/*.py", "assets/fonts/*.woff2"):
             paths = list(source.glob(pattern))
             assert paths, pattern
             assert {f"{PACKAGE}/{p.relative_to(source).as_posix()}" for p in paths} <= names
         assert not any(n.startswith(("core/", "data/", "tests/")) for n in names)
         assert not any(f"/{part}/" in f"/{n}" for n in names for part in ("data", "tests", ".venv", "__pycache__"))
         assert not any("PACKAGING_PRIVATE_SENTINEL" in archive.read(n).decode("utf-8", errors="ignore") for n in names if not n.endswith("/"))
+        notices = archive.read(f"{PACKAGE}/THIRD_PARTY_NOTICES.md").decode("utf-8")
+        assert "4. 分发限制" in notices
+        assert "4. Distribution Restriction" in notices
+        assert "END OF THE TERMS AND CONDITIONS" in notices
+        assert notices == (source / "THIRD_PARTY_NOTICES.md").read_text(encoding="utf-8")
         metadata_path = next(n for n in names if n.endswith(".dist-info/METADATA"))
         metadata = BytesParser().parsebytes(archive.read(metadata_path))
         actual = {

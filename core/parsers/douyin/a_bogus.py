@@ -7,7 +7,7 @@ from collections.abc import Iterable
 
 # Modified Python adaptation of the A-Bogus behavior tracked in
 # rconsole-plugin/utils/a-bogus.cjs, distributed under Mulan PSL v2.
-# See THIRD_PARTY_NOTICES.md and licenses/MulanPSL-2.0.txt.
+# See THIRD_PARTY_NOTICES.md for the complete bilingual Mulan PSL v2 license.
 # The upstream module states that it is for learning and communication use.
 
 _S3 = "ckdp1h4ZKsUB80/Mfvw36XIgR25+WQAlEi7NLboqYTOPuzmFjJnryx9HVGDaStCe"

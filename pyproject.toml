@@ -39,7 +39,7 @@ dependencies = {file = ["requirements.txt"]}
 [tool.setuptools.package-data]
 astrbot_plugin_parser_x = [
     "_conf_schema.json", "metadata.yaml", "requirements.txt", "logo.png",
-    "LICENSE", "THIRD_PARTY_NOTICES.md", "licenses/*.txt",
+    "LICENSE", "THIRD_PARTY_NOTICES.md",
     "pages/debug/*.html", "pages/debug/*.js", "pages/debug/*.css",
     "assets/fonts/*.woff2",
 ]
