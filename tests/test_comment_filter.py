@@ -106,7 +106,7 @@ def test_balanced_mentions_keep_real_text_and_drop_summons():
     result = asyncio.run(_filter().apply(entries, limit=10))
 
     assert [_text(entry) for entry in result] == [
-        "这个方法确实有效",
+        "@作者 这个方法确实有效",
         "这个方法也有效",
     ]
 
@@ -234,4 +234,4 @@ def test_shared_filter_accepts_bilibili_comment_model():
     result = asyncio.run(_filter().apply([entry], limit=1))
 
     assert len(result) == 1
-    assert _text(result[0]) == "B站正常回复"
+    assert _text(result[0]) == "@作者 B站正常回复"

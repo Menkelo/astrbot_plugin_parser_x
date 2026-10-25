@@ -385,7 +385,7 @@ class ParserXPlugin(Star):
             result.platform.name, result.platform.display_name,
             result.author.name if result.author else None,
             result.title, result.text, result.extra_info, result.timestamp, result.url, extra,
-            "text_card_unified_v12_disk_singleflight",
+            "text_card_unified_v13_preserve_mentions",
         ]
         cache_key = hashlib.sha256(
             json.dumps(identity, sort_keys=True, ensure_ascii=False, default=str).encode()

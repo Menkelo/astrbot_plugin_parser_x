@@ -101,7 +101,7 @@ _PROMISE_RE = re.compile(
 )
 _RISK_RE = re.compile(r"博彩|赌博|刷单|返利|放款|贷款|裸聊|色情|成人")
 _CALL_RE = re.compile(
-    r"^(?:快来|来看|来看看|围观|速看|看看|求助|有人吗|在吗|出来|快看|"
+    r"^(?:快来看|快来|来看|来看看|围观|速看|看看|求助|有人吗|在吗|出来|快看|"
     r"看这个|康康|救命)(?:啊|呀|哦|吧|嘛|哈|！|!|。|\s)*$"
 )
 _TOPIC_RE = re.compile(r"#[^#\s]{1,40}#|#[^#\s]{1,40}(?=\s|$)")
@@ -233,11 +233,12 @@ def _clean_mentions(value: str, mode: str) -> tuple[str, int, bool]:
     cleaned = _clean_text(cleaned)
     meaningful = _meaningful_text(cleaned)
     pure_call = bool(_CALL_RE.fullmatch(cleaned))
-    should_drop = not meaningful or count >= 2 or pure_call
-    return cleaned, count, should_drop
+    should_drop = not meaningful or pure_call
+    # Mention-free text is only a classification probe, not replacement content.
+    return value, count, should_drop
 
 
-def _clean_content_mentions(content: list[RichPartLike]) -> None:
+def _strip_structural_reply_prefix(content: list[RichPartLike]) -> None:
     output = []
     # Match the leading structure across rich parts, then consume its span in
     # place. Rebuilding from plain text would lose body highlights/emotes/URLs.
@@ -266,7 +267,6 @@ def _clean_content_mentions(content: list[RichPartLike]) -> None:
             continue
 
         text = str(part.text or "")
-        text = _MENTION_RE.sub(" ", text)
         text = _clean_fragment(text)
         if text.strip():
             output.append(replace(part, text=text))
@@ -391,10 +391,7 @@ class CommentFilter:
                 return "ads", mention_count
 
         if structural_reply and self.settings.mention_mode != "off":
-            _clean_content_mentions(entry.content)
-            cleaned = _clean_text(_plain_text(entry.content))
-        elif self.settings.mention_mode == "balanced" and mention_count:
-            _clean_content_mentions(entry.content)
+            _strip_structural_reply_prefix(entry.content)
             cleaned = _clean_text(_plain_text(entry.content))
 
         if (
