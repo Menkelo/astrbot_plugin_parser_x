@@ -20,6 +20,7 @@ from msgspec import Struct, convert
 from tqdm.asyncio import tqdm
 
 from .config_policy import MAX_CONCURRENT_DOWNLOADS, SOURCE_MAX_SIZE_MB
+from .video_codec import codec_preference, normalize_codec, ytdlp_video_format
 from .constants import COMMON_HEADER, IOS_HEADER
 from .exception import DownloadException, ParseException, SizeLimitException
 from .utils import (
@@ -645,6 +646,7 @@ class Downloader:
         use_ytdlp: bool = False,
         cookiefile: Path | None = None,
         max_size_mb: int | None = None,
+        video_codec: str | None = None,
     ) -> Path:
         if use_ytdlp:
             return await self._ytdlp_download_video(
@@ -652,6 +654,7 @@ class Downloader:
                 cookiefile,
                 video_name,
                 max_size_mb=max_size_mb,
+                video_codec=video_codec,
             )
 
         if video_name is None:
@@ -766,8 +769,14 @@ class Downloader:
         cookiefile: Path | None = None,
         *,
         force_generic_extractor: bool = True,
+        video_codec: str | None = None,
     ) -> VideoInfo:
-        cache_key = f"{int(force_generic_extractor)}:{url}"
+        preference = (
+            normalize_codec(video_codec)
+            if video_codec is not None
+            else codec_preference(self.config)
+        )
+        cache_key = f"{int(force_generic_extractor)}:{preference}:{url}"
         if (info := self.info_cache.get(cache_key)) is not None:
             return info
 
@@ -800,7 +809,13 @@ class Downloader:
         video_name: str | None = None,
         *,
         max_size_mb: int | None = None,
+        video_codec: str | None = None,
     ) -> Path:
+        preference = (
+            normalize_codec(video_codec)
+            if video_codec is not None
+            else codec_preference(self.config)
+        )
         _ = await self.ytdlp_extract_info(
             url,
             cookiefile,
@@ -812,6 +827,8 @@ class Downloader:
         else:
             file_stem = Path(generate_file_name(url)).stem
 
+        if preference in {"avc", "hevc"}:
+            file_stem += f"_codec_{preference}"
         video_path = self.cache_dir / f"{file_stem}.mp4"
         self._ensure_parent_dir(video_path)
 
@@ -821,10 +838,7 @@ class Downloader:
         opts = {
             "outtmpl": str(self.cache_dir / file_stem) + ".%(ext)s",
             "merge_output_format": "mp4",
-            "format": "best[height<=720]/bestvideo[height<=720]+bestaudio/best",
-            "postprocessors": [
-                {"key": "FFmpegVideoConvertor", "preferedformat": "mp4"}
-            ],
+            "format": ytdlp_video_format(preference),
             "cookiefile": None,
             "nocheckcertificate": True,
             "noplaylist": True,

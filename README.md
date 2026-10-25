@@ -48,7 +48,7 @@ wheel 保留完整的 `astrbot_plugin_parser_x` 包命名空间和运行资源�
 
 - `comments.enabled`：统一卡片/热门评论开关，默认 `true`。关闭时不生成、复用或发送生成卡片；原始媒体和原生正文仍按发送流程处理。
 - `comments.display_count`：最多展示的主评论数，默认 **10**，范围 **1–20**；首条楼中楼不计入主评论数量。
-- `performance.video_codec`：B站编码偏好，`auto` / `hevc` / `avc`，默认 `hevc`。
+- `performance.video_codec`：全平台视频源编码偏好，`auto` / `hevc` / `avc`，默认仍为 `hevc`（保留旧配置）。`auto` 保留各平台原选择；明确偏好只在已有候选源中选择，没有目标编码就沿用原源，不额外探测、不强制转码。B站、抖音、小红书及能提供编码信息的微博/yt-dlp 源参与选择；快手和小黑盒当前入口通常只有单一源或 CDN 镜像，保持原源。
 - `cookies.*`：7 个平台的原始 Cookie，见下节。
 - `behavior.disabled_sessions`：关闭解析的会话列表，通常由命令维护。
 

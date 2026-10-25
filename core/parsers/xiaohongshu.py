@@ -13,6 +13,7 @@ from ..comment_settings import CommentSettings
 from ..data import DynamicContent
 from ..html_renderer import HtmlRenderService
 from ..topic_text import strip_topic_tags
+from ..video_codec import codec_preference, prefer_candidates
 
 
 from ..download import Downloader
@@ -720,7 +721,9 @@ class XiaoHongShuParser(BaseParser):
             )
             if not still:
                 still = first_media_url(item.get("infoList"))
-            motion = motion_url({"stream": item.get("stream")})
+            motion = motion_url(
+                {"stream": item.get("stream")}, codec_preference(self.config)
+            )
             key = ("live" if motion else "image", motion or still)
             if key in seen or not key[1]:
                 continue
@@ -836,7 +839,10 @@ class XiaoHongShuParser(BaseParser):
         contents = []
         note_image_urls = note_detail.image_urls
 
-        if video_url := note_detail.video_url:
+        if video_url := (
+            note_detail.video.select_video_url(codec_preference(self.config))
+            if note_detail.type == "video" and note_detail.video else None
+        ):
             cover_url = note_image_urls[0] if note_image_urls else None
             contents.append(self.create_video_content(video_url, cover_url))
 
@@ -941,7 +947,10 @@ class XiaoHongShuParser(BaseParser):
         contents = []
         image_urls = list(note_data_obj.image_urls or [])
 
-        if video_url := note_data_obj.video_url:
+        if video_url := (
+            note_data_obj.video.select_video_url(codec_preference(self.config))
+            if note_data_obj.type == "video" and note_data_obj.video else None
+        ):
             if preload_data:
                 preload_obj = convert(preload_data, type=NormalNotePreloadData)
                 img_urls = preload_obj.image_urls
@@ -1120,6 +1129,9 @@ class Video(Struct):
 
     @property
     def video_url(self) -> str | None:
+        return self.select_video_url()
+
+    def select_video_url(self, preference: str = "auto") -> str | None:
         stream = self.media.stream
 
         # h264 优先，兼容性最好；之后再考虑 h265/av1/h266
@@ -1130,13 +1142,16 @@ class Video(Struct):
             stream.h266 or [],
         ]
 
-        all_urls: list[str] = []
-
-        for group in groups:
+        candidates: list[tuple[str, str]] = []
+        for codec, group in zip(("avc", "hevc", "av1", "h266"), groups):
             for item in group:
                 if not isinstance(item, dict):
                     continue
-                all_urls.extend(self._collect_urls_from_stream_item(item))
+                candidates.extend(
+                    (url, codec) for url in self._collect_urls_from_stream_item(item)
+                )
+        candidates = prefer_candidates(candidates, preference, lambda item: item[1])
+        all_urls = [url for url, _ in candidates]
 
         if not all_urls:
             return None

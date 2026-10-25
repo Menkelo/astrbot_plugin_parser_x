@@ -10,6 +10,7 @@ from astrbot.api import logger
 
 from ..data import AudioContent, Platform, VideoContent
 from ..exception import ParseException, SkipParseException
+from ..video_codec import codec_preference
 from .base import BaseParser, handle
 
 
@@ -38,11 +39,17 @@ class YtDlpParser(BaseParser, ABC):
             raise SkipParseException()
 
         cookiefile = self._cookie_file()
+        # Audio-only adapters retain their existing extraction/download policy.
+        video_options = (
+            {"video_codec": codec_preference(self.config)}
+            if self.media_kind == "video" else {}
+        )
         try:
             info = await self.downloader.ytdlp_extract_info(
                 url,
                 cookiefile,
                 force_generic_extractor=False,
+                **video_options,
             )
         except Exception as exc:
             raise ParseException(
@@ -71,6 +78,7 @@ class YtDlpParser(BaseParser, ABC):
                 use_ytdlp=True,
                 cookiefile=cookiefile,
                 max_size_mb=max_size_mb,
+                **video_options,
             )
             contents = [VideoContent(task, duration=info.duration or 0)]
 

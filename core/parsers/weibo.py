@@ -20,6 +20,7 @@ from ..data import (
     VideoContent,
 )
 from ..download import Downloader
+from ..video_codec import codec_preference, normalize_codec, prefer_candidates
 from ..html_renderer import HtmlRenderService
 from ..platform_emotes import select_text_emotes
 from ..utils import cached_image_to_data_uri, normalize_image_url
@@ -532,7 +533,10 @@ class WeiboParser(BaseParser):
                     pass
 
     def _fid_result(self, info: dict, fid: str):
-        url = self._pick_video_url({"urls": info.get("urls"), "media_info": info})
+        url = self._pick_video_url(
+            {"urls": info.get("urls"), "media_info": info},
+            codec_preference(self.config),
+        )
         if not url:
             raise ParseException("微博视频未返回可用播放地址")
         reward = info.get("reward") if isinstance(info.get("reward"), dict) else {}
@@ -566,7 +570,7 @@ class WeiboParser(BaseParser):
             return 0.0
 
     @classmethod
-    def _media_specs(cls, data: dict):
+    def _media_specs(cls, data: dict, preference: str = "auto"):
         # (kind, URL, duration, optional still image), in source order.
         specs = []
         seen = set()
@@ -587,9 +591,14 @@ class WeiboParser(BaseParser):
                     add("live", url, still=still)
                     return
             if cls._is_video_pic(pic):
-                url = media_url(
-                    pic.get("videoSrc") or pic.get("video_src")
-                ) or cls._pick_video_url(pic)
+                direct_url = media_url(pic.get("videoSrc") or pic.get("video_src"))
+                # Keep videoSrc as the legacy fallback while allowing only a
+                # codec-labelled playback representation to supersede it.
+                source = (
+                    {**pic, "urls": {"mp4_720p_mp4": direct_url}}
+                    if direct_url else pic
+                )
+                url = cls._pick_video_url(source, preference)
                 if url:
                     add("video", url)
                     return
@@ -608,7 +617,7 @@ class WeiboParser(BaseParser):
                     info = item.get("media_info") or {}
                     add(
                         "video",
-                        cls._pick_video_url(item),
+                        cls._pick_video_url(item, preference),
                         info.get("duration") if isinstance(info, dict) else 0,
                     )
                 elif entry.get("type") in {"pic", "livephoto"}:
@@ -632,7 +641,7 @@ class WeiboParser(BaseParser):
         if not specs:
             for url in cls._collect_static_pic_urls(data):
                 add("image", url)
-        for url, duration in cls._collect_video_items(data):
+        for url, duration in cls._collect_video_items(data, preference):
             add("video", url, duration)
         return specs
 
@@ -702,7 +711,9 @@ class WeiboParser(BaseParser):
         static_pic_urls = []
         seen_media = set()
         for media_source in media_sources:
-            for kind, url, duration, still in self._media_specs(media_source):
+            for kind, url, duration, still in self._media_specs(
+                media_source, codec_preference(self.config)
+            ):
                 if (kind, url) in seen_media:
                     continue
                 seen_media.add((kind, url))
@@ -832,13 +843,35 @@ class WeiboParser(BaseParser):
         )
 
     @staticmethod
-    def _pick_video_url(page_info: dict) -> str | None:
+    def _pick_video_url(page_info: dict, preference: str = "auto") -> str | None:
         if not isinstance(page_info, dict):
             return None
         info = page_info.get("media_info") or {}
         urls = page_info.get("urls") or {}
         info = info if isinstance(info, dict) else {}
         urls = urls if isinstance(urls, dict) else {}
+        if preference in {"avc", "hevc"}:
+            # Only playback representations expose per-source codec evidence.
+            # A URL's extension, quality label or host is not codec evidence.
+            candidates = []
+            for playback in info.get("playback_list") or []:
+                if not isinstance(playback, dict):
+                    continue
+                play_info = playback.get("play_info")
+                if not isinstance(play_info, dict):
+                    continue
+                url = media_url(play_info.get("url"))
+                codec = next(
+                    (codec for key in ("video_codec", "codec", "codec_name", "vcodec")
+                     if (codec := normalize_codec(play_info.get(key)))),
+                    "",
+                )
+                if url:
+                    candidates.append((url, codec))
+            preferred = prefer_candidates(candidates, preference, lambda item: item[1])
+            if preferred and preferred[0][1] == preference:
+                return preferred[0][0]
+        # Keep the exact legacy priority when auto/unknown/unavailable is requested.
         for key in ("mp4_720p_mp4", "mp4_hd_mp4", "mp4_ld_mp4"):
             if url := media_url(urls.get(key)):
                 return url
@@ -864,7 +897,9 @@ class WeiboParser(BaseParser):
         return None
 
     @classmethod
-    def _collect_video_items(cls, data: dict) -> list[tuple[str, float | int]]:
+    def _collect_video_items(
+        cls, data: dict, preference: str = "auto"
+    ) -> list[tuple[str, float | int]]:
         if not isinstance(data, dict):
             return []
 
@@ -872,7 +907,7 @@ class WeiboParser(BaseParser):
 
         page_info = data.get("page_info") or {}
         if isinstance(page_info, dict) and page_info.get("type") == "video":
-            video_url = cls._pick_video_url(page_info)
+            video_url = cls._pick_video_url(page_info, preference)
             if video_url:
                 media_info = page_info.get("media_info") or {}
                 if not isinstance(media_info, dict):
@@ -887,12 +922,16 @@ class WeiboParser(BaseParser):
 
                 video_url = pic.get("videoSrc") or pic.get("video_src")
                 if isinstance(video_url, str) and video_url:
+                    if preference in {"avc", "hevc"} and media_url(video_url):
+                        video_url = cls._pick_video_url(
+                            {**pic, "urls": {"mp4_720p_mp4": video_url}}, preference
+                        ) or video_url
                     items.append((video_url, 0, f"pic:{pic.get('pid') or video_url}"))
 
         # url_objects 和 page_info 往往指向同一个视频；只有前面没拿到视频时才兜底。
         if not items:
             for video_obj in cls._iter_url_object_videos(data):
-                video_url = cls._pick_video_url(video_obj)
+                video_url = cls._pick_video_url(video_obj, preference)
                 if not video_url:
                     continue
                 media_info = video_obj.get("media_info") or {}

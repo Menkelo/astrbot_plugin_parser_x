@@ -16,8 +16,11 @@ from ...download import Downloader
 from ...html_renderer import HtmlRenderService
 from ...utils import cookies_str_to_netscape
 from ...nonwork_guard import is_nonwork_url
+from ...video_codec import codec_preference
 from ..base import BaseParser, ParseException, Platform, SkipParseException, handle
-from ..gallery import first_media_url, live_photo, motion_url, ordered_media_plan
+from ..gallery import (
+    first_media_url, live_photo, motion_url, ordered_media_plan, preferred_motion_url,
+)
 from .comment_feed import DouyinCommentFeed
 from .extractor import (
     extract_id_from_query,
@@ -690,7 +693,8 @@ class DouyinParser(BaseParser):
                 ),
                 None,
             )
-            motion = motion_url(item.get("video")) or motion_url(item)
+            preference = codec_preference(self.config)
+            motion = motion_url(item.get("video"), preference) or motion_url(item, preference)
             if not still and isinstance(item.get("video"), dict):
                 still = first_media_url(item["video"].get("cover"))
             key = ("live" if motion else "image", motion or still)
@@ -713,15 +717,18 @@ class DouyinParser(BaseParser):
 
         headers = media_headers or self.ios_headers
         contents = []
+        video_url = preferred_motion_url(
+            aweme.get("video"), codec_preference(self.config)
+        ) or meta.video_url
         gallery = self._gallery_contents(aweme, headers)
         image_urls = meta.image_urls or extract_static_image_urls_deep(aweme)
 
         if gallery:
             contents.extend(gallery)
 
-        elif meta.video_url and self._is_video_like_url(meta.video_url):
+        elif video_url and self._is_video_like_url(video_url):
             task = self.downloader.download_video(
-                meta.video_url,
+                video_url,
                 video_name=f"douyin_{meta.id or vid}.mp4",
                 ext_headers=headers,
             )

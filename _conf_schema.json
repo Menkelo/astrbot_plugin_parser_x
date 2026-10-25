@@ -28,8 +28,8 @@
     "type": "object",
     "items": {
       "video_codec": {
-        "description": "B站视频编码偏好",
-        "hint": "HEVC 体积通常更小；若协议端或客户端兼容性不好请选择 AVC。",
+        "description": "全平台视频源编码偏好",
+        "hint": "仅优先平台已提供的 AVC/HEVC 视频源；无目标编码或只有单一源时沿用原源，不强制转码。自动保留各平台原选择。",
         "type": "string",
         "options": [
           "auto",

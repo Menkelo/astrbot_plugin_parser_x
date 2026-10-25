@@ -793,6 +793,8 @@ class XiaoHeiHeParser(BaseParser):
             if seg.type == "img" and seg.url:
                 add_image(seg.url)
             elif seg.type == "video" and seg.url:
+                # One source URL, no per-codec alternatives: keep the original
+                # signed URL for every codec preference (no probing/transcoding).
                 contents.append(
                     VideoContent(
                         self.downloader.download_video(
@@ -824,6 +826,8 @@ class XiaoHeiHeParser(BaseParser):
         ``video_url`` 直链 mp4（带 auth/sign 时效参数，无需 Cookie 也能下）、
         ``video_thumb`` 封面、``video_duration`` 秒、``video_width/height`` 尺寸。
         没有嵌套的 ``video`` 对象，早期按 ``link["video"]`` 取会永远落空。
+        This API exposes one signed source, not codec-labelled representations;
+        auto/avc/hevc therefore all honestly retain that URL without extra I/O.
         """
         url = link.get("video_url")
         if not url:

@@ -720,7 +720,7 @@ class BilibiliParser(BaseParser):
             raise ParseException("B站未获取到可用视频流")
 
         async def download_video_task():
-            output_path = self.cache_dir / f"{video_info.bvid}-{page_num}.mp4"
+            output_path = self.cache_dir / f"{video_info.bvid}-{page_num}_codec_{self.video_codec}.mp4"
 
             if output_path.exists() and output_path.stat().st_size > 100:
                 return output_path
