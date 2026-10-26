@@ -59,7 +59,7 @@ class CardServiceMixin:
         if isinstance(comments, dict) and not parse_bool(comments.get("enabled", True), True):
             return None
         cached_card = result.extra.get("_disk_card_path")
-        if reusable_card(cached_card):
+        if result.platform.name != 'wechat_article' and reusable_card(cached_card):
             return _GeneratedCardContent(cached_card)
         result.extra.pop("_disk_card_path", None)
         for name in ("comment_document_cache", "comment_render_cache"):
@@ -79,6 +79,8 @@ class CardServiceMixin:
             result.title, result.text, result.extra_info, result.timestamp, result.url, extra,
             cache_policy.CACHE_BEHAVIOR_VERSION,
         ]
+        if result.platform.name == 'wechat_article':
+            identity.append('wx-inline-loaded-v1')
         cache_key = hashlib.sha256(
             json.dumps(identity, sort_keys=True, ensure_ascii=False, default=str).encode()
         ).hexdigest()

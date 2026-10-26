@@ -33,6 +33,10 @@ if TYPE_CHECKING:
     from ...data import ParseResult
 
 
+class _SSRDataError(ParseException):
+    """A fetched share page has no usable SSR payload."""
+
+
 class DouyinParser(BaseParser):
     platform: ClassVar[Platform] = Platform(name="douyin", display_name="抖音")
     DAILY_UNSUPPORTED_TEXT: ClassVar[str] = "无法解析抖音限时日常内容"
@@ -538,7 +542,8 @@ class DouyinParser(BaseParser):
 
         语义保持与原串行版本一致：
         - 任一域名抛 SkipParseException(直播等) → 立即上抛，不再等其它；
-        - 全部失败 → 抛出最后一个非 Skip 异常，交由上层走 ytdlp 兜底。
+        - SSR 数据不可用且没有明确 ParseException → 汇总后只调用一次 detail API；
+        - 明确解析错误优先保留，其余全部失败交由上层走原有 ytdlp 兜底。
         """
         urls = [u for u in urls if u]
         if not urls:
@@ -547,11 +552,13 @@ class DouyinParser(BaseParser):
         _start = time.monotonic()
 
         tasks = [
-            asyncio.create_task(self.parse_video(url, vid), name=f"douyin_parse:{url}")
+            asyncio.create_task(self._parse_video_ssr(url, vid), name=f"douyin_parse:{url}")
             for url in urls
         ]
         pending = set(tasks)
         last_err: Exception | None = None
+        ssr_unavailable = False
+        terminal_err: ParseException | None = None
         result = None
 
         try:
@@ -565,6 +572,13 @@ class DouyinParser(BaseParser):
                     except SkipParseException:
                         # 直播等场景：语义上应直接跳过，不再尝试其它域名。
                         raise
+                    except _SSRDataError:
+                        ssr_unavailable = True
+                        continue
+                    except ParseException as e:
+                        terminal_err = e
+                        last_err = e
+                        continue
                     except Exception as e:
                         last_err = e
                         continue
@@ -585,19 +599,24 @@ class DouyinParser(BaseParser):
         logger.debug(
             f"[Douyin][计时] 并发解析全部失败 / {time.monotonic() - _start:.2f}s"
         )
+        if terminal_err is not None:
+            raise terminal_err
+        if ssr_unavailable:
+            return await self._parse_via_detail_api(vid)
         if last_err:
             raise last_err
         raise ParseException("抖音多域名解析均失败")
 
-    async def parse_video(self, url: str, vid: str):
+    async def _parse_video_ssr(self, url: str, vid: str):
         resp = await self._fetch_router_resp(url)
+        return self._process_router_resp(resp, vid)
+
+    async def parse_video(self, url: str, vid: str):
         try:
-            return self._process_router_resp(resp, vid)
-        except ParseException as e:
-            if "未找到 aweme 数据" in str(e):
-                logger.debug(f"[Douyin] SSR 无数据，回退 detail API: {vid}")
-                return await self._parse_via_detail_api(vid)
-            raise
+            return await self._parse_video_ssr(url, vid)
+        except _SSRDataError:
+            logger.debug(f"[Douyin] SSR 数据无效，回退 detail API: {vid}")
+            return await self._parse_via_detail_api(vid)
 
     async def _parse_via_detail_api(self, vid: str):
         """
@@ -630,6 +649,8 @@ class DouyinParser(BaseParser):
                 retries=1,
             )
 
+            if resp.status_code in (401, 403, 404, 410):
+                raise ParseException(f"detail API 请求失败 Status: {resp.status_code}")
             if resp.status_code != 200:
                 continue
 
@@ -656,13 +677,19 @@ class DouyinParser(BaseParser):
     def _process_router_resp(self, resp, vid: str):
         from .video import recursive_collect_videos
 
-        raw_data = msgspec.json.decode(extract_router_data_json_str(resp.text))
+        try:
+            raw_data = msgspec.json.decode(extract_router_data_json_str(resp.text))
+        except (ValueError, msgspec.DecodeError) as e:
+            raise _SSRDataError("SSR 数据无效") from e
         targets = recursive_collect_videos(raw_data, prefer_vid=vid, limit=50)
         if not targets:
-            raise ParseException("未找到 aweme 数据")
+            raise _SSRDataError("未找到 aweme 数据")
 
         aweme = pick_primary_aweme(targets, vid)
-        return self._build_result_from_aweme(aweme, vid)
+        try:
+            return self._build_result_from_aweme(aweme, vid)
+        except msgspec.ValidationError as e:
+            raise _SSRDataError("SSR aweme 结构无效") from e
 
     def _gallery_contents(self, aweme: dict, headers: dict):
         post = aweme.get("image_post_info")

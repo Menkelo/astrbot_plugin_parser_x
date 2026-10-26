@@ -1,5 +1,37 @@
 # 第三方来源与许可声明
 
+## ParseHub（0.0.2 平台适配参考）
+
+- 来源仓库：https://github.com/z-mio/ParseHub
+- 许可证：MIT；Copyright (c) 2024 梓澪。
+- 用途：贴吧 `provider_api/tieba.py` / `parser/tieba.py` 的公开帖子字段及请求契约，酷安 `provider_api/coolapk.py` 与公众号 `provider_api/weixin.py` 及相关 parser 的正文选择器、图片顺序和公开页面字段参考；在 Parser X 的现有数据、下载、评论、缓存及投递接口内适配，不引入 ParseHub 运行时。
+- 知乎签名模块另注明衍生自 `cv-cat/ZhihuApis`，未核实该上游授权，因此本版本不复制该签名算法或常量。网易云音乐及 NGA 为独立适配，并非 ParseHub 移植。未复制 AGPL 的 `astrbot_plugin_media_parser` 实现。
+- 贴吧后续 HTTPS Android 接口验证参考了 `drdon1234/astrbot_plugin_media_parser` 提交 `056085e430ff2b1d8c03c64a2030fff81efdce04` 所展示的接口位置，并用两个公开帖子独立观察请求/响应协议；该仓库为 AGPL-3.0，不将其源码、函数或解析实现移植到本项目。接口字段观察不等于对上游代码的兼容许可声明。
+
+```text
+MIT License
+
+Copyright (c) 2024 梓澪
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
 ## rconsole-plugin
 
 - 来源仓库：https://github.com/zhiyu1998/rconsole-plugin

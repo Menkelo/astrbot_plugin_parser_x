@@ -417,7 +417,9 @@ def _json_url_priority(url: str) -> int | None:
     host = (parsed.hostname or "").lower()
     allowed = ("bilibili.com", "b23.tv", "bili2233.cn", "douyin.com", "iesdouyin.com",
                "xhslink.com", "xhslink.cn", "xiaohongshu.com", "kuaishou.com",
-               "chenzhongtech.com", "weibo.com", "weibo.cn", "xiaoheihe.cn", "acfun.cn")
+               "chenzhongtech.com", "weibo.com", "weibo.cn", "xiaoheihe.cn", "acfun.cn",
+               "tieba.baidu.com", "mp.weixin.qq.com", "music.163.com", "bbs.nga.cn",
+               "nga.178.com", "ngabbs.com", "zhihu.com", "coolapk.com")
     if parsed.scheme not in {"http", "https"} or not any(host == domain or host.endswith("." + domain) for domain in allowed):
         return None
     low = host + parsed.path.lower() + ("?" + parsed.query.lower() if parsed.query else "")
@@ -454,6 +456,19 @@ def _json_url_priority(url: str) -> int | None:
     ):
         return 14
 
+    new_platform_hosts = {
+        "tieba.baidu.com": 16,
+        "mp.weixin.qq.com": 17,
+        "music.163.com": 18,
+        "bbs.nga.cn": 19,
+        "nga.178.com": 19,
+        "ngabbs.com": 19,
+        "zhihu.com": 20,
+        "coolapk.com": 21,
+    }
+    for domain, priority in new_platform_hosts.items():
+        if host == domain or host.endswith("." + domain):
+            return priority
     return None
 
 

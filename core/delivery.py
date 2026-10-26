@@ -36,7 +36,34 @@ from .exception import (
     SizeLimitException,
     ZeroSizeException,
 )
-from .utils import exec_ffmpeg_cmd
+from .utils import exec_ffmpeg_cmd, generate_file_name
+
+
+def _wechat_inline_static(result, content, path, card_segment):
+    """Only a complete WX flow image can replace its decoded static original."""
+    if (card_segment is None or result.platform.name != 'wechat_article'
+            or result.extra.get('delivery_text_card_consume_non_video') is not True
+            or result.extra.get('text_card_detach_images')
+            or type(content) is not ImageContent):
+        return False
+    blocks = result.extra.get('text_card_flow')
+    if not isinstance(blocks, (list, tuple)):
+        return False
+    if not any(isinstance(block, dict) and block.get('type') == 'image'
+               and isinstance(block.get('url'), str)
+               and path.stem == Path(generate_file_name(block['url'], '.jpg')).stem
+               for block in blocks):
+        return False
+    try:
+        from PIL import Image as PILImage
+        with PILImage.open(path) as image:
+            if getattr(image, 'is_animated', False):
+                return False
+            image.verify()
+        return True
+    except Exception:
+        return False
+
 
 
 class _GeneratedCardContent(ImageContent):
@@ -460,6 +487,8 @@ class DeliveryMixin:
                     if error and show_download_fail_tip:
                         segments.append(Plain(error.strip()))
                     continue
+                if result.platform.name == 'wechat_article' and await asyncio.to_thread(_wechat_inline_static, result, content, path, lead_card_segment):
+                    continue
                 segment = self._convert_to_seg(content, path)
                 if segment is not None:
                     segments.append(segment)
@@ -705,16 +734,19 @@ class DeliveryMixin:
 
 
         async def prepare_media_segments(
-            contents: list[MediaContent],
+            contents: list[MediaContent], card_task=None,
         ) -> tuple[list[BaseMessageComponent], list[str]]:
             download_results = await asyncio.gather(
                 *(self._download_content(content) for content in contents)
             )
+            card_segment = await card_task if card_task is not None else None
             segments: list[BaseMessageComponent] = []
             errors: list[str] = []
             for content, path, error in download_results:
                 if error:
                     errors.append(error.strip())
+                    continue
+                if path and result.platform.name == 'wechat_article' and await asyncio.to_thread(_wechat_inline_static, result, content, path, card_segment):
                     continue
                 if path and (segment := self._convert_to_seg(content, path)):
                     segments.append(segment)
@@ -897,7 +929,7 @@ class DeliveryMixin:
                 if card_task is not None:
                     card_preparation_tasks.append(card_task)
                 media_segments, errors = await prepare_media_segments(
-                    [content for content in media_contents if content not in video_contents]
+                    [content for content in media_contents if content not in video_contents], card_task
                 )
                 card_segment = await card_task if card_task is not None else None
                 segments: list[BaseMessageComponent] = []
@@ -930,7 +962,7 @@ class DeliveryMixin:
                 )
                 if card_task is not None:
                     card_preparation_tasks.append(card_task)
-                media_segments, errors = await prepare_media_segments(image_contents)
+                media_segments, errors = await prepare_media_segments(image_contents, card_task)
                 card_segment = await card_task if card_task is not None else None
                 segments: list[BaseMessageComponent] = []
                 if card_segment is not None:

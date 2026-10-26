@@ -28,6 +28,17 @@ _GLYPHS: dict[str, str] = {
     "xiaoheihe": "盒",
     "小黑盒": "盒",
     "heybox": "盒",
+    "tieba": "贴",
+    "贴吧": "贴",
+    "wechat_article": "微",
+    "微信公众号": "微",
+    "netease": "云",
+    "网易云音乐": "云",
+    "nga": "N",
+    "zhihu": "知",
+    "知乎": "知",
+    "coolapk": "酷",
+    "酷安": "酷",
 }
 
 _DEFAULT_GLYPH = "P"

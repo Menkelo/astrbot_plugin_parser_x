@@ -8,6 +8,12 @@ from .weibo import WeiboParser
 from .xiaoheihe import XiaoHeiHeParser
 from .xiaohongshu import XiaoHongShuParser
 from .ytdlp import AcFunParser
+from .tieba import TiebaParser
+from .wechat_article import WechatArticleParser
+from .netease import NeteaseParser
+from .nga import NgaParser
+from .zhihu import ZhihuParser
+from .coolapk import CoolapkParser
 
 __all__ = [
     "BaseParser",
@@ -22,4 +28,10 @@ __all__ = [
     "XiaoHeiHeParser",
     "XiaoHongShuParser",
     "AcFunParser",
+    "TiebaParser",
+    "WechatArticleParser",
+    "NeteaseParser",
+    "NgaParser",
+    "ZhihuParser",
+    "CoolapkParser",
 ]

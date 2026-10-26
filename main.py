@@ -116,7 +116,8 @@ class ParserXPlugin(CardServiceMixin, DeliveryMixin, DebugApiMixin, Star):
         self.key_pattern_list = patterns
 
     def _platform_enabled(self, platform_name: str) -> bool:
-        return True
+        # First delivery batch: Tieba and Zhihu remain isolated candidates.
+        return platform_name not in {"tieba", "zhihu"}
 
     def _behavior(self) -> dict:
         behavior = self.config.get("behavior", {})

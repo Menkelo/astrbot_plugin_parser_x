@@ -700,6 +700,10 @@ class UnifiedCardRenderer:
             "full_page": True,
             "scale": "css",
         }
+        if platform_key == 'wechat_article':
+            flow_count = sum(kind == 'image' for kind, _ in _normalise_content_blocks(content_blocks))
+            if flow_count:
+                render_options['require_flow_images'] = flow_count
         target_width = 760
         if phone_layout:
             render_options["viewport_width"] = 900

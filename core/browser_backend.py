@@ -230,6 +230,22 @@ class LocalRenderBackend:
                         logger.debug("Parser X 评论拼图仍有图片加载中，保留原图布局")
                 if settle_ms:
                     await asyncio.sleep(settle_ms / 1000)
+                expected_images = int(options.get('require_flow_images') or 0)
+                if expected_images:
+                    if not full_page:
+                        raise RuntimeError('微信公众号完整图文卡必须全页截图')
+                    await page.wait_for_function(
+                        """expected => {
+                            const images = [...document.querySelectorAll('img.flow-image')];
+                            return images.length === expected && images.every(img => {
+                                const box = img.getBoundingClientRect();
+                                const style = getComputedStyle(img);
+                                return img.complete && img.naturalWidth > 0 && img.naturalHeight > 0
+                                    && box.width > 0 && box.height > 0
+                                    && style.visibility === 'visible' && style.display !== 'none';
+                            });
+                        }""", arg=expected_images, timeout=timeout_ms,
+                    )
                 return await page.screenshot(full_page=full_page, type="png")
             finally:
                 try:

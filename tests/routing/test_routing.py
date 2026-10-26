@@ -476,10 +476,10 @@ def test_tieba_is_fully_removed_from_routes_and_configuration():
         (Path(__file__).parents[2] / "_conf_schema.json").read_text(encoding="utf-8")
     )
 
-    assert "tieba.baidu.com" not in keywords
+    assert "tieba.baidu.com" in keywords
     assert "platforms" not in schema
     assert "integrations" not in schema
-    assert not (Path(__file__).parents[2] / "core" / "parsers" / "tieba.py").exists()
+    assert (Path(__file__).parents[2] / "core" / "parsers" / "tieba.py").exists()
 
 
 def test_retired_ytdlp_platforms_are_fully_removed():
@@ -718,7 +718,7 @@ def test_xiaohongshu_ensure_note_url_copies_token_from_share_text():
     )
 
 
-def test_xiaohongshu_extracts_note_from_vue_ref_and_empty_map_fallback():
+def test_xiaohongshu_extracts_matching_vue_ref_and_rejects_wrong_map_id():
     parser = XiaoHongShuParser({"cache_dir": "."}, object())
     note = _xhs_note_payload()
     wrapped = {
@@ -732,6 +732,10 @@ def test_xiaohongshu_extracts_note_from_vue_ref_and_empty_map_fallback():
             }
         }
     }
+    assert not parser._extract_note_from_state(wrapped, "note123")
+    wrapped["value"]["note"]["noteDetailMap"]["value"]["note123"] = (
+        wrapped["value"]["note"]["noteDetailMap"]["value"].pop("other")
+    )
     assert parser._extract_note_from_state(wrapped, "note123") == note
     discovery = {
         "noteData": {
@@ -5092,6 +5096,9 @@ def test_plugin_initializes_and_registers_aiocqhttp_parsers(tmp_path):
                 assert "miyoushe.com" not in plugin.parser_map
                 assert "xiaoheihe" in plugin.parser_map
                 assert "tieba.baidu.com" not in plugin.parser_map
+                assert "zhihu.com" not in plugin.parser_map
+                for platform_name in ("wechat_article", "netease", "nga", "coolapk"):
+                    assert any(p.platform.name == platform_name for p in plugin.parser_map.values())
                 assert "y.qq.com" not in plugin.parser_map
                 assert "kugou.com" not in plugin.parser_map
                 assert "qishui.douyin.com" not in plugin.parser_map
@@ -5129,6 +5136,10 @@ def test_plugin_initializes_and_registers_aiocqhttp_parsers(tmp_path):
                     "xiaohongshu",
                     "acfun",
                     "xiaoheihe",
+                    "wechat_article",
+                    "netease",
+                    "nga",
+                    "coolapk",
                 }
                 assert "integrations" not in plugin.config
                 assert plugin.parser_map["b23.tv"].enable_comment_card is True

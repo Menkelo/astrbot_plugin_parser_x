@@ -2,7 +2,7 @@ import json
 import re
 import time
 from typing import Any, ClassVar, NoReturn
-from urllib.parse import unquote, urlencode, urlparse
+from urllib.parse import unquote, urlencode, urljoin, urlparse
 
 from astrbot.api import logger
 from astrbot.core.config.astrbot_config import AstrBotConfig
@@ -316,21 +316,31 @@ class XiaoHongShuParser(BaseParser):
             seen += 1
         return value
 
-    def _collect_xsec_token(self, *urls: str) -> str:
-        for url in urls:
-            token = self._query_value(url or "", "xsec_token")
-            if token:
-                return token
-        matched = self._XSEC_TOKEN_RE.search(self.source_text or "")
-        if not matched:
-            return ""
-        return unquote(matched.group(1))
+    def _collect_xsec_token(self, *urls: str, xhs_id: str = "") -> str:
+        # Only tokens attached to this note's URL may be reused. A source message
+        # can contain several links (or a bare token belonging to another note).
+        shares = []
+        for text in (*urls, self.source_text or ""):
+            text = self._unwrap_sec_redirect(text or "").replace("&amp;", "&")
+            shares.extend(self._NOTE_SHARE_RE.finditer(text))
+        if not xhs_id and shares:
+            xhs_id = shares[0].group("id")
+        for matched in shares:
+            if matched.group("id") == xhs_id:
+                token = self._query_value(matched.group(0), "xsec_token")
+                if token:
+                    return token
+        return ""
 
     def _ensure_note_url(self, url: str, xhs_id: str = "") -> str:
         url = self._unwrap_sec_redirect(url)
         if re.search(r"xiaohongshu\.com/404(?:/|\?|$)", url, re.I):
             return url
-        token = self._collect_xsec_token(url)
+        matched_url = self._NOTE_SHARE_RE.fullmatch(url)
+        if not matched_url or (xhs_id and matched_url.group("id") != xhs_id):
+            return url
+        xhs_id = xhs_id or matched_url.group("id")
+        token = self._query_value(url, "xsec_token")
         source = ""
         if not token and xhs_id:
             for matched in self._NOTE_SHARE_RE.finditer(self.source_text or ""):
@@ -387,36 +397,52 @@ class XiaoHongShuParser(BaseParser):
         if not isinstance(json_obj, dict):
             return {}
 
-        candidates: list[Any] = []
+        candidates: list[tuple[Any, str]] = []
         note_container = self._unwrap_vue_ref(json_obj.get("note") or {})
         if not isinstance(note_container, dict):
             note_container = {}
         detail_map = self._unwrap_vue_ref(note_container.get("noteDetailMap") or {})
         if not isinstance(detail_map, dict):
             detail_map = {}
-        if xhs_id and xhs_id in detail_map:
-            candidates.append(detail_map.get(xhs_id))
-        candidates.extend(detail_map.values())
+        for key, item in detail_map.items():
+            candidates.append((item, str(key)))
         for key in ("firstNote", "note", "currentNote"):
-            candidates.append(note_container.get(key))
+            candidates.append((note_container.get(key), ""))
 
         note_data_root = self._unwrap_vue_ref(json_obj.get("noteData") or {})
         if isinstance(note_data_root, dict):
             data = self._unwrap_vue_ref(note_data_root.get("data") or {})
             if isinstance(data, dict):
-                candidates.append(data.get("noteData"))
-                candidates.append(data.get("note"))
-                candidates.append(data)
-            candidates.append(note_data_root.get("noteData"))
-            candidates.append(note_data_root.get("normalNotePreloadData"))
+                candidates.append((data.get("noteData"), ""))
+                candidates.append((data.get("note"), ""))
+                candidates.append((data, ""))
+            candidates.append((note_data_root.get("noteData"), ""))
+            candidates.append((note_data_root.get("normalNotePreloadData"), ""))
             error_note = note_data_root.get("errorNoteData")
             if isinstance(error_note, dict):
-                candidates.append(error_note.get("noteData"))
+                candidates.append((error_note.get("noteData"), ""))
 
-        for item in candidates:
+        anonymous: list[dict] = []
+        has_identified_note = False
+        for item, map_id in candidates:
             note = self._as_note_dict(item)
-            if note:
-                return note
+            if not note:
+                continue
+            ids = {str(note[key]) for key in ("noteId", "id") if note.get(key)}
+            wrapper = self._unwrap_vue_ref(item)
+            if isinstance(wrapper, dict):
+                ids.update(str(wrapper[key]) for key in ("noteId", "id")
+                           if wrapper.get(key))
+            if map_id:
+                ids.add(map_id)
+            if ids:
+                has_identified_note = True
+                if not xhs_id or ids == {xhs_id}:
+                    return note
+            elif note not in anonymous:
+                anonymous.append(note)
+        if not has_identified_note and len(anonymous) == 1:
+            return anonymous[0]
         return {}
 
     @staticmethod
@@ -494,6 +520,19 @@ class XiaoHongShuParser(BaseParser):
         except Exception as e:
             return f"<shape error: {e}>"
 
+    @staticmethod
+    def _trusted_document_url(url: str) -> bool:
+        try:
+            parsed = urlparse(url)
+            return (
+                parsed.scheme == "https"
+                and parsed.hostname in {"www.xiaohongshu.com", "xiaohongshu.com"}
+                and parsed.port in (None, 443)
+                and not parsed.username and not parsed.password
+            )
+        except ValueError:
+            return False
+
     async def _request_html(
         self,
         url: str,
@@ -501,19 +540,36 @@ class XiaoHongShuParser(BaseParser):
         headers: dict[str, str],
         timeout: int = 10,
     ) -> tuple[str, str]:
-        resp = await self.http_get(
-            url,
-            headers=headers,
-            allow_redirects=True,
-            timeout=timeout,
-        )
-        html = resp.text or ""
-        final_url = str(resp.url)
-        if resp.status_code >= 400:
-            raise ParseException(f"小红书页面请求失败: HTTP {resp.status_code}")
-        if not html:
-            raise ParseException("小红书页面为空")
-        return final_url, html
+        # Never let a transport forward an explicit Cookie across redirects.
+        # Cookie stays request-local; CDN/media headers remain unauthenticated.
+        for _ in range(6):
+            if not self._trusted_document_url(url):
+                raise ParseException("小红书页面跳转到不可信地址")
+            request_headers = {
+                key: value for key, value in headers.items() if key.lower() != "cookie"
+            }
+            if self.comment_cookie:
+                request_headers["Cookie"] = self.comment_cookie
+            resp = await self.http_get(
+                url, headers=request_headers, allow_redirects=False, timeout=timeout,
+            )
+            final_url = str(resp.url)
+            if not self._trusted_document_url(final_url):
+                raise ParseException("小红书页面跳转到不可信地址")
+            if resp.status_code in (301, 302, 303, 307, 308):
+                location = next((value for key, value in resp.headers.items()
+                                 if key.lower() == "location"), "")
+                if not location:
+                    raise ParseException("小红书页面跳转缺少地址")
+                url = urljoin(final_url, location)
+                continue
+            if resp.status_code >= 400:
+                raise ParseException(f"小红书页面请求失败: HTTP {resp.status_code}")
+            html = resp.text or ""
+            if not html:
+                raise ParseException("小红书页面为空")
+            return final_url, html
+        raise ParseException("小红书页面跳转次数过多")
 
     async def _fetch_html(
         self,
@@ -855,7 +911,10 @@ class XiaoHongShuParser(BaseParser):
         # 不再只给视频笔记出评论。
         comment_extra = self._comment_extra(
             str(note_data.get("noteId") or note_data.get("id") or ""),
-            self._collect_xsec_token(final_url or "", self.source_text or ""),
+            self._collect_xsec_token(
+                final_url or "",
+                xhs_id=str(note_data.get("noteId") or note_data.get("id") or ""),
+            ),
             title=note_title,
             cover=note_image_urls[0] if note_image_urls else None,
             owner_id=self._note_owner_id(note_detail.user),
@@ -1017,7 +1076,10 @@ class XiaoHongShuParser(BaseParser):
                 break
         return self._comment_extra(
             str(note_data.get("noteId") or note_data.get("id") or ""),
-            self._collect_xsec_token(final_url or "", self.source_text or ""),
+            self._collect_xsec_token(
+                final_url or "",
+                xhs_id=str(note_data.get("noteId") or note_data.get("id") or ""),
+            ),
             title=title,
             cover=cover,
             owner_id=self._note_owner_id(getattr(note_data_obj, "user", None)),
@@ -1031,7 +1093,13 @@ class XiaoHongShuParser(BaseParser):
         if not matched:
             raise ParseException("小红书分享链接失效或内容已删除")
 
-        json_str = matched.group(1).replace("undefined", "null")
+        # Complete JSON strings win over bare tokens, including escaped quotes.
+        # JSON still validates the result: no JavaScript evaluation is performed.
+        json_str = re.sub(
+            r'"(?:[^"\\]|\\.)*"|(?<![\w$])undefined(?![\w$])',
+            lambda token: "null" if token.group(0) == "undefined" else token.group(0),
+            matched.group(1),
+        )
         try:
             payload = json.loads(json_str)
         except json.JSONDecodeError as exc:

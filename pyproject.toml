@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "astrbot_plugin_parser_x"
-version = "0.0.1"
+version = "0.0.2"
 description = "AstrBot 国内平台链接解析插件"
 readme = "README.md"
 license = {text = "MIT"}
