@@ -48,6 +48,18 @@ def _image_identity(url: str) -> str:
     """
     if not url:
         return ""
+    from urllib.parse import urlsplit
+
+    parsed = urlsplit(str(url))
+    host = (parsed.hostname or "").lower()
+    # Douyin supplies separate cover/full-size variants of the same asset.
+    # Only its image CDN has this verified identity-preserving ~tplv suffix.
+    if parsed.scheme in {"http", "https"} and (
+        host == "douyinpic.com" or host.endswith(".douyinpic.com")
+    ):
+        asset_path = parsed.path.split("~tplv-", 1)[0]
+        if "~tplv-" in parsed.path:
+            return "douyinpic:" + asset_path
     path = str(url).split("?", 1)[0].split("#", 1)[0]
     parts = [part for part in path.split("/") if part]
     if not parts:
