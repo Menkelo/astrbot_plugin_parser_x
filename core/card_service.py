@@ -171,6 +171,12 @@ class CardServiceMixin:
                 logger.warning(f"评论区获取失败，正文卡照常渲染: {exc}")
                 comment_document = None
 
+        if result.platform.name == 'coolapk':
+            from .article_images import local_coolapk_images
+            content_blocks, media_url, author_avatar = await local_coolapk_images(
+                result, self.downloader, content_blocks, media_url, author_avatar,
+            )
+
         complete = not callable(comment_factory) or comment_document is not None
         # Publish only complete renders. Temporary fallbacks remain retryable.
         out_path = self.cache_dir / f"text_card_{platform_slug}_temporary_{uuid.uuid4().hex}.png"

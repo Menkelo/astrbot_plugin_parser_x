@@ -98,6 +98,43 @@ def _payload(root):
     return None
 
 
+def _legacy_identity(root):
+    """Read only declared legacy string constants, never JS expressions/eval.
+
+    No cgiDataNew identity mapping is assumed without a captured page fixture.
+    Comments and other quoted strings are consumed to avoid matching decoys.
+    """
+    quoted = r'''(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')'''
+    tokens = re.compile(
+        r'//[^\n]*|/\*[\s\S]*?\*/|/(?:\\.|[^/\\\n])+/[A-Za-z]*|'
+        r'\b(?:var|let|const)\s+(nickname|round_head_img)\s*=\s*('
+        + quoted + r')\s*(?=;|$)|' + quoted)
+    fields = {}
+
+    def visit(node):
+        if node.attrs.get('id') == 'js_content':
+            return
+        if node.tag == 'script':
+            source = ''.join(c for c in node.children if isinstance(c, str))
+            # Template interpolation is outside this legacy-literal subset.
+            if '`' in source:
+                return
+            for match in tokens.finditer(source):
+                if match.group(1):
+                    try:
+                        value = ast.literal_eval(match.group(2).replace(r'\/', '/'))
+                    except (ValueError, SyntaxError):
+                        continue
+                    if isinstance(value, str) and value.strip():
+                        fields.setdefault(match.group(1), unescape(value).strip())
+        for child in node.children:
+            if not isinstance(child, str):
+                visit(child)
+
+    visit(root)
+    return fields
+
+
 class WechatArticleParser(BaseParser):
     platform = Platform('wechat_article', '微信公众号')
     image_hosts = {'mmbiz.qpic.cn', 'mmbiz.qlogo.cn'}
@@ -113,6 +150,28 @@ class WechatArticleParser(BaseParser):
         root = _Document(html).root
         if root.find(lambda n: n.attrs.get('id') in {'js_verify', 'js_captcha', 'verify_container', 'captcha_container'}):
             raise ParseException('微信公众号页面要求验证，无法读取公开正文')
+        # Account identity must not come from the article byline or body images.
+        def outside_body(node, predicate):
+            if node.attrs.get('id') == 'js_content':
+                return None
+            if predicate(node):
+                return node
+            for child in node.children:
+                if not isinstance(child, str):
+                    if found := outside_body(child, predicate):
+                        return found
+            return None
+
+        name_node = outside_body(root, lambda n: n.attrs.get('id') == 'js_name')
+        name = '\n'.join(v for k, v in _flow(name_node, set()) if k == 'text') if name_node else None
+        avatar_node = outside_body(root, lambda n: n.tag == 'img'
+            and 'profile_avatar' in (n.attrs.get('class') or '').split())
+        avatar = _image_url(avatar_node.attrs.get('data-src') or avatar_node.attrs.get('src'),
+            self.image_hosts) if avatar_node else None
+        legacy = _legacy_identity(root)
+        name = name or legacy.get('nickname')
+        avatar = avatar or _image_url(legacy.get('round_head_img'), self.image_hosts)
+        author = self.create_author(name) if name else None
         data = _payload(root)
         if data and str(data.get('item_show_type')) not in {'0', '8'}:
             raise ParseException('微信公众号仅支持公开文章与图片消息，不支持音视频')
@@ -126,15 +185,16 @@ class WechatArticleParser(BaseParser):
                 candidate = watermark.get('cdn_url') if isinstance(watermark, dict) else None
                 if image := _image_url(candidate or entry.get('cdn_url'), self.image_hosts):
                     flow.append(('image', image))
-            return self._assemble(flow, url, title=data.get('title') or None)
+            return self._assemble(flow, url, title=data.get('title') or None,
+                author=author, avatar=avatar)
         body = root.find(lambda n: n.attrs.get('id') == 'js_content')
         if body is None and data and str(data.get('item_show_type')) == '0':
             source = data.get('content_noencode')
             if isinstance(source, str) and source.strip():
                 return self._assemble(_flow(_Document(unescape(source)).root, self.image_hosts),
-                    url, title=data.get('title') or None)
+                    url, title=data.get('title') or None, author=author, avatar=avatar)
         if body is None:
             raise ParseException('微信公众号公开正文不可用，可能需要验证或文章已删除')
         title_node = root.find(lambda n: n.attrs.get('id') == 'activity-name')
         title = '\n'.join(v for k, v in _flow(title_node, set()) if k == 'text') if title_node else None
-        return self._assemble(_flow(body, self.image_hosts), url, title=title)
+        return self._assemble(_flow(body, self.image_hosts), url, title=title, author=author, avatar=avatar)

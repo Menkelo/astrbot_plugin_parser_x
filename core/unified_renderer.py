@@ -584,6 +584,15 @@ class UnifiedCardRenderer:
                 + f"{origin_html}</div></div></div></section>"
             )
 
+        # Public articles may omit account identity; never invent an author or
+        # hide the known source platform together with the missing profile.
+        if not profile_html and platform_key in {'coolapk', 'wechat_article'}:
+            profile_html = (
+                '<section class="profile-block"><div class="profile-sub-row">'
+                f'<span class="profile-platform">{self._safe_text(display_name)}</span>'
+                '</div></section>'
+            )
+
         flow_html = self._render_content_flow(normalised_blocks, platform_key=platform_key, emotes=emotes)
         text_html = self._render_text_html(text, platform_key=platform_key, emotes=emotes)
         text_block = (
@@ -700,7 +709,7 @@ class UnifiedCardRenderer:
             "full_page": True,
             "scale": "css",
         }
-        if platform_key == 'wechat_article':
+        if platform_key in {'wechat_article', 'coolapk'}:
             flow_count = sum(kind == 'image' for kind, _ in _normalise_content_blocks(content_blocks))
             if flow_count:
                 render_options['require_flow_images'] = flow_count

@@ -8,7 +8,7 @@ import aiohttp
 from html.parser import HTMLParser
 from urllib.parse import urlsplit, urljoin
 
-from ..card_flow import build_card_extra
+from ..card_flow import build_card_extra, flow_to_blocks
 from ..data import ImageContent, Platform
 from .base import BaseParser, ParseException, handle
 from .gallery import ordered_media_plan
@@ -165,27 +165,59 @@ class CoolapkParser(BaseParser):
         root = _Document(html).root
         def by_class(name):
             return root.find(lambda n: name in (n.attrs.get('class') or '').split())
+        author = avatar = cover = None
+        if userinfo := by_class('common-userinfo-group'):
+            username = userinfo.find(lambda n: 'username-item' in (n.attrs.get('class') or '').split())
+            if username is not None:
+                name_node = username.find(lambda n: n.tag == 'p')
+                name = '\n'.join(v for k, v in _flow(name_node or username, set()) if k == 'text')
+                if name:
+                    author = self.create_author(name)
+            avatar_node = userinfo.find(lambda n: 'avatar-item' in (n.attrs.get('class') or '').split())
+            if avatar_node is not None:
+                image = avatar_node.find(lambda n: n.tag == 'img')
+                if image is not None:
+                    avatar = _image_url(image.attrs.get('data-src') or image.attrs.get('src'),
+                        {'avatar.coolapk.com'})
+        if cover_node := by_class('message-cover'):
+            cover = next((v for k, v in _flow(cover_node, self.image_hosts) if k == 'image'), None)
         title_node = by_class('message-title')
         if title_node is not None:
             body = by_class('feed-article-message')
             if body is None:
                 raise ParseException('酷安长文正文不可用，请保留 shareKey 或 s 参数')
             title = '\n'.join(v for k, v in _flow(title_node, set()) if k == 'text')
-            return self._assemble(_flow(body, self.image_hosts), url, title=title or None)
+            return self._assemble(_flow(body, self.image_hosts), url, title=title or None,
+                author=author, avatar=avatar, cover=cover, preserve_flow=True)
         body = by_class('feed-message')
         if body is None:
             raise ParseException('酷安未找到公开正文，请保留 shareKey 或 s 参数')
         flow = _flow(body, self.image_hosts)
         if group := by_class('message-image-group'):
             flow.extend(_flow(group, self.image_hosts))
-        return self._assemble(flow, url)
+        return self._assemble(flow, url, author=author, avatar=avatar, cover=cover)
 
-    def _assemble(self, flow, url, title=None, author=None):
+    def _assemble(self, flow, url, title=None, author=None, *, avatar=None, cover=None,
+                  preserve_flow=False):
         if not flow:
             raise ParseException('未找到公开文章正文或可信图片')
         images = [value for kind, value in flow if kind == 'image']
         contents = [ImageContent(self.downloader.download_img(image, ext_headers=self.headers)) for image in images]
+        # Long-article images belong to the document, even a lone image or a
+        # trailing gallery. Only the explicit message-cover may become a hero.
+        extra = build_card_extra([] if preserve_flow else flow, cover=cover,
+            extra={'suppress_comments': True})
+        if preserve_flow:
+            extra['text_card_flow'] = flow_to_blocks(flow)
+            if images:
+                extra['image_post_card_in_forward'] = True
+        if self.platform.name == 'coolapk':
+            # Keep the pre-layout URL/task association: hero de-duplication may
+            # remove images from the card flow without removing source tasks.
+            extra['text_card_source_images'] = images
+        if avatar:
+            extra['text_card_avatar'] = avatar
         return self.result(title=title, author=author,
             text='\n'.join(value for kind, value in flow if kind == 'text') or None,
             url=url, contents=contents, delivery=ordered_media_plan(contents),
-            extra=build_card_extra(flow, extra={'suppress_comments': True}))
+            extra=extra)
