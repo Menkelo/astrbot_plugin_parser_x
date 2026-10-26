@@ -929,9 +929,8 @@ class BiliDynamicService:
             card_info.append(f"原图 {len(full_images)} 张")
         extra = {
             "text_card_avatar": author_avatar_data_uri or author_avatar or "",
-            "card_platform_name": "B站动态",
+            "card_platform_name": "B站",
             "card_kind": "动态 · 图文" if full_images else "动态",
-            "card_author_badge": "UP主",
             "card_info": card_info,
             "card_emotes": card_emotes,
         }
