@@ -1,4 +1,5 @@
 """Offline source-codec selection through social parser models and result paths."""
+import asyncio
 from types import SimpleNamespace
 
 import msgspec
@@ -58,7 +59,7 @@ def test_douyin_result_prefers_existing_hevc_without_request(tmp_path, preferenc
                "play_addr": {"url_list": ["https://cdn.example/default.mp4"]},
                "bit_rate": [{"is_h265": 1, "play_addr": {"url_list": ["https://cdn.example/hevc.mp4"]}}],
            }}
-    result = parser._build_result_from_aweme(raw, "123")
+    result = asyncio.run(parser._build_result_from_aweme(raw, "123"))
     assert result.contents[0].url == f"https://cdn.example/{expected}.mp4"
 
 

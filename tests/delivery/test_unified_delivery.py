@@ -176,10 +176,10 @@ def assert_comment_failure_preserves_video(tmp_path, mode, native=False):
             assert not task.done(), "video must start before the slow comment finishes"
         await asyncio.wait_for(task, 2)
         assert calls == ["fetch"]
-        assert len(event.sent) == 2
+        assert len(event.sent) == 1
         assert isinstance(event.sent[0][0], Video)
-        assert plugin.text_renderer.calls[0]["text"] == "body survives"
-        assert plugin.text_renderer.calls[0]["comment_document"] is None
+        assert plugin.text_renderer.calls == []
+        assert result.extra['_video_card_suppressed']
         if mode == "timeout":
             assert cancelled.is_set()
     asyncio.run(run())
@@ -228,6 +228,28 @@ def assert_forward_failure_preserves_card(tmp_path):
     assert plugin.text_renderer.calls[0]["comment_document"] is doc
 
 
+@pytest.mark.parametrize('platform', ['zhihu', 'douyin', 'bilibili', 'xiaohongshu', 'weibo', 'kuaishou', 'acfun', 'wechat_channels'])
+@pytest.mark.parametrize('native', [False, True])
+@pytest.mark.parametrize('with_comments', [False, True])
+def test_video_never_resends_source_image(tmp_path, platform, native, with_comments):
+    plugin = make_plugin(tmp_path)
+    vp, ip = tmp_path / 'v.mp4', tmp_path / 'cover.jpg'
+    vp.write_bytes(b'video')
+    ip.write_bytes(b'original')
+    video, image = VideoContent(vp), ImageContent(ip)
+    async def comments():
+        return document() if with_comments else CommentDocument(DOUYIN_THEME, '', '', '99', [])
+    result = ParseResult(Platform(platform, platform), title='title', text='body', contents=[video, image],
+        delivery=DeliveryPlan([DeliveryBatch([video]), DeliveryBatch([image])]) if native else None,
+        extra={'native_delivery': native, 'render_text_card': True, 'text_card_comment_factory': comments})
+    event = CaptureEvent()
+    asyncio.run(plugin._send_parse_result(event, result))
+    assert isinstance(event.sent[0][0], Video)
+    assert len(event.sent) == (2 if with_comments else 1)
+    assert str(ip) not in str(event.sent)
+    assert len(plugin.text_renderer.calls) == int(with_comments)
+
+
 def test_forward_failure_preserves_unified_card(tmp_path):
     assert_forward_failure_preserves_card(tmp_path)
 
@@ -250,7 +272,7 @@ def test_native_media_only_plan_preserves_body_on_render_failure(tmp_path, kind)
     event = CaptureEvent()
     asyncio.run(plugin._send_parse_result(event, result))
     parts = [part for chain in event.sent for part in chain] + forwarded_parts(event)
-    assert any(isinstance(part, Plain) and "body must survive" in part.text for part in parts)
+    assert any(isinstance(part, Plain) and "body must survive" in part.text for part in parts) == (kind == 'image')
     expected_type = Image if kind == "image" else Video
     assert any(isinstance(part, expected_type) for part in parts)
     if kind == "video":

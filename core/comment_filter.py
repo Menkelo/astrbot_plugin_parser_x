@@ -428,6 +428,22 @@ class CommentFilter:
             entry.first_reply = reply
         return entry, None, qr_errors
 
+    async def apply_keeping_pinned(self, entries: list[EntryT], *, limit: int) -> list[EntryT]:
+        """过滤后保留置顶评论，并把它放在首位。
+
+        置顶条（UP主/原博置顶）经常是广告位、低信息量或与热评重复，直接和普通
+        评论一起过 ``apply`` 会被过滤或挤出 ``limit``，用户看到的就是「置顶没了」。
+        置顶不参与 limit 竞争，只参与过滤；过滤后重新接回首位。
+        """
+        pinned = [entry for entry in entries if getattr(entry, "pinned", False)]
+        if not pinned:
+            return await self.apply(entries, limit=limit)
+        rest = [entry for entry in entries if not getattr(entry, "pinned", False)]
+        filtered = await self.apply(rest, limit=limit)
+        kept_pinned = await self.apply(pinned, limit=len(pinned))
+        # 置顶固定在最前，其余保持平台原有顺序（点赞/时间排序不受影响）。
+        return [*kept_pinned, *filtered]
+
     async def apply(self, entries: list[EntryT], *, limit: int) -> list[EntryT]:
         if not self.settings.enabled:
             return entries[:limit]

@@ -191,42 +191,128 @@ def test_malformed_html_falls_back_to_text():
 class TestLongArticleInterception:
     """长文帖只回提示，不做完整解析。
 
-    判据是「没有头图 且 正文够长」，不再看 link_tag —— 平台的 link_tag
-    会把正常图帖也标成 11，只看它会把带图的帖子误拦。
+    文章身份只认平台标记（is_article=1 或 link_tag=11）。
+    普通帖和缺失标记的帖子不能因为字多、图少或没有头图而被猜成文章。
     """
 
     @staticmethod
-    def _link(text_chars: int, thumb: str | None) -> dict:
+    def _link(
+        text_chars: int,
+        thumb: str | None,
+        *,
+        link_tag: int = 27,
+        is_article: int = 0,
+        images: int = 0,
+    ) -> dict:
         import json
 
+        segments = [{"type": "text", "text": "字" * text_chars}]
+        segments += [{"type": "img", "url": f"https://img.example.com/{i}.jpg"} for i in range(images)]
         return {
             "thumb": thumb,
-            "text": json.dumps([{"type": "text", "text": "字" * text_chars}]),
+            "text": json.dumps(segments),
+            "link_tag": link_tag,
+            "is_article": is_article,
         }
 
     @pytest.mark.parametrize(
-        "text_chars, thumb, expected",
+        "text_chars, thumb, link_tag, expected",
         [
-            # 长正文 + 无头图 → 文章型长文
-            (1058, None, True),
-            (1585, None, True),
-            # 正文很短 → 正常帖，哪怕没有头图
-            (262, None, False),
-            (134, None, False),
-            # 有头图 → 正常帖，哪怕正文很长
-            (1200, "https://img.example.com/a.jpg", False),
+            # 平台标成文章（link_tag=11）且有正文 → 长文
+            (1058, None, 11, True),
+            (1585, None, 11, True),
+            (262, None, 27, False),
+            (134, None, 27, False),
+            # 头图早已不参与判断，长正文照样是长文
+            (1200, "https://img.example.com/a.jpg", 11, True),
         ],
     )
-    def test_is_long_article(self, text_chars, thumb, expected):
+    def test_is_long_article(self, text_chars, thumb, link_tag, expected):
         from astrbot_plugin_parser_x.core.parsers.xiaoheihe import XiaoHeiHeParser
 
-        assert XiaoHeiHeParser._is_long_article(self._link(text_chars, thumb)) is expected
+        assert (
+            XiaoHeiHeParser._is_long_article(self._link(text_chars, thumb, link_tag=link_tag))
+            is expected
+        )
 
     @pytest.mark.parametrize("value", [None, "", "abc", [], {}])
     def test_is_long_article_tolerates_junk(self, value):
         from astrbot_plugin_parser_x.core.parsers.xiaoheihe import XiaoHeiHeParser
 
         assert XiaoHeiHeParser._is_long_article({"text": value, "thumb": value}) is False
+
+    def test_article_tag_with_empty_body_is_not_long(self):
+        """标成文章但正文是空的，谈不上"长文"，不能只回一句提示。"""
+        from astrbot_plugin_parser_x.core.parsers.xiaoheihe import XiaoHeiHeParser
+
+        assert XiaoHeiHeParser._is_long_article(self._link(0, None, link_tag=11)) is False
+
+    @pytest.mark.parametrize("text_chars", [799, 800, 801, 1367, 20000])
+    @pytest.mark.parametrize("images", [0, 1, 2, 3, 4])
+    @pytest.mark.parametrize("link_tag", [1, 27])
+    def test_plain_post_is_not_guessed_from_length(self, text_chars, images, link_tag):
+        from astrbot_plugin_parser_x.core.parsers.xiaoheihe import XiaoHeiHeParser
+
+        link = self._link(text_chars, None, link_tag=link_tag, images=images)
+        assert XiaoHeiHeParser._is_long_article(link) is False
+
+    @pytest.mark.parametrize("markers", [{}, {"is_article": 0}, {"link_tag": 0}, {"link_tag": 99}])
+    def test_missing_or_unknown_markers_do_not_guess_article(self, markers):
+        from astrbot_plugin_parser_x.core.parsers.xiaoheihe import XiaoHeiHeParser
+
+        link = self._link(20000, None)
+        link.pop("is_article")
+        link.pop("link_tag")
+        link.update(markers)
+        assert XiaoHeiHeParser._is_long_article(link) is False
+
+    def test_platform_article_flag_wins(self):
+        """is_article 是平台自己的判定，不看字数。"""
+        from astrbot_plugin_parser_x.core.parsers.xiaoheihe import XiaoHeiHeParser
+
+        link = self._link(20, "https://img.example.com/a.jpg", is_article=1)
+        assert XiaoHeiHeParser._is_long_article(link) is True
+
+    @pytest.mark.parametrize("flag", [0, "0", None, "", False, "false", [], {}])
+    def test_false_article_flag_is_not_truthy_string(self, flag):
+        from astrbot_plugin_parser_x.core.parsers.xiaoheihe import XiaoHeiHeParser
+
+        link = self._link(1367, None)
+        link["is_article"] = flag
+        assert XiaoHeiHeParser._is_long_article(link) is False
+
+    @pytest.mark.parametrize("flag", [1, "1", True])
+    @pytest.mark.parametrize("images", [0, 4])
+    def test_explicit_article_flag_keeps_existing_policy(self, flag, images):
+        from astrbot_plugin_parser_x.core.parsers.xiaoheihe import XiaoHeiHeParser
+
+        link = self._link(20, None, images=images)
+        link["is_article"] = flag
+        assert XiaoHeiHeParser._is_long_article(link) is True
+
+    @pytest.mark.parametrize("tag", [11, "11"])
+    @pytest.mark.parametrize("images", [0, 4])
+    def test_article_tag_keeps_existing_policy_even_with_images(self, tag, images):
+        from astrbot_plugin_parser_x.core.parsers.xiaoheihe import XiaoHeiHeParser
+
+        link = self._link(1367, None, images=images)
+        link["link_tag"] = tag
+        assert XiaoHeiHeParser._is_long_article(link) is True
+
+    def test_long_but_image_heavy_post_is_not_article(self):
+        """1367 字 + 4 图的水贴不能因为「没有头图」被当成文章。
+
+        真实回归：link_id=02be72b52f1e，is_article=0、link_tag=27，
+        正文是一段 AI 提示词配 4 张图，曾被判成长文，用户只收到
+        「这是小黑盒长文帖」而看不到图。
+        """
+        from astrbot_plugin_parser_x.core.parsers.xiaoheihe import XiaoHeiHeParser
+
+        link = self._link(1367, None, link_tag=27, is_article=0, images=4)
+        assert XiaoHeiHeParser._is_long_article(link) is False
+        # 同一篇即使删掉配图也仍是普通帖，不能按字数改变文章身份。
+        prose = self._link(1367, None, link_tag=27, is_article=0, images=0)
+        assert XiaoHeiHeParser._is_long_article(prose) is False
 
     def test_missing_fields_is_not_article(self):
         from astrbot_plugin_parser_x.core.parsers.xiaoheihe import XiaoHeiHeParser

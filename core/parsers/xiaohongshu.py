@@ -202,6 +202,8 @@ class XiaoHongShuParser(BaseParser):
         text = str(value or "").strip()
         if not text:
             return ""
+        # 小红书序列化话题为 #名称[话题]#；只移除协议标记，保留可高亮话题。
+        text = re.sub(r"#([^#\r\n]+?)\[话题\]#", r"#\1", text)
         return strip_topic_tags(text)
 
     @staticmethod
@@ -424,24 +426,32 @@ class XiaoHongShuParser(BaseParser):
 
         anonymous: list[dict] = []
         has_identified_note = False
+        claimed = False
         for item, map_id in candidates:
             note = self._as_note_dict(item)
             if not note:
                 continue
-            ids = {str(note[key]) for key in ("noteId", "id") if note.get(key)}
+            # Only the note's own identifiers prove identity. A noteDetailMap
+            # key may be a placeholder such as "other", so it counts as an
+            # opaque key instead of a competing id: demanding an exact set
+            # equality dropped real notes whose key was not the note id.
+            own_ids = {str(note[key]) for key in ("noteId", "id") if note.get(key)}
             wrapper = self._unwrap_vue_ref(item)
             if isinstance(wrapper, dict):
-                ids.update(str(wrapper[key]) for key in ("noteId", "id")
-                           if wrapper.get(key))
+                own_ids.update(str(wrapper[key]) for key in ("noteId", "id")
+                               if wrapper.get(key))
+            ids = set(own_ids)
             if map_id:
                 ids.add(map_id)
             if ids:
                 has_identified_note = True
-                if not xhs_id or ids == {xhs_id}:
+                if not xhs_id or not own_ids or xhs_id in own_ids:
+                    if own_ids and xhs_id:
+                        claimed = True
                     return note
             elif note not in anonymous:
                 anonymous.append(note)
-        if not has_identified_note and len(anonymous) == 1:
+        if not claimed and not has_identified_note and len(anonymous) == 1:
             return anonymous[0]
         return {}
 
@@ -467,6 +477,11 @@ class XiaoHongShuParser(BaseParser):
             return "小红书分享链接失效或内容已删除"
         if re.search(r"xiaohongshu\.com/404(?:/|\?|$)", final, re.I):
             return "小红书分享链接失效或内容已删除"
+        # A rejected session lands on /website-login/error with a plain
+        # 「小红书」title, so the checks above miss it and the parser used to
+        # report a deleted note for what is really a login requirement.
+        if re.search(r"xiaohongshu\.com/website-login/(?:error|captcha)", final, re.I):
+            return "小红书要求登录后才能浏览（分享链接需要有效 Cookie）"
         if not isinstance(json_obj, dict):
             return None
         if json_obj.get("notFoundPage"):
@@ -539,6 +554,7 @@ class XiaoHongShuParser(BaseParser):
         *,
         headers: dict[str, str],
         timeout: int = 10,
+        with_cookie: bool = False,
     ) -> tuple[str, str]:
         # Never let a transport forward an explicit Cookie across redirects.
         # Cookie stays request-local; CDN/media headers remain unauthenticated.
@@ -548,7 +564,11 @@ class XiaoHongShuParser(BaseParser):
             request_headers = {
                 key: value for key, value in headers.items() if key.lower() != "cookie"
             }
-            if self.comment_cookie:
+            # Note pages are fetched anonymously by default: a stale logged-in
+            # Cookie makes xiaohongshu.com redirect to /website-login/error
+            # ("分享链接失效"), while the same page parses fine without it.
+            # with_cookie=True is the fallback for login-only notes.
+            if with_cookie and self.comment_cookie:
                 request_headers["Cookie"] = self.comment_cookie
             resp = await self.http_get(
                 url, headers=request_headers, allow_redirects=False, timeout=timeout,
@@ -600,6 +620,21 @@ class XiaoHongShuParser(BaseParser):
                 retry_final, retry_html = "", ""
             if retry_html and not self._blocked_page_reason(retry_final, retry_html):
                 final_url, html = retry_final, retry_html
+
+        # Login-only notes never reach the anonymous page: retry once with the
+        # configured Cookie and only accept it when it actually beats the
+        # anonymous result. The anonymous page is never replaced by a worse one.
+        if self.comment_cookie and self._blocked_page_reason(final_url, html):
+            try:
+                cookie_final, cookie_html = await self._request_html(
+                    url, headers=headers, timeout=timeout, with_cookie=True
+                )
+            except ParseException:
+                cookie_final, cookie_html = "", ""
+            if (cookie_html
+                    and not self._blocked_page_reason(cookie_final, cookie_html)
+                    and self._extract_initial_state_json(cookie_html)):
+                final_url, html = cookie_final, cookie_html
 
         self._cache_set_page(url, final_url, html)
         return final_url, html
@@ -685,6 +720,7 @@ class XiaoHongShuParser(BaseParser):
                 "暂时无法浏览",
                 "分享链接失效",
                 "内容已删除",
+                "要求登录",
             )
         )
 
@@ -720,7 +756,7 @@ class XiaoHongShuParser(BaseParser):
         )
         logger.debug(f"[XHS] explore url: {final_url}")
 
-        json_obj = self._extract_initial_state_json(html)
+        json_obj = self._extract_initial_state_json(html, final_url)
         note_data = self._extract_note_from_state(json_obj, xhs_id)
         if not note_data:
             self._raise_missing_note(
@@ -741,7 +777,7 @@ class XiaoHongShuParser(BaseParser):
         )
         logger.debug(f"[XHS] discovery url: {final_url}")
 
-        json_obj = self._extract_initial_state_json(html)
+        json_obj = self._extract_initial_state_json(html, final_url)
         note_data = self._extract_note_from_state(json_obj, xhs_id)
         if note_data:
             if self._is_discovery_note(note_data):
@@ -1085,12 +1121,21 @@ class XiaoHongShuParser(BaseParser):
             owner_id=self._note_owner_id(getattr(note_data_obj, "user", None)),
         )
 
-    def _extract_initial_state_json(self, html: str) -> dict[str, Any]:
+    def _extract_initial_state_json(
+        self, html: str, page_url: str = ""
+    ) -> dict[str, Any]:
 
         pattern = r"window\.__INITIAL_STATE__=(.*?)</script>"
         matched = re.search(pattern, html, re.DOTALL)
 
         if not matched:
+            # A login/captcha shim has no state blob either. The marker only
+            # survives in the final URL, so report why instead of blaming the
+            # share link.
+            if re.search(r"website-login/(?:error|captcha)", page_url or "", re.I):
+                raise ParseException(
+                    "小红书要求登录后才能浏览（分享链接需要有效 Cookie）"
+                )
             raise ParseException("小红书分享链接失效或内容已删除")
 
         # Complete JSON strings win over bare tokens, including escaped quotes.

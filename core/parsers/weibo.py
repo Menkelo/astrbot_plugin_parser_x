@@ -787,27 +787,32 @@ class WeiboParser(BaseParser):
                 video_cover = normalize_image_url(page_pic)
                 if video_cover:
                     break
-        if video_cover:
+        card_cover = video_cover or (static_pic_urls[0] if static_pic_urls else None)
+        if card_cover:
             # 微博图床对无 Referer 的请求返回 403，卡片渲染时再取图会直接空白，
             # 因此在解析阶段就把头图内嵌成 data URI（失败才退回远程地址）。
-            video_cover = await cached_image_to_data_uri(
+            card_cover = await cached_image_to_data_uri(
                 self._avatar_data_uri_cache,
                 self.http_get,
-                video_cover,
+                card_cover,
                 headers=self._request_headers(),
                 referer="https://weibo.com/",
                 max_bytes=4 * 1024 * 1024,
                 timeout=8,
-                debug_label="[Weibo] video cover",
-            ) or video_cover
+                debug_label="[Weibo] card cover",
+            ) or card_cover
 
         card_extra = build_card_extra(
             [("text", text), *[("image", url) for url in static_pic_urls]],
-            cover=video_cover,
+            cover=card_cover,
             is_video=bool(video_contents),
             extra=extra,
         )
         extra.update(card_extra)
+        # Mixed image/video posts still have a source body card; they are not
+        # pure-video metadata fallbacks and must survive an empty comment feed.
+        if static_pic_urls and video_contents:
+            extra['mixed_post_body_card'] = True
         # 卡片署名行：头像 + 发布时间 + 归属地
         extra.update(
             apply_author_block(

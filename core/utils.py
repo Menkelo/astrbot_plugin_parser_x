@@ -418,7 +418,7 @@ def _json_url_priority(url: str) -> int | None:
     allowed = ("bilibili.com", "b23.tv", "bili2233.cn", "douyin.com", "iesdouyin.com",
                "xhslink.com", "xhslink.cn", "xiaohongshu.com", "kuaishou.com",
                "chenzhongtech.com", "weibo.com", "weibo.cn", "xiaoheihe.cn", "acfun.cn",
-               "tieba.baidu.com", "mp.weixin.qq.com", "music.163.com", "bbs.nga.cn",
+               "tieba.baidu.com", "mp.weixin.qq.com", "music.163.com", "163cn.tv", "bbs.nga.cn",
                "nga.178.com", "ngabbs.com", "zhihu.com", "coolapk.com")
     if parsed.scheme not in {"http", "https"} or not any(host == domain or host.endswith("." + domain) for domain in allowed):
         return None
@@ -460,6 +460,7 @@ def _json_url_priority(url: str) -> int | None:
         "tieba.baidu.com": 16,
         "mp.weixin.qq.com": 17,
         "music.163.com": 18,
+        "163cn.tv": 18,
         "bbs.nga.cn": 19,
         "nga.178.com": 19,
         "ngabbs.com": 19,

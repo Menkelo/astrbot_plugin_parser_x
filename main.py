@@ -25,6 +25,7 @@ from .core.debug_api import PLUGIN_NAME, DebugApiMixin
 from .core.delivery import DeliveryMixin, _GeneratedCardContent, _prepare_media_file
 from .core.debug_page import DebugMediaRegistry, DebugSessionManager
 from .core.download import Downloader
+from .core.emote_runtime import EmoteResolver
 from .core.exception import ParseException, SizeLimitException, SkipParseException
 from .core.html_renderer import HtmlRenderService
 from .core.live_guard import (
@@ -68,6 +69,10 @@ class ParserXPlugin(CardServiceMixin, DeliveryMixin, DebugApiMixin, Star):
         self.cleaner = CacheCleaner(self.context, self.config)
         self.render_service = HtmlRenderService.from_config(config)
         self.text_renderer = UnifiedCardRenderer(self.render_service)
+        # 平台表情按需下载并缓存到数据目录；表情图不进仓库、不进安装包。
+        self.emote_resolver = EmoteResolver(self)
+        self.text_renderer.emote_resolver = self.emote_resolver
+        self.emote_resolver.instance = self
         self.debug_media = DebugMediaRegistry()
         self.debug_sessions = DebugSessionManager()
         self._register_debug_page_apis()
@@ -116,8 +121,7 @@ class ParserXPlugin(CardServiceMixin, DeliveryMixin, DebugApiMixin, Star):
         self.key_pattern_list = patterns
 
     def _platform_enabled(self, platform_name: str) -> bool:
-        # First delivery batch: Tieba and Zhihu remain isolated candidates.
-        return platform_name not in {"tieba", "zhihu"}
+        return True
 
     def _behavior(self) -> dict:
         behavior = self.config.get("behavior", {})

@@ -5,6 +5,7 @@ from pathlib import Path
 
 
 CARD_METHODS = (
+    "_resolve_card_emotes",
     "_text_card_body",
     "_bounded_timeout",
     "_build_text_card_content",

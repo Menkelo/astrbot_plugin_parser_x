@@ -132,7 +132,7 @@ def test_weibo_parser_factory_accepts_owner_id_and_cookie_alias(cookie_field):
     async def embed(entries):
         return None
     feed.fetch = fetch
-    feed.comment_filter = SimpleNamespace(apply=apply)
+    feed.comment_filter = SimpleNamespace(apply_keeping_pinned=apply)
     feed._embed_avatars = embed
     extra = parser._comment_extra("mid", title="work", cover=None, owner_id="7")
     document = asyncio.run(extra["text_card_comment_factory"]())

@@ -13,13 +13,14 @@ def make_feed(pages, *, count=10, enabled=True, cookie=""):
 
     async def post(url, **kwargs):
         calls.append((url, kwargs))
-        value = pages[len(calls) - 1]
+        value = pages[len(calls) - 1] if len(calls) <= len(pages) else {"result": 2}
         if isinstance(value, Exception):
             raise value
         return SimpleNamespace(json=lambda: value, raise_for_status=lambda: None)
 
     parser = SimpleNamespace(
         client=SimpleNamespace(post=post), headers={"Cookie": "unrelated-secret"},
+        ios_headers={"User-Agent": "offline-ios"},
         config={}, kuaishou_cookie=cookie,
         comment_settings=CommentSettings.from_config(
             {"comments": {"enabled": enabled, "display_count": count}}, "kuaishou"),
@@ -169,7 +170,8 @@ def test_root_pagination_is_bounded():
     feed, calls = make_feed([{"result": 1, "rootCommentsV2": [raw(text="@朋友")],
                               "pcursorV2": str(i)} for i in range(3)])
     assert asyncio.run(feed.fetch_document("photo")) is None
-    assert len(calls) == 3
+    assert len([call for call in calls if call[0].endswith('/rest/v/photo/comment/list')]) == 3
+    assert len(calls) == 4  # One bounded share fallback after filtered V2 pages.
 
 
 def test_sublist_selects_first_valid_reply_and_sends_integer_root_id():

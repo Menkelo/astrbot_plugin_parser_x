@@ -170,6 +170,14 @@ class KuaiShouParser(BaseParser):
                 ), self._photo_id_from_url(real_url)),
             )
 
+        # INFO-level deployments otherwise lose all evidence of an empty/changed
+        # upstream page. Never log query strings, cookies or the response body.
+        page_url = urlsplit(str(resp.url))
+        logger.warning(
+            f"[快手] 页面无可用视频: status={resp.status_code} "
+            f"host={page_url.hostname} path={page_url.path} bytes={len(resp.content)} "
+            f"init_state={'window.INIT_STATE' in response_text}"
+        )
         raise ParseException("快手解析失败: 未找到视频信息")
 
     @staticmethod

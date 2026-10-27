@@ -2,7 +2,24 @@
 from __future__ import annotations
 
 from ..comment_canvas import CommentAuthor, CommentDocument, CommentEntry, CommentRichPart, CommentTheme
+from ..platform_emotes import fallback_emote_map, iter_emote_matches
 from .social_comment_feed import SocialCommentFeedBase
+
+
+def _rich_parts(text: str):
+    """把 BBCode 文本切成 文本/表情 片段，表情 token 保留给渲染层换图。"""
+    parts = []
+    cursor = 0
+    catalog = fallback_emote_map("nga")
+    for start, end, token, url in iter_emote_matches(text, "nga", catalog):
+        if start > cursor:
+            parts.append(CommentRichPart("text", text=text[cursor:start]))
+        parts.append(CommentRichPart("emote", text=token, url=url) if url
+                         else CommentRichPart("text", text=token))
+        cursor = end
+    if cursor < len(text):
+        parts.append(CommentRichPart("text", text=text[cursor:]))
+    return parts or [CommentRichPart("text", text=text)]
 
 
 class NgaCommentFeed(SocialCommentFeedBase):
@@ -33,7 +50,7 @@ class NgaCommentFeed(SocialCommentFeedBase):
             author = author if isinstance(author, dict) else {}
             entries.append(CommentEntry(
                 author=CommentAuthor(nickname=str(author.get("nickname") or author.get("username") or "匿名用户")),
-                content=[CommentRichPart("text", text=value) for kind, value in flow if kind == "text"],
+                content=[part for kind, value in flow if kind == "text" for part in _rich_parts(value)],
                 images=[value for kind, value in flow if kind == "image"],
                 time_text=str(post.get("postdate") or ""),
                 like_text=self.count_text(post.get("vote_good")),

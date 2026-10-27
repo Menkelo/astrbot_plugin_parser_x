@@ -6,17 +6,24 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
+from contextvars import ContextVar
 from html import escape
 from pathlib import Path
 from typing import Any
+
+from astrbot.api import logger
 
 from .comment_gallery import GALLERY_CSS, GALLERY_SCRIPT
 from .card_theme import resolve_platform_glyph
 from .constants import COMMENT_FOOTER_BRAND as _FOOTER_BRAND
 from .html_renderer import HtmlRenderService
 from .platform_emotes import iter_emote_matches
+
+EMOTE_WARMUP_SECONDS = 3.0
+MAX_WARM_EMOTES = 32
 
 # 复用评论区数据结构
 from .comment_canvas import (
@@ -36,11 +43,18 @@ from .parsers.bilibili.comment_canvas import (
     BiliCommentDecor,
 )
 
-RICH_TEXT_RE = re.compile(
-    r"(?P<topic>#[^#\s\r\n][^#\r\n]{0,60}?#)"
+_RICH_TEXT_SUFFIX = (
     r"|(?P<mention>[@\uff20][\w\u4e00-\u9fff\u3400-\u4dbf.-]{1,32})"
     r"|(?P<url>https?://[^\s<>()\"']+)"
-    r"|(?P<link>\u7f51\u9875\u94fe\u63a5|\u62bd\u5956\u8be6\u60c5)"
+    r"|(?P<link>\u7f51\u9875\u94fe\u63a5|\u62bd\u5956\u8be6\u60c5|查看链接)"
+)
+RICH_TEXT_RE = re.compile(
+    r"(?P<topic>#[^#\s<>]{1,80}#|(?<![\w/:])#[^#\s<>]{1,80})"
+    + _RICH_TEXT_SUFFIX
+)
+# Douyin uses opening hashes: in #青春遗憾#随笔 the second hash starts a topic.
+DOUYIN_RICH_TEXT_RE = re.compile(
+    r"(?P<topic>#[^#\s<>]{1,80})" + _RICH_TEXT_SUFFIX
 )
 
 # B站视频评论中的分:秒 / 时:分:秒；先匹配完整链接，避免拆开 URL。
@@ -51,7 +65,6 @@ BILI_RICH_TEXT_RE = re.compile(
 
 _FALLBACK_AVATAR_CHAR = "评"
 _AVATAR_COLOR = "#1b2432"
-
 # 统一 CSS：正文卡 + 评论区共用
 _UNIFIED_CSS = """
 /* ===== 全平台统一卡片版式（深色、900px、头图 + 头像署名行 + 正文流 + 评论区） ===== */
@@ -123,7 +136,7 @@ body{padding:0;overflow-x:hidden;font-family:'Noto Sans SC','Noto Sans CJK SC','
 .comment-content{margin-top:11.25px;font-size:31.5px;line-height:1.5;color:#FFFFFF;word-break:break-word;overflow-wrap:anywhere}
 .comment-highlight{color:#7B9CD3}
 .comment-emoji-text{display:inline-block;margin:0 .15em;padding:0 .32em;border-radius:.32em;background:#262a3d;color:#c9cdd4;font-size:.85em;line-height:1.35;font-family:"Noto Color Emoji","Apple Color Emoji","Segoe UI Emoji","Noto Emoji",sans-serif;font-variant-emoji:emoji}
-.comment-emote{display:inline-block;height:1.15em;width:auto;max-width:3em;margin:0 .1em;object-fit:contain;vertical-align:-.2em}
+.comment-emote{display:inline-block;height:1.15em;width:auto;max-width:3em;margin:0 .1em;object-fit:contain;vertical-align:-.2em;background:rgba(255,255,255,.92);border-radius:4px;padding:1px;box-sizing:content-box}
 .comment-image-wrap,.comment-sticker-wrap{display:block;width:fit-content;max-width:100%;margin-top:16px;overflow:hidden;border-radius:16px;background:#202228}
 .comment-image{display:block;width:auto;height:auto;max-width:640px;object-fit:contain}
 .comment-sticker{display:block;width:auto;height:auto;max-width:320px;max-height:320px;object-fit:contain}
@@ -210,8 +223,13 @@ def _normalise_content_blocks(blocks: object) -> list[tuple[str, str]]:
         elif isinstance(item, (list, tuple)) and len(item) >= 2:
             kind, value = item[0], item[1]
         kind_text = str(kind or "").strip().lower()
-        value_text = str(value or "").strip()
+        # Source whitespace is content for text blocks, including standalone newlines.
+        value_text = str(value or "")
+        if kind_text != "text":
+            value_text = value_text.strip()
         if kind_text in {"text", "image"} and value_text:
+            if kind_text == "text" and not value_text.strip() and not any(c in value_text for c in "\r\n"):
+                continue
             output.append((kind_text, value_text))
     return output
 
@@ -220,6 +238,11 @@ class UnifiedCardRenderer:
 
     def __init__(self, render_service: HtmlRenderService):
         self.render_service = render_service
+        # 运行时表情解析器（由插件注入）。为空时评论表情原样走官方地址。
+        self.emote_resolver: object | None = None
+        self._emote_state: ContextVar[dict[str, object]] = ContextVar(
+            "unified_emote_state"
+        )
 
     @staticmethod
     def _escape_jinja(value: str) -> str:
@@ -234,10 +257,16 @@ class UnifiedCardRenderer:
         return cls._escape_jinja(escape(str(value or ""), quote=True))
 
     @classmethod
-    def _render_basic_text_html(cls, text: str, *, bili_timestamps: bool = False) -> str:
+    def _render_basic_text_html(
+        cls, text: str, *, bili_timestamps: bool = False, platform_key: str | None = None
+    ) -> str:
         parts: list[str] = []
         last = 0
-        pattern = BILI_RICH_TEXT_RE if bili_timestamps else RICH_TEXT_RE
+        pattern = (
+            BILI_RICH_TEXT_RE if bili_timestamps
+            else DOUYIN_RICH_TEXT_RE if platform_key == 'douyin'
+            else RICH_TEXT_RE
+        )
         for match in pattern.finditer(text or ""):
             parts.append(cls._safe_text(text[last : match.start()]))
             css_class = (
@@ -269,7 +298,7 @@ class UnifiedCardRenderer:
             platform_key or "",
             catalog,
         ):
-            parts.append(cls._render_basic_text_html(text[last:start]))
+            parts.append(cls._render_basic_text_html(text[last:start], platform_key=platform_key))
             if url:
                 parts.append(
                     f'<img class="inline-emote" src="{cls._safe_url(url)}" '
@@ -279,12 +308,18 @@ class UnifiedCardRenderer:
             else:
                 parts.append(cls._safe_text(token))
             last = end
-        parts.append(cls._render_basic_text_html(text[last:]))
+        parts.append(cls._render_basic_text_html(text[last:], platform_key=platform_key))
         return "".join(parts)
 
     @staticmethod
     def _avatar_color(nickname: str) -> str:
         return _AVATAR_COLOR
+
+    def _emote_context(self) -> dict[str, object]:
+        try:
+            return self._emote_state.get()
+        except LookupError:
+            return {"urls": {}, "sheets": {}, "pending": {}, "platform": ""}
 
     def _render_avatar(self, nickname: str, avatar: str, *, size: int = 84) -> str:
         initial = self._safe_text((nickname or "").strip()[:1] or _FALLBACK_AVATAR_CHAR)
@@ -315,12 +350,10 @@ class UnifiedCardRenderer:
             badges_html += '<span class="comment-author">作者</span>'
         else:
             # 兼容只提供文字徽章、没有 is_up 标志的旧数据。
+            # 徽章文案统一走通用模板的「作者」，不按平台改成 UP主/楼主。
             for badge in entry.author.badges:
-                if badge.text in {"作者", "原博", "UP主"}:
-                    badges_html += (
-                        '<span class="comment-author">'
-                        '作者</span>'
-                    )
+                if badge.text in {"作者", "原博", "UP主", "楼主"}:
+                    badges_html += '<span class="comment-author">作者</span>'
                     break
         if entry.pinned:
             badges_html += '<span class="comment-pinned">置顶</span>'
@@ -347,16 +380,21 @@ class UnifiedCardRenderer:
                 "</div></div>"
             )
 
-        # 顶层评论：包含首条回复
+        # 顶层评论：包含首条回复 + 楼中楼其余回复
         first_reply_html = ""
         if entry.first_reply is not None:
             first_reply_html = self._render_comment_entry(entry.first_reply, nested=True, platform_key=platform_key)
+        nested_replies_html = "".join(
+            self._render_comment_entry(child, nested=True, platform_key=platform_key)
+            for child in (getattr(entry, "replies", None) or ())
+            if child is not entry.first_reply
+        )
 
         return (
             '<article class="comment-card">'
             f'{avatar}<section class="comment-body">{nickname_html}'
             f'<div class="comment-content">{content_html}</div>'
-            f"{images_html}{first_reply_html}</section></article>"
+            f"{images_html}{first_reply_html}{nested_replies_html}</section></article>"
         )
 
     def _render_comment_rich_text(self, parts: list[CommentRichPart]) -> str:
@@ -371,19 +409,93 @@ class UnifiedCardRenderer:
                     f"{self._safe_text(part.text)}</span>"
                 )
             elif kind == "emoji-text":
+                token = str(part.text or "")
+                resolved = self._emote_context()["urls"].get(token)
+                if resolved:
+                    output.append(
+                        f'<img class="comment-emote" src="{self._safe_url(resolved)}" '
+                        f'alt="{self._safe_url(token)}">'
+                    )
+                else:
+                    output.append(
+                        '<span class="comment-emoji-text">'
+                        f"{self._safe_text(token)}</span>"
+                    )
+            elif kind == "emote":
+                token = str(part.text or "")
+                state = self._emote_context()
+                resolved = state["urls"].get(token)
+                resolver = self.emote_resolver
+                known = getattr(resolver, "known_tokens", lambda _key: set())(str(state["platform"])) if resolver else set()
+                if not resolved and token in known:
+                    output.append(f"<span>{self._safe_text(token)}</span>")
+                    continue
+                if not resolved and part.url:
+                    resolved = part.url
+                if not resolved:
+                    output.append(f"<span>{self._safe_text(token)}</span>")
+                    continue
+                sprite = state["sheets"].get(token)
+                style = ""
+                if sprite:
+                    # 雪碧图：整行只显示第一格，其余图层由卡片静态呈现。
+                    cell, layers = sprite
+                    style = (
+                        f' style="width:{cell}px;height:{cell}px;max-width:{cell}px;'
+                        f'object-fit:cover;object-position:0 0"'
+                    )
                 output.append(
-                    '<span class="comment-emoji-text">'
-                    f"{self._safe_text(part.text)}</span>"
-                )
-            elif kind == "emote" and part.url:
-                output.append(
-                    f'<img class="comment-emote" src="{self._safe_url(part.url)}" '
-                    f'alt="{self._safe_url(part.text)}" '
+                    f'<img class="comment-emote" src="{self._safe_url(resolved or part.url)}" '
+                    f'alt="{self._safe_url(part.text)}"{style} '
                     'onerror="this.replaceWith(document.createTextNode(this.alt))">'
                 )
             else:
                 output.append(f"<span>{self._render_basic_text_html(part.text)}</span>")
-        return "".join(output)
+        # HTML collapses literal source newlines inside spans; make them explicit.
+        return "".join(output).replace("\r\n", "\n").replace("\r", "\n").replace("\n", "<br>")
+
+    async def _warm_emotes(self, document: object, platform_key: str | None) -> None:
+        resolver = self.emote_resolver
+        state = {"urls": {}, "sheets": {}, "pending": {}, "platform": platform_key or "", "managed": set()}
+        self._emote_state.set(state)
+        if resolver is None or document is None:
+            return
+        entries = getattr(document, "entries", None) or ()
+        sources: dict[str, str] = {}
+        tokens: set[str] = set()
+        def collect(entries):
+            for entry in entries or ():
+                for part in getattr(entry, "content", ()) or ():
+                    if getattr(part, "kind", "") in {"emote", "emoji-text"} and getattr(part, "text", ""):
+                        token = str(part.text)
+                        tokens.add(token)
+                        if getattr(part, "url", ""):
+                            sources[token] = str(part.url)
+                yield from collect(getattr(entry, "replies", None))
+                first = getattr(entry, "first_reply", None)
+                if first is not None:
+                    yield from collect((first,))
+
+        list(collect(entries))
+        try:
+            # Only our managed official catalog is warmed server-side. Arbitrary
+            # comment image URLs keep their individual browser-rendered URLs.
+            resolve = getattr(resolver, "resolve", None)
+            known = getattr(resolver, "known_tokens", lambda _key: set())(platform_key or "")
+            managed = {token for token in tokens if token in known}
+            if managed and callable(resolve):
+                selected = set(sorted(managed)[:MAX_WARM_EMOTES])
+                state["urls"].update(await asyncio.wait_for(
+                    resolve(platform_key or "", selected), timeout=EMOTE_WARMUP_SECONDS,
+                ))
+        except Exception:
+            logger.debug("评论区表情解析失败", exc_info=True)
+        sheets = getattr(resolver, "sheets", None)
+        if callable(sheets):
+            try:
+                state["sheets"].update(dict(sheets() or {}))
+            except Exception:
+                logger.debug("表情雪碧图信息读取失败", exc_info=True)
 
     def _render_comment_section(self, document: CommentDocument | BiliCommentDocument | None, platform_key: str | None) -> str:
         if document is None:
@@ -414,7 +526,7 @@ class UnifiedCardRenderer:
     # ---------- B站专用评论渲染 ----------
     def _render_bili_comment_entry(self, entry: BiliCommentEntry, *, platform_key: str | None, nested: bool = False) -> str:
         avatar = self._render_avatar(entry.author.nickname, entry.author.avatar, size=54 if nested else 81)
-        
+
         nickname_html = (
             '<div class="comment-nickname">'
             f'<span class="comment-nickname-text">{self._safe_text(entry.author.nickname)}</span>'
@@ -434,6 +546,11 @@ class UnifiedCardRenderer:
             self._render_bili_comment_entry(entry.first_reply, platform_key=platform_key, nested=True)
             if entry.first_reply is not None else ""
         )
+        nested_replies_html = "".join(
+            self._render_bili_comment_entry(child, platform_key=platform_key, nested=True)
+            for child in (getattr(entry, "replies", None) or ())
+            if child is not entry.first_reply
+        )
 
         # 层级由调用方决定，不能用「有无回复/装饰」猜测。
         if not nested:
@@ -441,7 +558,7 @@ class UnifiedCardRenderer:
                 '<article class="comment-card">'
                 f'{avatar}<section class="comment-body">{nickname_html}'
                 f'<div class="comment-content">{content_html}</div>'
-                f"{images_html}{first_reply_html}</section></article>"
+                f"{images_html}{first_reply_html}{nested_replies_html}</section></article>"
             )
         else:
             # 纯回复（楼中楼非首条）通常不单独渲染，由首条回复包含
@@ -463,12 +580,24 @@ class UnifiedCardRenderer:
                     '<span class="comment-highlight">'
                     f"{self._safe_text(part.text)}</span>"
                 )
-            elif kind == "emote" and part.url:
-                output.append(
-                    f'<img class="comment-emote" src="{self._safe_url(part.url)}" '
-                    f'alt="{self._safe_url(part.text)}" '
-                    'onerror="this.replaceWith(document.createTextNode(this.alt))">'
-                )
+            elif kind == "emote":
+                token = str(part.text or "")
+                state = self._emote_context()
+                resolved = state["urls"].get(token)
+                resolver = self.emote_resolver
+                known = getattr(resolver, "known_tokens", lambda _key: set())(str(state["platform"])) if resolver else set()
+                if not resolved and token in known:
+                    output.append(f"<span>{self._safe_text(token)}</span>")
+                    continue
+                resolved = resolved or part.url
+                if resolved:
+                    output.append(
+                        f'<img class="comment-emote" src="{self._safe_url(resolved)}" '
+                        f'alt="{self._safe_url(token)}" '
+                        'onerror="this.replaceWith(document.createTextNode(this.alt))">'
+                    )
+                else:
+                    output.append(f"<span>{self._safe_text(token)}</span>")
             else:
                 output.append(f"<span>{self._render_basic_text_html(part.text, bili_timestamps=True)}</span>")
         return "".join(output)
@@ -543,7 +672,7 @@ class UnifiedCardRenderer:
         # Some platforms use the same caption as both title and body. Compare
         # only the complete text actually rendered; preserve all body/media data.
         visible_body = (
-            "\n\n".join(value for kind, value in normalised_blocks if kind == "text")
+            "\n\n".join(value.strip() for kind, value in normalised_blocks if kind == "text")
             if normalised_blocks else str(text or "").strip()
         )
         card_title = str(title or "").strip()
@@ -681,6 +810,7 @@ class UnifiedCardRenderer:
         content_layout: str | None = None,
         author_meta: str | None = None,
     ):
+        await self._warm_emotes(comment_document, platform_key)
         html = self.build_html(
             platform_name=platform_name,
             platform_key=platform_key,

@@ -143,7 +143,7 @@ class DeliveryMixin:
                     return File(name=path.name, file=str(path))
                 return Video(str(path))
             case AudioContent():
-                return File(name=path.name, file=str(path))
+                return File(name=cont.name or path.name, file=str(path))
             case FileContent():
                 return File(name=path.name, file=str(path))
         return None
@@ -151,7 +151,7 @@ class DeliveryMixin:
     @staticmethod
     def _comment_forward_segments(result: ParseResult, card_segment) -> list:
         """Only video works get a separate comment-forward preview heading."""
-        if result.has_video and (callable(result.extra.get("text_card_comment_factory"))
+        if result.has_video and not result.extra.get('mixed_post_body_card') and (callable(result.extra.get("text_card_comment_factory"))
                                  or result.extra.get("_disk_has_comments")):
             return [Plain(f"{result.platform.display_name} · 热门评论"), card_segment]
         return [card_segment]
@@ -663,6 +663,21 @@ class DeliveryMixin:
             seen_media.add(id(content))
             media_contents.append(content)
 
+        # A mixed Weibo gallery contains actual source images, not video covers.
+        # Preserve its ordered media plan and deliver the whole work as one forward.
+        mixed_media_forward = (
+            result.platform.name == 'weibo'
+            and result.has_video
+            and result.extra.get('mixed_post_body_card') is True
+            and any(isinstance(content, (ImageContent, GraphicsContent))
+                    for content in media_contents)
+        )
+        if result.has_video and not mixed_media_forward:
+            # Video previews already carry a cover. Never resend source images
+            # beside a comment card, including images from native delivery plans.
+            media_contents = [content for content in media_contents
+                              if not isinstance(content, (ImageContent, GraphicsContent))]
+
         video_contents = [
             content
             for content in media_contents
@@ -771,8 +786,30 @@ class DeliveryMixin:
         cards_enabled = not isinstance(comments, dict) or parse_bool(
             comments.get("enabled", True), True
         )
-        if not cards_enabled and media_contents:
-            # Preserve the source body, not the platform/author/title/link summary.
+        if mixed_media_forward:
+            # Keep the card and every original image/video in one ordered forward.
+            # Do not let the global pure-video branch discard the image gallery.
+            card_task = asyncio.create_task(prepare_body_card_segment()) if cards_enabled else None
+            try:
+                segments, errors = await prepare_media_segments(media_contents, card_task)
+                card_segment = await card_task if card_task is not None else None
+                leading = [card_segment] if card_segment is not None else []
+                if not leading and (body := str(result.text or '').strip()):
+                    leading = [Plain(body.replace('@', '@\u200b'))]
+                tips = [Plain(error) for error in errors] if show_download_fail_tip else []
+                await send_forward_segments(
+                    [*leading, *segments, *tips],
+                    failure_label='微博混合媒体合并转发失败',
+                )
+            finally:
+                if card_task is not None and not card_task.done():
+                    card_task.cancel()
+                    await asyncio.gather(card_task, return_exceptions=True)
+            return
+
+        if not cards_enabled and media_contents and not result.has_video:
+            # Preserve image/audio source bodies, never add text to pure videos.
+            # Mixed Weibo galleries already retain their body in the branch above.
             has_native_text = result.delivery is not None and any(
                 isinstance(part, str) and part.strip()
                 for batch in result.delivery.batches for part in batch.parts
@@ -782,6 +819,35 @@ class DeliveryMixin:
                     await event.send(event.plain_result(body.replace("@", "@\u200b")))
                 except Exception as exc:
                     logger.warning(f"原始正文发送失败，继续原始媒体: {exc}")
+        if result.has_video:
+            # One shared video path for all platforms, including native plans:
+            # source video(s) + an optional card containing captured comments.
+            # Missing comments are intentional suppression, never a render
+            # failure that should resurrect a summary or source-image forward.
+            card_task = asyncio.create_task(prepare_body_card_segment()) if cards_enabled else None
+            try:
+                # Preserve source order for multi-video posts instead of racing
+                # the transfers and making separate clips look like duplicate sends.
+                for content in media_contents:
+                    await send_media_content(content)
+                card_segment = await card_task if card_task is not None else None
+                if card_segment is not None:
+                    try:
+                        await event.send(event.chain_result([Nodes([
+                            Node(uin=node_uin, name=node_name, content=[part])
+                            for part in self._comment_forward_segments(result, card_segment)
+                        ])]))
+                    except Exception as exc:
+                        logger.warning(f'视频评论卡合并转发失败，降级引用发送: {exc}')
+                        reply = original_message_reply()
+                        await event.send(event.chain_result(
+                            ([reply] if reply is not None else []) + [card_segment]))
+            finally:
+                if card_task is not None and not card_task.done():
+                    card_task.cancel()
+                    await asyncio.gather(card_task, return_exceptions=True)
+            return
+
         native_delivery = bool(result.extra.get("native_delivery"))
         if native_delivery and result.delivery is not None:
             # 图文帖：内联评论的正文卡 → 原图，一起进入合并转发。

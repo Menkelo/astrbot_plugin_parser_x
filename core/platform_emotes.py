@@ -1,16 +1,19 @@
 from __future__ import annotations
 
+import json
 import re
 import time
+import urllib.parse
+from pathlib import Path
 from collections.abc import Iterator, Mapping
 from typing import Any
 
 from astrbot.api import logger
 
-from .xiaohongshu_emote_data import XIAOHONGSHU_EMOTE_DATA_URI
 
 BILIBILI_EMOTE_URL = "https://api.bilibili.com/x/emote/package"
 BILIBILI_EMOTE_PANEL_URL = "https://api.bilibili.com/x/emote/user/panel/web"
+DOUYIN_EMOTE_URL = "https://www.douyin.com/aweme/v1/web/emoji/list"
 XIAOHONGSHU_EMOTE_URL = "https://edith.xiaohongshu.com/api/im/redmoji/detail"
 XIAOHONGSHU_EMOJI_CONFIG_URL = "https://edith.xiaohongshu.com/api/im/web/emoji/config"
 
@@ -22,6 +25,12 @@ _SQUARE_TOKEN_PLATFORMS = {
     "xiaohongshu",
     # 小黑盒正文里的表情是 [cube_鳄鱼] 这种方括号 token，目录由解析器随结果带上
     "xiaoheihe",
+    "tieba",
+    "coolapk",
+    # NGA 的表情是 [s:ac:汗] 这种方括号 token，历史实现直接把它们从正文里删掉了
+    "nga",
+    # 网易云评论里的 [爱心] [大哭] 之前一律当纯文本显示
+    "netease",
 }
 
 # The official catalog APIs are the primary source. These small fallbacks keep the
@@ -199,6 +208,23 @@ _XIAOHONGSHU_FALLBACK = {
     ),
 }
 
+def _load_bundled_map(module_path: str, filename: str) -> dict[str, str]:
+    """读取随插件分发的静态表情目录；缺失或损坏时退回空表，不影响解析。"""
+    try:
+        path = Path(module_path).parent / filename
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        logger.debug(f"内置表情目录 {filename} 读取失败", exc_info=True)
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {
+        str(token): str(url)
+        for token, url in data.items()
+        if str(token) and str(url).startswith(("http://", "https://"))
+    }
+
+
 def clean_emote_token(platform_key: str, token: str) -> str:
     value = str(token or "").strip()
     if platform_key in _SQUARE_TOKEN_PLATFORMS:
@@ -211,9 +237,15 @@ def clean_emote_token(platform_key: str, token: str) -> str:
 def fallback_emote_map(platform_key: str) -> dict[str, str]:
     if platform_key == "bilibili":
         return dict(_BILIBILI_FALLBACK)
+    if platform_key == "nga":
+        return _load_bundled_map(__file__, "parsers/nga_emotes.json")
+    if platform_key == "netease":
+        return _load_bundled_map(__file__, "parsers/netease_emotes.json")
     if platform_key == "xiaohongshu":
-        # 动画表情（[呃R] 等）没有静态地址，只能用内嵌底图，优先级高于内置兜底。
-        return {**_XIAOHONGSHU_FALLBACK, **XIAOHONGSHU_EMOTE_DATA_URI}
+        # [R] 动画表情只有官方 PAG 动画，没有静态地址；它们不进目录，由
+        # EmoteResolver 在渲染期按需下载并渲染（见 core/emote_runtime.py）。
+        # 这里只返回官方静态表情的兜底表。
+        return dict(_XIAOHONGSHU_FALLBACK)
     return {}
 
 
@@ -351,6 +383,31 @@ def build_xiaohongshu_emote_config_map(payload: object) -> dict[str, str]:
     return output
 
 
+def build_douyin_emote_map(payload: object) -> dict[str, str]:
+    """解析抖音 ``/aweme/v1/web/emoji/list`` 的官方表情目录。
+
+    结构为 ``emoji_list[].{display_name, emoji_url.url_list[]}``。抖音只给带签名
+    参数的临时地址，所以这里只取目录做「token 是否被平台认识」的判定；真正出图
+    由 ``EmoteResolver`` 在渲染期现取现用（见 core/emote_sources.py）。
+    """
+    if not isinstance(payload, dict):
+        return {}
+    output: dict[str, str] = {}
+    for item in payload.get("emoji_list") or []:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("display_name") or item.get("emoji_name") or "").strip()
+        emoji_url = item.get("emoji_url")
+        urls = []
+        if isinstance(emoji_url, dict):
+            urls = emoji_url.get("url_list") or []
+        elif isinstance(emoji_url, str):
+            urls = [emoji_url]
+        url = next((str(u) for u in urls if str(u).startswith("https://")), "")
+        _register(output, "douyin", name, url)
+    return output
+
+
 def resolve_emote_url(
     platform_key: str,
     token: str,
@@ -361,7 +418,9 @@ def resolve_emote_url(
     clean = clean_emote_token(platform_key, raw)
     for key in (raw, clean):
         value = str(catalog.get(key) or "").strip()
-        if value.startswith(("http://", "https://", "data:")):
+        if value.startswith(("http://", "https://")) or re.fullmatch(
+            r"data:image/(?:png|jpeg|gif|webp);base64,[A-Za-z0-9+/]+={0,2}", value
+        ):
             return value
     return ""
 
@@ -419,14 +478,49 @@ async def load_platform_emotes(
 
     output = fallback_emote_map(platform_key)
     http_get = getattr(parser, "http_get", None)
-    if platform_key not in {"bilibili", "xiaohongshu"} or not callable(http_get):
+    # 抖音/小黑盒的目录由它们自己的解析流程维护，不再重复拉取。
+    if (
+        platform_key not in {"bilibili", "xiaohongshu", "douyin"}
+        or not callable(http_get)
+    ):
         setattr(parser, cache_attr, output)
         setattr(parser, deadline_attr, now + 10 * 60)
         return output
 
     try:
         request_headers = dict(getattr(parser, "headers", None) or {})
-        if platform_key == "xiaohongshu":
+        if platform_key == "douyin":
+            # 目录接口必须带 a_bogus 签名，直接复用评论链路里已经验证过的签名器，
+            # 否则只会拿到空响应，正文表情就会以文字形式漏出来。
+            from .parsers.douyin.a_bogus import SIGN_ARGS_EMOJI, generate_a_bogus
+
+            douyin_cookie = str(getattr(parser, "douyin_ck", "") or "").strip()
+            if douyin_cookie:
+                request_headers["Cookie"] = douyin_cookie
+            sign_params = {
+                "device_platform": "webapp",
+                "aid": 6383,
+                "channel": "channel_pc_web",
+                "need_all": "true",
+                "update_version_code": 170400,
+            }
+            query = urllib.parse.urlencode(sign_params)
+            response = await http_get(
+                DOUYIN_EMOTE_URL,
+                params={
+                    **sign_params,
+                    "a_bogus": generate_a_bogus(
+                        query,
+                        request_headers.get("User-Agent", ""),
+                        sign_args=SIGN_ARGS_EMOJI,
+                    ),
+                },
+                headers=request_headers,
+                timeout=8,
+                retries=1,
+            )
+            parsed = build_douyin_emote_map(response.json())
+        elif platform_key == "xiaohongshu":
             # emoji/config 需要登录态，redmoji/detail 不需要；统一带上评论 cookie。
             xhs_cookie = str(getattr(parser, "comment_cookie", "") or "").strip()
             if xhs_cookie:
@@ -501,7 +595,6 @@ async def load_platform_emotes(
                         parsed.update(build_bilibili_emote_map(owned_response.json()))
                 except Exception as exc:
                     logger.debug(f"[bilibili] 用户表情包读取失败，保留公共表情: {exc}")
-                    logger.debug(f"[bilibili] 用户表情包读取失败，保留公共表情: {exc}")
 
         if getattr(response, "status_code", 200) >= 400:
             raise RuntimeError(f"HTTP {response.status_code}")
@@ -516,8 +609,44 @@ async def load_platform_emotes(
     return output
 
 
+async def resolve_platform_emotes(
+    parser: Any,
+    platform_key: str,
+    emotes: Mapping[str, str] | None = None,
+) -> dict[str, str]:
+    """把目录里的表情补成可在卡片里显示的内联地址。
+
+    目录本身可能只给出官方地址；这里交给运行时解析器按需下载并缓存，
+    下载失败的表情会回落到 ``[表情名]`` 文本，不会影响卡片其余内容。
+    """
+    catalog = dict(emotes or {})
+    if not catalog:
+        return catalog
+    resolver = getattr(parser, "emote_resolver", None)
+    if resolver is None:
+        return catalog
+    tokens = set()
+    for token, value in catalog.items():
+        if not value:
+            tokens.add(token)
+    if not tokens:
+        return catalog
+    try:
+        resolved = await resolver.resolve(platform_key, tokens)
+    except Exception as exc:
+        logger.debug(f"[{platform_key}] 表情运行时解析失败: {exc}")
+        return catalog
+    if not resolved:
+        return catalog
+    for token, uri in resolved.items():
+        catalog[token] = uri
+        catalog[clean_emote_token(platform_key, token)] = uri
+    return catalog
+
+
 __all__ = [
     "build_bilibili_emote_map",
+    "build_douyin_emote_map",
     "build_xiaohongshu_emote_config_map",
     "build_xiaohongshu_emote_map",
     "clean_emote_token",
@@ -526,5 +655,6 @@ __all__ = [
     "iter_emote_matches",
     "load_platform_emotes",
     "resolve_emote_url",
+    "resolve_platform_emotes",
     "select_text_emotes",
 ]

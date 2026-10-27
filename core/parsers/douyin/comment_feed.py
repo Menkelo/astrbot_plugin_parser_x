@@ -681,7 +681,7 @@ class DouyinCommentFeed:
             entry = self.adapt_comment(item, owner or {}, emoji_map)
             if entry is not None:
                 candidates.append(entry)
-        entries = await self.comment_filter.apply(candidates, limit=self.limit)
+        entries = await self.comment_filter.apply_keeping_pinned(candidates, limit=self.limit)
         if not entries:
             return None
 

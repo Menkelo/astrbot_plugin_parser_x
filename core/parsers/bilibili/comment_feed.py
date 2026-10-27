@@ -762,7 +762,13 @@ class BiliCommentFeed:
             entry = self.adapt_comment(item, effective_owner_mid)
             if entry is not None:
                 candidates.append(entry)
-        entries = await self.comment_filter.apply(candidates, limit=self.limit)
+        # 置顶评论（UP主置顶，接口里在 top_replies）必须单独保住：
+        # 过滤器按 limit 截断，而置顶条可能被机器人拦截、低信息量或与热评重复，
+        # 一旦被滤掉用户就会看到「置顶没了」。置顶不参与 limit 竞争，
+        # 过滤后重新接回首位（统一逻辑见 CommentFilter.apply_keeping_pinned）。
+        entries = await self.comment_filter.apply_keeping_pinned(
+            candidates, limit=self.limit,
+        )
         if not entries:
             return None
 

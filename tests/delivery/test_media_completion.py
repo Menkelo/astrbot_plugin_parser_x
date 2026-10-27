@@ -206,7 +206,7 @@ def test_douyin_live_variants_render_as_stills_without_video_comments(
             )
             result = await parser.parse_slides("123")
         else:
-            result = parser._build_result_from_aweme(payload, "123")
+            result = await parser._build_result_from_aweme(payload, "123")
         assert [type(c) for c in result.contents] == [
             ImageContent,
             ImageContent,
@@ -261,6 +261,9 @@ def test_bilibili_dynamic_downloads_archive_video_and_reuses_video_pipeline(
 ):
     async def run():
         parser = object.__new__(BilibiliParser)
+        parser.enable_comment_card = True
+        parser.comment_timeout = 1
+        parser.comment_feed = SimpleNamespace(build_document=AsyncMock(return_value=[]))
         video = VideoContent(tmp_path / "video.mp4")
         factory = AsyncMock(return_value=[])
         parser.parse_video = AsyncMock(
@@ -271,6 +274,8 @@ def test_bilibili_dynamic_downloads_archive_video_and_reuses_video_pipeline(
             )
         )
         item = {
+            "type": "DYNAMIC_TYPE_AV",
+            "basic": {"comment_id_str": "123456", "comment_type": 1},
             "modules": {
                 "module_dynamic": {
                     "desc": {"text": "original"},
@@ -284,6 +289,8 @@ def test_bilibili_dynamic_downloads_archive_video_and_reuses_video_pipeline(
         }
         if reposted:
             item = {
+                "type": "DYNAMIC_TYPE_FORWARD",
+                "basic": {"comment_id_str": "12345", "comment_type": 17},
                 "orig": deepcopy(item),
                 "modules": {"module_dynamic": {"desc": {"text": "reposted"}}},
             }
@@ -294,7 +301,13 @@ def test_bilibili_dynamic_downloads_archive_video_and_reuses_video_pipeline(
             **({"bvid": "BV1xx411c7mD"} if use_bvid else {"avid": 123456})
         )
         assert result.contents == [video]
-        assert result.extra["text_card_comment_factory"] is factory
+        dynamic_comments = result.extra["text_card_comment_factory"]
+        assert dynamic_comments is not factory
+        await dynamic_comments()
+        assert parser.comment_feed.build_document.await_args.args == (
+            (12345, 17) if reposted else (123456, 1)
+        )
+        factory.assert_not_awaited()
         assert result.url == "https://t.bilibili.com/12345"
         if reposted:
             assert "reposted" in result.text and "original" in result.text
@@ -450,7 +463,25 @@ def test_weibo_live_photo_and_multiple_videos_keep_source_order(tmp_path, mixed)
         assert result.delivery.batches[0].parts == result.contents
         # 图文与视频微博都挂评论任务（评论区会拼到正文卡下方）。
         assert callable(result.extra.get("text_card_comment_factory"))
+        assert bool(result.extra.get("mixed_post_body_card")) is mixed
         await downloads.finish()
+        # Exercise the real parser result: disabling cards must retain every
+        # original image/video, in order, without fetching comments or rendering.
+        from .test_unified_delivery import CaptureEvent, forwarded_parts, make_plugin
+        plugin = make_plugin(tmp_path)
+        plugin.config["comments"] = {"enabled": False}
+        result.extra["text_card_comment_factory"] = AsyncMock(side_effect=AssertionError("comments disabled"))
+        event = CaptureEvent()
+        await plugin._send_parse_result(event, result)
+        media = [part for part in forwarded_parts(event) if isinstance(part, (Image, Video))]
+        assert [type(part) for part in media] == [
+            Video if isinstance(content, VideoContent) else Image for content in result.contents
+        ]
+        assert [Path(part.file).name for part in media] == [
+            (await content.get_path()).name for content in result.contents
+        ]
+        assert not plugin.text_renderer.calls
+        result.extra["text_card_comment_factory"].assert_not_awaited()
 
     asyncio.run(run())
 

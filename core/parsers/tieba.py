@@ -34,6 +34,7 @@ import aiohttp
 from ..card_flow import apply_author_block, build_card_extra
 from ..comment_settings import CommentSettings
 from .base import BaseParser, ParseException, Platform, handle
+from .tieba_media import portrait_url, emote_url
 
 
 class TiebaParser(BaseParser):
@@ -66,6 +67,12 @@ class TiebaParser(BaseParser):
         host = (parsed.hostname or "").lower()
         allowed = ("imgsrc.baidu.com", "tiebapic.baidu.com", "imgsa.baidu.com",
                    "tb.himg.baidu.com", "tb-video.bdstatic.com", "tb-video.baidupcs.com")
+        # Only this observed CDN supports identity-preserving HTTPS upgrade.
+        # Keep path/query byte-for-byte; do not broaden to arbitrary HTTP media.
+        if (parsed.scheme == "http" and host == "tb-video.bdstatic.com"
+                and not parsed.username and not parsed.password and port is None):
+            value = "https" + value[4:]
+            parsed = urlsplit(value)
         if (parsed.scheme != "https" or host not in allowed
                 or parsed.username or parsed.password or port not in {None, 443}):
             return ""
@@ -148,7 +155,12 @@ class TiebaParser(BaseParser):
                 and str(thread["post_id"]) != root_id)):
             raise ParseException("贴吧首楼 ID 不匹配")
         content = root.get("content")
-        if not isinstance(content, list):
+        # Title-only threads return content=null; absent body must not fail the
+        # whole post when a title or thread video exists. A malformed body of
+        # another type still violates the parser contract.
+        if content is None:
+            content = []
+        elif not isinstance(content, list):
             raise ParseException("贴吧首楼内容结构无效")
         author_id = str(root.get("author_id") or "")
         users = payload.get("user_list")
@@ -164,16 +176,27 @@ class TiebaParser(BaseParser):
         video_url = self._media_url(video.get("video_url"))
         cover = self._media_url(video.get("thumbnail_url"))
         duration_value = video.get("video_duration")
-        flow = []
+        flow, emotes = [], {}
+
+        def append_text(text):
+            if flow and flow[-1][0] == "text":
+                flow[-1] = ("text", flow[-1][1] + text)
+            else:
+                flow.append(("text", text))
+
         for item in content:
             if not isinstance(item, dict):
                 continue
             kind = str(item.get("type"))
             if kind == "0" and isinstance(item.get("text"), str) and item["text"]:
-                flow.append(("text", item["text"]))
-            elif kind == "2" and isinstance(item.get("c"), str) and item["c"]:
-                # Emote labels are inline text, never full-size content images.
-                flow.append(("text", "[" + item["c"] + "]"))
+                append_text(item["text"])
+            elif kind == "2":
+                # Labels may be absent; the asset id is the actual identity.
+                label = str(item.get('c') or item.get('text') or '表情')
+                token = '[' + label + ']'
+                append_text(token)
+                if url := emote_url(item.get('text')):
+                    emotes[token] = url
             elif kind == "3":
                 image = next((url for key in ("origin_src", "big_cdn_src", "cdn_src", "cdn_src_active")
                               if (url := self._media_url(item.get(key)))), "")
@@ -189,10 +212,10 @@ class TiebaParser(BaseParser):
         if video and not video_url:
             raise ParseException("贴吧正文媒体地址不受支持")
         if not flow and not video_url:
-            raise ParseException("贴吧首楼内容不可用")
-        portrait = author.get("portrait")
-        avatar = ("https://tb.himg.baidu.com/sys/portrait/item/" + portrait
-                  if isinstance(portrait, str) and re.fullmatch(r"[A-Za-z0-9_%.-]{1,512}", portrait) else "")
+            title_text = thread.get("title")
+            if not (isinstance(title_text, str) and title_text.strip()):
+                raise ParseException("贴吧首楼内容不可用")
+        avatar = portrait_url(author.get("portrait"))
         headers = self._public_headers()
         contents = self.create_image_contents([v for k, v in flow if k == "image"], ext_headers=headers)
         if video_url:
@@ -203,8 +226,21 @@ class TiebaParser(BaseParser):
             except (TypeError, ValueError):
                 duration = 0
             contents.insert(0, self.create_video_content(video_url, cover, duration, ext_headers=headers))
+        # Client video-only bodies often contain a lone newline. It is not a
+        # paragraph and must not become a padded empty flow-text container.
+        flow = [(kind, value) for kind, value in flow if kind != 'text' or value.strip()]
         extra = apply_author_block(build_card_extra(flow, cover=cover,
             is_video=bool(video_url)), avatar=avatar)
+        if emotes:
+            extra["card_emotes"] = emotes
+            plain = "\n".join(value for kind, value in flow if kind == "text")
+            shown = [
+                token
+                for token in emotes
+                if token in plain
+            ]
+            if shown:
+                extra["card_emote_captures"] = shown
         if self.comment_settings.enabled:
             from .tieba_comment import TiebaCommentFeed
             feed = TiebaCommentFeed(self)
@@ -214,8 +250,9 @@ class TiebaParser(BaseParser):
             timestamp = int(root.get("time") or 0) or None
         except (TypeError, ValueError):
             timestamp = None
+        body_text = "\n".join(value for kind, value in flow if kind == "text")
         return self.result(title=thread.get("title"), timestamp=timestamp,
-            text="\n".join(value for kind, value in flow if kind == "text"),
+            text=body_text or None,
             url=f"https://tieba.baidu.com/p/{tid}",
             author=self.create_author(author.get("name_show") or author.get("name") or "贴吧用户", avatar,
                 description=f"贴吧用户 {author_id}", ext_headers=headers),

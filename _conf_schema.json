@@ -110,6 +110,24 @@
         "hint": "可选，用于视频解析、下载和热门评论。留空按匿名方式尝试；填写后仍受账号权限和平台风控限制。",
         "type": "text",
         "default": ""
+      },
+      "netease_cookie": {
+        "description": "网易云音乐 Cookie",
+        "hint": "可选，使用你自己的会员登录态获取账号已有权限的官方音频；不保证所有付费歌曲可用，不绕过版权或地区限制。仅发送至 music.163.com 官方歌曲接口，不发送至短链或媒体 CDN。留空匿名请求。",
+        "type": "text",
+        "default": ""
+      },
+      "zhihu_cookie": {
+        "description": "知乎 Cookie",
+        "hint": "可选，仅用于知乎官方回答或专栏内容请求；填写后使用该登录态，留空匿名尝试。不向媒体域名发送，仍需遵守账号权限及风控。",
+        "type": "text",
+        "default": ""
+      },
+      "wechat_channels_cookie": {
+        "description": "元宝 Cookie（视频号可选）",
+        "hint": "可选，遇到公开接口缺少临时播放信息时尝试通过元宝获取。仅发送至 yuanbao.tencent.com；留空仍尝试公开视频号接口。请使用小号并注意平台风控。",
+        "type": "text",
+        "default": ""
       }
     }
   },

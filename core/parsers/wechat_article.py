@@ -101,7 +101,7 @@ def _payload(root):
 def _legacy_identity(root):
     """Read only declared legacy string constants, never JS expressions/eval.
 
-    No cgiDataNew identity mapping is assumed without a captured page fixture.
+    Modern cgiDataNew identity is handled separately by _parse_html.
     Comments and other quoted strings are consumed to avoid matching decoys.
     """
     quoted = r'''(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')'''
@@ -138,7 +138,10 @@ def _legacy_identity(root):
 class WechatArticleParser(BaseParser):
     platform = Platform('wechat_article', '微信公众号')
     image_hosts = {'mmbiz.qpic.cn', 'mmbiz.qlogo.cn'}
-    _assemble = CoolapkParser._assemble
+    def _assemble(self, *args, **kwargs):
+        result = CoolapkParser._assemble(self, *args, **kwargs)
+        result.extra['card_platform_name'] = '微信'
+        return result
 
     @handle('mp.weixin.qq.com', r'https?://mp\.weixin\.qq\.com/s(?:/[A-Za-z0-9_-]+)?(?:\?[^\s<>"\u3000]*)?(?![\w/])')
     async def parse_public_article(self, searched):
@@ -169,10 +172,12 @@ class WechatArticleParser(BaseParser):
         avatar = _image_url(avatar_node.attrs.get('data-src') or avatar_node.attrs.get('src'),
             self.image_hosts) if avatar_node else None
         legacy = _legacy_identity(root)
-        name = name or legacy.get('nickname')
-        avatar = avatar or _image_url(legacy.get('round_head_img'), self.image_hosts)
-        author = self.create_author(name) if name else None
         data = _payload(root)
+        name = name or legacy.get('nickname') or (data or {}).get('nick_name')
+        avatar = (avatar or _image_url(legacy.get('round_head_img'), self.image_hosts)
+            or _image_url((data or {}).get('round_head_img'), self.image_hosts)
+            or _image_url((data or {}).get('hd_head_img'), self.image_hosts))
+        author = self.create_author(name) if name else None
         if data and str(data.get('item_show_type')) not in {'0', '8'}:
             raise ParseException('微信公众号仅支持公开文章与图片消息，不支持音视频')
         if data and str(data.get('item_show_type')) == '8':

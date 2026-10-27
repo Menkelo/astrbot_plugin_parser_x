@@ -1,16 +1,21 @@
 from __future__ import annotations
 
+import re
+
 from astrbot.api import logger
 
-from ..comment_canvas import CommentAuthor, CommentDocument, CommentEntry, CommentRichPart, CommentTheme
+from ..comment_canvas import CommentAuthor, CommentDocument, CommentEntry, CommentTheme
 from ..comment_filter import CommentFilter
 from .social_comment_feed import SocialCommentFeedBase
+from .kuaishou_emotes import kuaishou_comment_parts
 
 
 class KuaishouCommentFeed(SocialCommentFeedBase):
-    """Bounded REST V2 adapter; unknown rich fields deliberately stay empty."""
+    """Bounded REST V2 adapter with a first-party share REST fallback."""
 
     COMMENT_URL = "https://www.kuaishou.com/rest/v/photo/comment/list"
+    SHARE_COMMENT_URL = "https://v.m.chenzhongtech.com/rest/wd/photo/comment/list"
+    SHARE_PAGE_URL = "https://v.m.chenzhongtech.com/fw/photo/"
     AVATAR_REFERER = "https://www.kuaishou.com/"
     PLATFORM_SLUG = "kuaishou"
 
@@ -32,12 +37,7 @@ class KuaishouCommentFeed(SocialCommentFeedBase):
 
     def _entry(self, raw: dict, owner_id: str) -> CommentEntry:
         author_id = str(raw.get("author_id") or raw.get("authorId") or "")
-        parts = []
-        for index, line in enumerate(str(raw.get("content") or "").splitlines()):
-            if index:
-                parts.append(CommentRichPart("line-break"))
-            if line:
-                parts.append(CommentRichPart("text", line))
+        parts = kuaishou_comment_parts(str(raw.get("content") or ""))
         try:
             timestamp = int(raw.get("timestamp") or 0)
         except (TypeError, ValueError):
@@ -52,10 +52,11 @@ class KuaishouCommentFeed(SocialCommentFeedBase):
             ), content=parts, time_text=self.time_text(timestamp) if timestamp else "",
         )
 
-    async def _request(self, url: str, body: dict) -> dict | None:
+    async def _request(self, url: str, body: dict, *, headers: dict | None = None) -> dict | None:
         try:
             response = await self.parser.client.post(
-                url, json=body, headers=self._headers(), timeout=self.settings.timeout,
+                url, json=body, headers=self._headers() if headers is None else headers,
+                timeout=self.settings.timeout,
                 allow_redirects=False,
             )
             response.raise_for_status()
@@ -98,6 +99,69 @@ class KuaishouCommentFeed(SocialCommentFeedBase):
                 break
         return None
 
+    async def _share_document(self, photo_id: str, owner_id: str) -> CommentDocument | None:
+        # Never derive request hosts from input or forward the configured Cookie.
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", photo_id):
+            return None
+        headers = {key: value for key, value in self.parser.ios_headers.items()
+                   if key.lower() not in {"cookie", "referer"}}
+        headers["Referer"] = self.SHARE_PAGE_URL + photo_id
+        cursor = ""
+        cursors = set()
+        seen = set()
+        candidates = []
+        previews = {}
+        entries = []
+        total = 0
+        for _ in range(3):
+            cursors.add(cursor)
+            body = {"photoId": photo_id, "count": 20}
+            if cursor:
+                body["pcursor"] = cursor
+            data = await self._request(self.SHARE_COMMENT_URL, body, headers=headers)
+            if data is None:
+                break
+            total = data.get("commentCount", total)
+            items = data.get("rootComments")
+            if not isinstance(items, list):
+                break
+            sub_map = data.get("subCommentsMap")
+            if not isinstance(sub_map, dict):
+                sub_map = {}
+            for raw in items[:20]:
+                # Only the observed text schema is supported; no media placeholders.
+                if (not isinstance(raw, dict) or raw.get("type") != 0
+                        or not isinstance(raw.get("content"), str)):
+                    continue
+                identity = str(raw.get("comment_id") or "")
+                if not identity or identity in seen:
+                    continue
+                seen.add(identity)
+                entry = self._entry(raw, owner_id)
+                candidates.append(entry)
+                preview = sub_map.get(identity)
+                previews[id(entry)] = preview.get("subComments") if isinstance(preview, dict) else None
+            entries = await self.comment_filter.apply_keeping_pinned(candidates, limit=self.limit)
+            cursor = str(data.get("pcursor") or "")
+            if len(entries) >= self.limit or not cursor or cursor == "no_more" or cursor in cursors:
+                break
+        if not entries:
+            return None
+        for entry in entries:
+            replies = previews[id(entry)]
+            if not isinstance(replies, list):
+                continue
+            # The share response already contains reply previews; do not guess a sublist API.
+            filtered = await self.comment_filter.apply(
+                [self._entry(raw, owner_id) for raw in replies[:20]
+                 if isinstance(raw, dict) and raw.get("type") == 0
+                 and isinstance(raw.get("content"), str)], limit=1,
+            )
+            entry.first_reply = filtered[0] if filtered else None
+        await self._embed_avatars(entries)
+        return CommentDocument(CommentTheme("快手"), "", "",
+                               f"{self.count_text(total)} 条评论", entries)
+
     async def fetch_document(self, photo_id: str, *, owner_id: str = "") -> CommentDocument | None:
         if not self.settings.enabled or not photo_id:
             return None
@@ -133,7 +197,7 @@ class KuaishouCommentFeed(SocialCommentFeedBase):
             if len(entries) >= self.limit or not cursor or cursor == "no_more" or cursor in cursors:
                 break
         if not entries:
-            return None
+            return await self._share_document(photo_id, owner_id)
         for entry in entries:
             entry.first_reply = await self._first_reply(photo_id, roots[id(entry)], owner_id)
         await self._embed_avatars(entries)

@@ -32,6 +32,7 @@ from ...html_renderer import HtmlRenderService
 from ...card_flow import build_card_extra
 from ..base import BaseParser, ParseException, handle
 from ..xiaoheihe_comment import XiaoHeiHeCommentFeed
+from ...platform_emotes import iter_emote_matches
 
 API_PATH: ClassVar[str] = "/bbs/app/link/tree"
 API_HOST: ClassVar[str] = "api.xiaoheihe.cn"
@@ -41,9 +42,9 @@ _EMOJI_RE = re.compile(r"\[[a-zA-Z]+_[^\]]+\]")
 # 帖子 text 字段里的图片/视频片段
 _LINK_ID_RE = re.compile(r"(?:bbs/link|link)/(\d+)")
 
-# 正文超过这个字数就当长文处理（不渲染，只回一句提示）。
-# 实测 262 字的图帖要放行、1058 字以上的文章要拦，800 是两者中间的值。
-_ARTICLE_MIN_CHARS = 800
+# 平台给「文章型长文」的 link_tag 值；27 是普通水贴，1 是中等图文。
+# 不通过字数、头图或正文图数猜文章身份，避免误拦普通长文字帖子。
+_ARTICLE_LINK_TAG = 11
 
 # 表情包接口：返回 4 组共 161 个表情，token 形如 ``[cube_鳄鱼]``
 _EMOJI_API_PATH = "/bbs/app/api/emojis/list"
@@ -322,6 +323,18 @@ def _is_empty_game_entry(chunks: list[_Chunk], index: int) -> bool:
     return True
 
 
+def _text_segments(link: dict[str, Any]) -> list[dict[str, Any]]:
+    """按顺序返回正文分段（``text`` 字段是 JSON 数组字符串）。"""
+    raw = link.get("text") or ""
+    try:
+        segments = json.loads(raw)
+    except (ValueError, TypeError):
+        return []
+    if not isinstance(segments, list):
+        return []
+    return [seg for seg in segments if isinstance(seg, dict)]
+
+
 def _plain_text_length(link: dict[str, Any]) -> int:
     """粗略统计正文长度：所有分段文本去掉 HTML 标签和表情 token 后计字数。"""
     raw = link.get("text") or ""
@@ -470,18 +483,23 @@ class XiaoHeiHeParser(BaseParser):
         ``link_tag`` 是平台给帖子的类型标记：实测刷 50 条动态，
         ``27`` 是普通水贴、``1`` 是中等图文、``11`` 才是文章型长文
         （攻略、资讯、评测，正文长度普遍几千到几万字符）。
+
+        只认平台的文章标记，不以字数、头图或正文图数兜底。
+        普通长文字帖即使超过 800 字、少于 3 张图，也不是平台文章。
+        ``is_article=1`` 仍直接拦截；``link_tag=11`` 仍要求有正文，
+        保持已标记文章的既定处理。
         """
-        # 判据：正文很长 且 没有头图。
-        # 实测数据（图数 / 正文字数 / 有无 thumb）：
-        #   193973610  8 / 262  / 有   → 短，放行
-        #   193744786  1 / 134  / 无   → 短，放行（无头图但有正文图）
-        #   194227447  2 / 338  / 无   → 短，放行
-        #   194561740  6 / 1058 / 无   → 长且无头图，拦
-        #   193958995 23 / 1585 / 无   → 长且无头图，拦
-        # 只看 head 会把 193744786 这类长图帖误拦；只看字数则 1058 字的
-        # 评测文章和 262 字的图帖混在一起，两个条件组合才分得开。
-        has_cover = bool(_cover_url(link.get("thumb")))
-        return (not has_cover) and _plain_text_length(link) >= _ARTICLE_MIN_CHARS
+        # 接口使用 0/1 标记，也兼容字符串数字；"0" 不能按非空字符串判真。
+        if link.get("is_article") in (1, "1"):
+            return True
+        try:
+            link_tag = int(link.get("link_tag") or 0)
+        except (TypeError, ValueError):
+            link_tag = 0
+        if link_tag == _ARTICLE_LINK_TAG:
+            # 标记成文章但正文是空的（有的帖子只有几句话），谈不上"长文"。
+            return _plain_text_length(link) > 0
+        return False
 
     # -------------------------------------------------------------- 请求层
     def _build_url(self, link_id: str) -> str:
@@ -700,6 +718,14 @@ class XiaoHeiHeParser(BaseParser):
         # 表情目录交给卡片渲染层，由它把 token 换成表情图
         if emotes:
             extra["card_emotes"] = emotes
+            # 正文命中的表情由运行时下载后内联，避免截图时依赖外网连接。
+            plain = "\n".join(value for kind, value in flow if kind == "text")
+            shown = sorted({
+                token for _, _, token, url in iter_emote_matches(plain, "xiaoheihe", emotes)
+                if url
+            })
+            if shown:
+                extra["card_emote_captures"] = shown
         # 图文按原始顺序排布（一句话一张表情包）；头图/拆图判定统一走
         # ``build_card_extra``，和其它平台共一份逻辑。
         extra = build_card_extra(

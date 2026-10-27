@@ -21,7 +21,7 @@ def delivered_parts(event):
 def test_disabled_cards_do_not_emit_replacement_summary(tmp_path, kind, native, warm_cache, body, send_text):
     async def run():
         plugin = make_plugin(tmp_path)
-        path = tmp_path / ("source.jpg" if kind == "image" else "source.mp4")
+        path = tmp_path / ("source.mp4" if kind == "video" else "source.jpg")
         path.write_bytes(b"original media")
         source = VideoContent(path) if kind == "video" else ImageContent(path)
         sources = [source]
@@ -40,7 +40,9 @@ def test_disabled_cards_do_not_emit_replacement_summary(tmp_path, kind, native, 
             url="https://example.com/post", contents=sources,
             delivery=DeliveryPlan([DeliveryBatch(sources)]) if native else None,
             extra={"native_delivery": native, "render_text_card": True,
-                   "text_card_comment_factory": comments, "send_text": send_text},
+                   "text_card_comment_factory": comments, "send_text": send_text,
+                   # Real Weibo mixed posts carry this marker; images are not covers.
+                   "mixed_post_body_card": kind == "mixed"},
         )
         # Prime a genuine successful card cache, then disable cards on the same instance.
         if warm_cache:
@@ -51,11 +53,12 @@ def test_disabled_cards_do_not_emit_replacement_summary(tmp_path, kind, native, 
         event = CaptureEvent()
         await plugin._send_parse_result(event, result)
         parts = delivered_parts(event)
-        assert [part.text for part in parts if isinstance(part, Plain)] == ([body] if body else [])
+        expected_body = [body] if body and kind != "video" else []
+        assert [part.text for part in parts if isinstance(part, Plain)] == expected_body
         media = [part for part in parts if isinstance(part, (Image, Video))]
         assert len(media) == len(sources)
         expected_paths = [path] + ([second_path] if kind in {"album", "mixed"} else [])
-        assert all(any(str(expected) in part.file for part in media) for expected in expected_paths)
+        assert all(str(expected) in part.file for expected, part in zip(expected_paths, media, strict=True))
         assert not plugin.text_renderer.calls
         assert not comment_calls
         assert path.read_bytes() == b"original media"
@@ -84,17 +87,26 @@ def test_enabled_render_failure_still_sends_summary(tmp_path, native, kind):
             Platform("weibo", "微博"), title="post title", text="summary body",
             url="https://example.com/post", contents=sources,
             delivery=DeliveryPlan([DeliveryBatch(sources)]) if native else None,
-            extra={"native_delivery": native, "render_text_card": True},
+            extra={"native_delivery": native, "render_text_card": True,
+                   "mixed_post_body_card": kind == "mixed"},
         )
         event = CaptureEvent()
         await plugin._send_parse_result(event, result)
         parts = delivered_parts(event)
-        assert calls
         summaries = [part.text for part in parts if isinstance(part, Plain)]
-        assert len(summaries) == 1
-        assert "post title" in summaries[0]
-        assert "summary body" in summaries[0]
-        assert "https://example.com/post" in summaries[0]
+        if kind == "video":
+            # No comments means intentional suppression, not a body render failure.
+            assert not calls
+            assert summaries == []
+        elif kind == "mixed":
+            assert calls
+            assert summaries == ["summary body"]
+        else:
+            assert calls
+            assert len(summaries) == 1
+            assert "post title" in summaries[0]
+            assert "summary body" in summaries[0]
+            assert "https://example.com/post" in summaries[0]
         assert len([part for part in parts if isinstance(part, (Image, Video))]) == len(sources)
     asyncio.run(run())
 
@@ -116,7 +128,8 @@ def test_disabled_cards_preserve_native_body(tmp_path, kind):
         event = CaptureEvent()
         await plugin._send_parse_result(event, result)
         parts = delivered_parts(event)
-        assert [part.text for part in parts if isinstance(part, Plain)] == ["native body"]
+        expected_body = [] if kind == "video" else ["native body"]
+        assert [part.text for part in parts if isinstance(part, Plain)] == expected_body
         assert len([part for part in parts if isinstance(part, (Image, Video))]) == len(sources)
         assert not plugin.text_renderer.calls
     asyncio.run(run())

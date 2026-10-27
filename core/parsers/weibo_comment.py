@@ -10,6 +10,7 @@ from email.utils import parsedate_to_datetime
 from html import unescape
 from html.parser import HTMLParser
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 
 from astrbot.api import logger
 from msgspec import json as msgjson
@@ -43,6 +44,22 @@ class _WeiboRichTextParser(HTMLParser):
         super().__init__(convert_charrefs=True)
         self.parts: list[CommentRichPart] = []
         self._highlight_depth = 0
+        self._picture_link = False
+        self.images: list[str] = []
+
+    @staticmethod
+    def _picture_target(href: str) -> str | None:
+        parsed = urlsplit(href)
+        if parsed.scheme != 'https' or parsed.hostname != 'weibo.cn' or parsed.path != '/sinaurl':
+            return None
+        target = parse_qs(parsed.query).get('u', [''])[0]
+        image = urlsplit(target)
+        host = image.hostname or ''
+        if (image.scheme == 'https' and not image.username and not image.password
+                and host.endswith('.sinaimg.cn')
+                and re.fullmatch(r'/large/[A-Za-z0-9_-]+\.(?:jpg|jpeg|png|gif|webp)', image.path, re.I)):
+            return target
+        return None
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]):
         attr_map = {key: value or "" for key, value in attrs}
@@ -50,7 +67,13 @@ class _WeiboRichTextParser(HTMLParser):
             self.parts.append(CommentRichPart("line-break"))
         elif tag == "a":
             self._highlight_depth += 1
+            picture = self._picture_target(attr_map.get('href', ''))
+            self._picture_link = bool(picture)
+            if picture and picture not in self.images:
+                self.images.append(picture)
         elif tag == "img":
+            if self._picture_link:
+                return
             url = normalize_image_url(attr_map.get("src")) or ""
             text = attr_map.get("alt") or attr_map.get("title") or ""
             if url:
@@ -61,16 +84,17 @@ class _WeiboRichTextParser(HTMLParser):
     def handle_endtag(self, tag: str):
         if tag == "a" and self._highlight_depth > 0:
             self._highlight_depth -= 1
+            self._picture_link = False
 
     def handle_data(self, data: str):
-        if data:
+        if data and not self._picture_link:
             kind = "highlight" if self._highlight_depth else "text"
             self.parts.append(CommentRichPart(kind, text=data))
 
 
 class WeiboCommentFeed:
     COMMENT_URL = "https://m.weibo.cn/comments/hotflow"
-    CACHE_VERSION = "weibo_comment_v17_author_color_reply_pad_font"
+    CACHE_VERSION = "weibo_comment_v19_reply_picture_links"
 
     def __init__(self, parser, *, limit: int = 10):
         self.parser = parser
@@ -243,10 +267,10 @@ class WeiboCommentFeed:
             return []
         urls = []
         for pic in pics:
-            if not isinstance(pic, dict):
+            if not isinstance(pic, dict) or pic.get('type') == 'video':
                 continue
             url = (
-                normalize_image_url(pic.get("large", {}).get("url"))
+                normalize_image_url((pic.get("large") or {}).get("url"))
                 or normalize_image_url(pic.get("url"))
                 or ""
             )
@@ -273,11 +297,16 @@ class WeiboCommentFeed:
             return None
         author = self._parse_user(user)
         text = str(item.get("text") or "").strip()
-        if not text:
-            return None
-        parts = self._parse_text(text)
+        rich = _WeiboRichTextParser()
+        rich.feed(text)
+        parts = rich.parts
         pics = item.get("pics")
-        images = self._parse_images(pics)
+        images = self._parse_images(pics if isinstance(pics, list) else [])
+        if isinstance(item.get("pic"), dict):
+            images = list(dict.fromkeys([*images, *self._parse_images([item["pic"]])]))
+        images = list(dict.fromkeys([*images, *rich.images]))
+        if not parts and not images:
+            return None
         created_at = item.get("created_at")
         time_text = self._format_time(created_at)
         like_count = int(item.get("like_count") or 0)
@@ -310,14 +339,21 @@ class WeiboCommentFeed:
                     continue
                 reply_author = self._parse_user(reply_user)
                 reply_text = str(reply.get("text") or "").strip()
-                if not reply_text:
+                reply_rich = _WeiboRichTextParser()
+                reply_rich.feed(reply_text)
+                reply_parts = reply_rich.parts
+                reply_images = list(dict.fromkeys([
+                    *reply_rich.images,
+                    *self._parse_images(reply.get("pics") if isinstance(reply.get("pics"), list) else []),
+                    *self._parse_images([reply["pic"]] if isinstance(reply.get("pic"), dict) else []),
+                ]))
+                if not reply_parts and not reply_images:
                     continue
-                reply_parts = self._parse_text(reply_text)
                 reply_created = reply.get("created_at")
                 reply_entry = CommentEntry(
                     author=reply_author,
                     content=reply_parts,
-                    images=[],
+                    images=reply_images,
                     time_text=self._format_time(reply_created),
                     like_text=self._count_text(reply.get("like_count")),
                     reply_text="",
@@ -387,6 +423,31 @@ class WeiboCommentFeed:
             if data_uri := resolved.get(entry.author.avatar):
                 entry.author.avatar = data_uri
 
+    async def _embed_comment_images(self, entries: list[CommentEntry]) -> None:
+        pending = list(entries)
+        all_entries = []
+        while pending:
+            entry = pending.pop(0)
+            all_entries.append(entry)
+            if entry.first_reply is not None:
+                pending.append(entry.first_reply)
+        urls = list(dict.fromkeys(url for entry in all_entries for url in entry.images
+                                  if url and not url.startswith('data:')))
+        semaphore = asyncio.Semaphore(4)
+
+        async def resolve(url):
+            async with semaphore:
+                return await cached_image_to_data_uri(
+                    self._avatar_data_uri_cache, self.parser.http_get, url,
+                    headers=self._headers(), referer='https://m.weibo.cn/',
+                    max_bytes=8 * 1024 * 1024, timeout=8,
+                    debug_label='[WeiboComment] picture',
+                )
+
+        resolved = dict(zip(urls, await asyncio.gather(*(resolve(url) for url in urls))))
+        for entry in all_entries:
+            entry.images = [resolved.get(url) or url for url in entry.images]
+
     async def _populate_replies(self, mid: str, items: list[dict], limit: int) -> None:
         pass
 
@@ -418,7 +479,7 @@ class WeiboCommentFeed:
             entry = self.adapt_comment(item, owner or {"id": owner_id}, emoji_map)
             if entry is not None:
                 candidates.append(entry)
-        entries = await self.comment_filter.apply(candidates, limit=self.limit)
+        entries = await self.comment_filter.apply_keeping_pinned(candidates, limit=self.limit)
         if not entries:
             return None
 
@@ -431,6 +492,7 @@ class WeiboCommentFeed:
             entries=entries,
         )
         await self._embed_avatars(document.entries)
+        await self._embed_comment_images(document.entries)
         return document
 
     @staticmethod

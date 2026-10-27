@@ -1,5 +1,6 @@
 """Hide only a heading that duplicates the complete visible caption."""
 
+import asyncio
 from copy import deepcopy
 
 import pytest
@@ -19,7 +20,7 @@ def test_real_douyin_builder_caption_is_rendered_once_without_mutating_result(tm
     parser = DouyinParser(
         {"cache_dir": str(tmp_path), "comments": {"douyin": False}}, object()
     )
-    result = parser._build_result_from_aweme(
+    result = asyncio.run(parser._build_result_from_aweme(
         {
             "aweme_id": "123",
             "desc": caption,
@@ -27,7 +28,7 @@ def test_real_douyin_builder_caption_is_rendered_once_without_mutating_result(tm
             "author": {"nickname": "作者"},
         },
         "123",
-    )
+    ))
     original_extra = deepcopy(result.extra)
     assert result.title == caption
     assert result.text is None
@@ -68,8 +69,9 @@ def test_complete_flow_caption_hides_heading_preserves_images_order_and_input():
     html = render(title=" 第一段\n\n第二段 ", text="未渲染的原始备用正文", content_blocks=blocks)
 
     assert "<h1>" not in html
-    assert '<div class="flow-text">第一段</div>' in html
-    assert '<div class="flow-text">第二段</div>' in html
+    # Preserve source whitespace while comparing trimmed copies for title dedup.
+    assert '<div class="flow-text">  第一段  </div>' in html
+    assert '<div class="flow-text">\n第二段\n</div>' in html
     assert html.count('class="flow-image"') == 2
     assert html.index("第一段") < html.index("first.jpg?size=large&amp;v=1") < html.index("第二段") < html.index("second.jpg")
     assert "未渲染的原始备用正文" not in html

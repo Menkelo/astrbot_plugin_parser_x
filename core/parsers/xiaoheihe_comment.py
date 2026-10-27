@@ -258,7 +258,7 @@ class XiaoHeiHeCommentFeed(SocialCommentFeedBase):
                 break
         if not entries:
             return None
-        entries = await self.comment_filter.apply(entries, limit=self.limit)
+        entries = await self.comment_filter.apply_keeping_pinned(entries, limit=self.limit)
         if not entries:
             return None
         return CommentDocument(

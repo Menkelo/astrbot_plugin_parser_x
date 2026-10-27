@@ -17,6 +17,7 @@ from ..comment_settings import CommentSettings
 from .base import BaseParser, ParseException, Platform, handle
 
 HOSTS = frozenset({"bbs.nga.cn", "nga.178.com", "ngabbs.com"})
+_EMOTE_TOKEN_RE = re.compile(r"\[s:[a-zA-Z0-9]{1,4}:[^\[\]\n]{1,16}\]")
 IMAGE_HOSTS = frozenset({"img.nga.cn", "img4.nga.cn", "img.nga.178.com",
                          "img4.nga.178.com", "pic1.178.com", "attachments.nga.178.com"})
 
@@ -34,6 +35,11 @@ def image_url(value: str, prefix: str) -> str:
 
 
 def bbcode_flow(content: str, prefix: str) -> list[tuple[str, str]]:
+    """把 BBCode 拆成交错文本/图片。
+
+    ``[s:ac:汗]`` 这类小黄脸是平台 token，不是 BBCode 标签，不能随其它方括号标记
+    一起删掉（否则评论区/正文的表情会整段消失），由渲染层查官方目录替换。
+    """
     flow = []
     for index, chunk in enumerate(re.split(r"\[img\](.*?)\[/img\]", content, flags=re.I | re.S)):
         if index % 2:
@@ -42,7 +48,18 @@ def bbcode_flow(content: str, prefix: str) -> list[tuple[str, str]]:
         else:
             text = re.sub(r"<br\s*/?>", "\n", chunk, flags=re.I)
             text = re.sub(r"<[^>]*>", "", text)
+            # NGA 小黄脸写成 [s:ac:汗]，旧实现把整段方括号标记删掉，表情直接消失。
+            # 先临时包住表情 token，再清理其它 BBCode，最后还原 token 原样。
+            placeholders = []
+
+            def _stash(matched):
+                placeholders.append(matched.group(0))
+                return f"\x00{len(placeholders) - 1}\x00"
+
+            text = _EMOTE_TOKEN_RE.sub(_stash, text)
             text = re.sub(r"\[/?[a-zA-Z*][^\]]*\]", "", text)
+            for index, token in enumerate(placeholders):
+                text = text.replace(f"\x00{index}\x00", token)
             text = unescape(unescape(text))
             if text:
                 flow.append(("text", text))
@@ -117,6 +134,13 @@ class NgaParser(BaseParser):
             raise ParseException("NGA 公开主题不可用或首帖身份不符")
         flow = bbcode_flow(str(first.get("content") or ""), str(data.get("attachPrefix") or ""))
         extra = build_card_extra(flow, extra={"nga_body_flow": flow})
+        # 正文里的 [s:ac:汗] 交给渲染层换成官方小黄脸；取不到就按原 token 显示。
+        body_text = "".join(v for k, v in flow if k == "text")
+        if _EMOTE_TOKEN_RE.search(body_text):
+            from ..platform_emotes import fallback_emote_map, select_text_emotes
+            emotes = select_text_emotes(body_text, "nga", fallback_emote_map("nga"))
+            if emotes:
+                extra["card_emotes"] = emotes
         settings = CommentSettings.from_config(self.config, "nga")
         if settings.enabled:
             from .nga_comment import NgaCommentFeed

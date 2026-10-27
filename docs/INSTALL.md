@@ -125,4 +125,4 @@ python -m pytest -q tests/contracts/test_factory_packaging.py
 
 ## 登录态
 
-Cookie 为敏感登录凭据，不可写入公开构建产物。7 个 Cookie 字段、精简配置及风控限制见 [README](../README.md)。尤其小红书：统一 `comments.enabled` 开启且填写 Cookie 后会对符合条件的作品尝试评论请求，没有独立开关；有账号验证、限制乃至封禁风险。不能接受风险时勿填写 Cookie，或关闭会影响所有平台的统一开关。
+Cookie 为敏感登录凭据，不可写入公开构建产物。当前 10 个 Cookie 字段、配置及风控限制见 [README](../README.md)。尤其小红书：统一 `comments.enabled` 开启且填写 Cookie 后会对符合条件的作品尝试评论请求，没有独立开关；有账号验证、限制乃至封禁风险。不能接受风险时勿填写 Cookie，或关闭会影响所有平台的统一开关。

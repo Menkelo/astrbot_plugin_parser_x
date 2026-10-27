@@ -821,6 +821,68 @@ class BiliDynamicService:
                 f"B站动态解析失败（疑似风控 -352），建议配置 bili_ck 后重试: {e or last_err}"
             ) from (e if isinstance(e, Exception) else last_err)
 
+    @staticmethod
+    def _comment_target(item: dict, dynamic_id: int) -> tuple[int, int] | None:
+        """Reply IDs belong to the outer post, not its opus ID or forwarded post."""
+        basic = item.get("basic") or {}
+        try:
+            oid = int(basic.get("comment_id_str") or 0)
+            type_ = int(basic.get("comment_type") or 0)
+        except (TypeError, ValueError):
+            return None
+        if oid > 0 and type_ > 0:
+            return oid, type_
+        # Older detail responses may omit comment metadata. Draw posts use the
+        # album RID (NOT the long dynamic/opus ID); words and reposts use type 17.
+        kind = item.get("type")
+        if kind in {"DYNAMIC_TYPE_WORD", "DYNAMIC_TYPE_FORWARD"}:
+            return dynamic_id, 17
+        if kind == "DYNAMIC_TYPE_DRAW":
+            try:
+                rid = int(basic.get("rid_str") or 0)
+            except (TypeError, ValueError):
+                return None
+            if rid > 0:
+                return rid, 11
+        if kind == "DYNAMIC_TYPE_AV":
+            modules = item.get("modules") or {}
+            if isinstance(modules, dict):
+                dynamic = modules.get("module_dynamic") or {}
+                major = dynamic.get("major") or {}
+                archive = major.get("archive") or {}
+                try:
+                    aid = int(archive.get("aid") or 0)
+                except (TypeError, ValueError):
+                    return None
+                if aid > 0:
+                    return aid, 1
+        return None
+
+    def _attach_comments(self, extra: dict, item: dict, dynamic_id: int) -> None:
+        # A forwarded archive may already carry the original video's factory.
+        # Never silently show that unrelated thread on the outer dynamic.
+        extra.pop("text_card_comment_factory", None)
+        extra.pop("comment_timeout", None)
+        if not self.parser.enable_comment_card:
+            return
+        target = self._comment_target(item, dynamic_id)
+        if target is None:
+            return
+        modules = item.get("modules") or {}
+        author = modules.get("module_author") or {} if isinstance(modules, dict) else {}
+        owner_mid = author.get("mid")
+
+        async def build_comment_document():
+            return await self.parser.comment_feed.build_document(
+                *target,
+                video_title=self.extract_dynamic_title(item, modules) or "B站动态",
+                video_cover=None,
+                owner_mid=owner_mid,
+            )
+
+        extra["text_card_comment_factory"] = build_comment_document
+        extra["comment_timeout"] = self.parser.comment_timeout
+
     async def parse_dynamic(self, dynamic_id: int):
         raw_dynamic = await self._fetch_dynamic_raw(dynamic_id)
 
@@ -849,6 +911,7 @@ class BiliDynamicService:
                         result.url = f"https://t.bilibili.com/{dynamic_id}"
                         result.text = self.extract_dynamic_text(item, modules)
                         result.extra["content_type"] = "视频动态"
+                        self._attach_comments(result.extra, item, dynamic_id)
                         return result
             candidate = candidate.get("orig")
 
@@ -933,6 +996,8 @@ class BiliDynamicService:
             "card_kind": "动态 · 图文" if full_images else "动态",
             "card_info": card_info,
             "card_emotes": card_emotes,
+            # 正文命中的表情由运行时下载后内联，避免截图依赖外网。
+            "card_emote_captures": list(card_emotes),
         }
         # 动态正文本身是整块文本、图片附在后面，因而 flow 即「正文 + 图…」：
         # 单图升为头图，多图按堆叠处理（原图单独发，卡片只留文字）。
@@ -944,6 +1009,7 @@ class BiliDynamicService:
         extra = apply_author_block(extra, avatar=author_avatar, timestamp=pub_ts)
         if full_images:
             extra["image_post_card_in_forward"] = True
+        self._attach_comments(extra, item, dynamic_id)
 
         return self.parser.result(
             title=dynamic_title,

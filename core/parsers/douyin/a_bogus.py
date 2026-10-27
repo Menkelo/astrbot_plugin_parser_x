@@ -20,6 +20,8 @@ _WINDOW_ENV = "1536|747|1536|834|0|30|0|0|1536|834|1536|864|1525|747|24|24|Win32
 # 参数不匹配时服务端不会报错，只返回 200 + 空 body，因此必须区分。
 SIGN_ARGS_DETAIL = (0, 1, 14)
 SIGN_ARGS_REPLY = (0, 1, 8)
+# 表情目录接口与评论详情共用同一组签名参数（实测 200 且返回完整 emoji_list）。
+SIGN_ARGS_EMOJI = SIGN_ARGS_DETAIL
 
 
 def _rc4_encrypt(plaintext: bytes, key: bytes) -> bytes:
@@ -360,4 +362,4 @@ def generate_a_bogus(
     return _custom_base64(_random_prefix(random_values) + encrypted, _S4)
 
 
-__all__ = ["generate_a_bogus", "SIGN_ARGS_DETAIL", "SIGN_ARGS_REPLY"]
+__all__ = ["generate_a_bogus", "SIGN_ARGS_DETAIL", "SIGN_ARGS_EMOJI", "SIGN_ARGS_REPLY"]

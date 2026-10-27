@@ -14,6 +14,8 @@ from html import escape
 from pathlib import Path
 from typing import Any
 
+from astrbot.api import logger
+
 from .constants import COMMENT_FOOTER_BRAND
 from .html_renderer import HtmlRenderService
 
@@ -53,7 +55,7 @@ html::-webkit-scrollbar{width:0;height:0}
 .comment-content{margin-top:14px;font-size:34px;line-height:1.6;color:#f2f3f5;word-break:break-word}
 .highlight{color:#7f8cff}
 .emoji-text{display:inline-block;margin:0 .15em;padding:0 .32em;border-radius:.32em;background:#262a3d;color:#c9cdd4;font-size:.85em;line-height:1.35;font-family:"Noto Color Emoji","Apple Color Emoji","Segoe UI Emoji","Noto Emoji",sans-serif;font-variant-emoji:emoji}
-.emote{display:inline-block;height:1.15em;width:auto;max-width:3em;margin:0 .1em;object-fit:contain;vertical-align:-.2em}
+.emote{display:inline-block;height:1.15em;width:auto;max-width:3em;margin:0 .1em;object-fit:contain;vertical-align:-.2em;background:rgba(255,255,255,.92);border-radius:4px;padding:1px;box-sizing:content-box}
 .comment-image-wrap,.sticker-image-wrap{display:block;width:fit-content;max-width:100%;margin-top:16px;overflow:hidden;border-radius:16px;background:#202228}
 .comment-image{display:block;width:auto;height:auto;max-width:640px;object-fit:contain}
 .sticker-image{display:block;width:auto;height:auto;max-width:320px;max-height:320px;object-fit:contain}
@@ -68,11 +70,31 @@ html::-webkit-scrollbar{width:0;height:0}
 """
 
 
+#: 主题里只带平台显示名时，用它换回平台 key（表情来源表按 key 存）。
+#: 评论区主题名 -> 平台 key。缺一个平台，它的表情 token 就永远解析不出来，
+#: 只会原样显示 `[s:ac:汗]` 这种源码，所以新增平台必须在这里登记。
+_PLATFORM_KEY_BY_NAME = {
+    "B站": "bilibili",
+    "小红书": "xiaohongshu",
+    "酷安": "coolapk",
+    "NGA": "nga",
+    "网易云音乐": "netease",
+}
+
+
 class CommentCanvasBase:
     """Single minimal comment feed renderer shared by all platforms."""
 
     def __init__(self, render_service: HtmlRenderService | None = None):
         self.render_service = render_service or HtmlRenderService()
+        # 运行时表情解析器（由插件注入）；为空时表情直接回落到 [表情名] 文本。
+        self.emote_resolver: object | None = None
+        # 每次 build_html 前由插件填充：平台 key -> 待解析表情名集合。
+        self._pending_emotes: dict[str, set[str]] = {}
+        # 本次渲染已解析好、直接可用的表情地址（token -> data URI）。
+        self._emote_urls: dict[str, str] = {}
+        # 本次渲染所属平台 key，用于判断哪些 token 值得去联网解析。
+        self._emote_platform: str = ""
 
     # ------------------------------------------------------------------
     # Escaping
@@ -140,12 +162,22 @@ class CommentCanvasBase:
                     '<span class="emoji-text">'
                     f"{self._render_unicode_text(part.text)}</span>"
                 )
-            elif kind == "emote" and part.url:
-                output.append(
-                    f'<img class="emote" src="{self._url(part.url)}" '
-                    f'alt="{self._url(part.text)}" '
-                    'onerror="this.replaceWith(document.createTextNode(this.alt))">'
-                )
+            elif kind == "emote":
+                # 平台目录（如 NGA 的 [s:ac:汗]）不一定带 url，token 才是唯一可靠的线索，
+                # 所以一律按 token 登记待解析，解析成功再出图。
+                token = str(part.text or "")
+                resolved = self._emote_urls.get(token)
+                if not resolved and token:
+                    self._pending_emotes.setdefault(token, set()).add(token)
+                source = resolved or str(part.url or "")
+                if source:
+                    output.append(
+                        f'<img class="emote" src="{self._url(source)}" '
+                        f'alt="{self._url(token)}" '
+                        'onerror="this.replaceWith(document.createTextNode(this.alt))">'
+                    )
+                elif token:
+                    output.append(f'<span class="emoji-text">{self._render_unicode_text(token)}</span>')
             else:
                 output.append(f"<span>{self._render_unicode_text(part.text)}</span>")
         return "".join(output)
@@ -184,6 +216,7 @@ class CommentCanvasBase:
 
     def _render_author_badge(self, entry: Any) -> str:
         # Order inside the nickname row is: nickname, 作者, 置顶.
+        # 文案统一是通用模板的「作者」，不按平台改成 UP主/楼主。
         if not self._is_author_entry(entry):
             return ""
         return '<span class="author">作者</span>'
@@ -219,11 +252,18 @@ class CommentCanvasBase:
             if entry.first_reply is not None
             else ""
         )
+        # 楼中楼: platforms that expose several child replies per root fill
+        # ``replies``; skip the one already rendered as ``first_reply``.
+        nested_replies = "".join(
+            self._render_entry(child, nested=True)
+            for child in (getattr(entry, "replies", None) or ())
+            if child is not entry.first_reply
+        )
         return (
             '<article class="comment-card">'
             f'{avatar}<section class="comment-body">{name}'
             f'<div class="comment-content">{rich}</div>'
-            f"{images}{first_reply}</section></article>"
+            f"{images}{first_reply}{nested_replies}</section></article>"
         )
 
     # ------------------------------------------------------------------
@@ -255,6 +295,34 @@ class CommentCanvasBase:
 <main class="comment-list">{entries}</main>
 </div></div></body></html>"""
 
+    @staticmethod
+    def _document_platform_key(document: Any) -> str:
+        theme = getattr(document, "theme", None)
+        name = str(getattr(theme, "platform_name", "") or "")
+        return _PLATFORM_KEY_BY_NAME.get(name, "")
+
+    async def _warm_emotes(self, document: Any) -> None:
+        """渲染前把评论区里的平台表情按需下载好，失败就回落文本。"""
+        resolver = self.emote_resolver
+        if resolver is None:
+            return
+        self._pending_emotes = {}
+        platform_key = self._document_platform_key(document)
+        self._emote_platform = platform_key
+        self._emote_urls = {}
+        # 先走一遍渲染，收集需要解析的表情名（不改动 document）。
+        self.render_entries_fragment(document)
+        if not self._pending_emotes:
+            return
+        resolved: dict[str, str] = {}
+        if platform_key:
+            try:
+                resolved.update(await resolver.resolve(platform_key, set(self._pending_emotes)))
+            except Exception:
+                logger.debug("评论区表情解析失败", exc_info=True)
+        self._emote_urls = resolved
+        self._pending_emotes = {}
+
     async def render(
         self,
         out_path: Path,
@@ -263,7 +331,9 @@ class CommentCanvasBase:
         target_width: int = 900,
     ) -> None:
         out_path.parent.mkdir(parents=True, exist_ok=True)
+        await self._warm_emotes(document)
         html = self.build_html(document)
+        self._emote_urls = {}
         await self.render_service.render(
             out_path,
             html,

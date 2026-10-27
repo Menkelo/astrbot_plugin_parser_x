@@ -15,7 +15,7 @@ def test_album_and_card_remain_one_forward(tmp_path, native_plan, image_count):
     async def run():
         downloads = Downloads(tmp_path)
         parser = DouyinParser(config(tmp_path), downloads)
-        result = parser._build_result_from_aweme({
+        result = await parser._build_result_from_aweme({
             'aweme_id': '123', 'desc': '王者女英雄建模图片', 'create_time': 1700000000,
             'author': {'nickname': '与世界失联'},
             'images': [{'url_list': [f'https://example.com/{i}.jpg']}

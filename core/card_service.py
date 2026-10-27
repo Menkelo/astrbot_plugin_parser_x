@@ -22,6 +22,61 @@ from .result_cache import _config_signature
 class CardServiceMixin:
     """Prepare cards using the concrete plugin's caches and renderer."""
 
+    #: 正文可以自己拉官方目录的平台（评论目录只覆盖评论区，正文需要单独取）。
+    _BODY_EMOTE_CATALOG_PLATFORMS = {"xiaohongshu", "douyin"}
+
+    async def _resolve_card_emotes(self, result: ParseResult) -> object:
+        """仅下载正文实际用到的表情；受管理平台失败时直接保留原文。"""
+        emotes = result.extra.get("card_emotes")
+        platform_key = str(getattr(result.platform, "name", "") or "")
+        body = self._text_card_body(result) + '\n' + str(result.title or '')
+        if platform_key in self._BODY_EMOTE_CATALOG_PLATFORMS and not isinstance(emotes, dict):
+            # 正文不依赖评论开关/Cookie。解析器未挂目录时用官方目录补齐。
+            from .platform_emotes import fallback_emote_map, load_platform_emotes, contains_platform_emotes
+
+            emotes = fallback_emote_map(platform_key)
+            if contains_platform_emotes(body, platform_key):
+                parsers = getattr(self, 'parser_map', {})
+                parser = next((p for p in parsers.values()
+                               if getattr(getattr(p, 'platform', None), 'name', '') == platform_key), None)
+                if parser is not None:
+                    try:
+                        emotes = await asyncio.wait_for(load_platform_emotes(parser, platform_key), timeout=3)
+                    except Exception:
+                        logger.debug(f'{platform_key} 正文表情目录读取失败，使用内置兜底', exc_info=True)
+        if not isinstance(emotes, dict) or platform_key not in {"coolapk", "xiaohongshu", "douyin"}:
+            return emotes
+        resolver = getattr(self, "emote_resolver", None)
+        if resolver is None:
+            return {}
+        from .platform_emotes import iter_emote_matches
+
+        blocks = result.extra.get('text_card_flow') or []
+        for block in blocks:
+            if isinstance(block, dict) and block.get('type') == 'text':
+                body += '\n' + str(block.get('text') or '')
+            elif isinstance(block, (tuple, list)) and len(block) == 2 and block[0] == 'text':
+                body += '\n' + str(block[1])
+        tokens = {token for _, _, token, _ in iter_emote_matches(body, platform_key, emotes)}
+        captured = result.extra.get("card_emote_captures")
+        if isinstance(captured, (list, tuple, set)):
+            tokens.update(str(token) for token in captured if token)
+        resolved: dict[str, str] = {}
+        try:
+            resolve_urls = getattr(resolver, 'resolve_urls', None)
+            if callable(resolve_urls):
+                resolved.update(await resolve_urls(platform_key, {
+                    token: emotes[token] for token in tokens if emotes.get(token)
+                }))
+            resolved.update(await resolver.resolve(
+                platform_key,
+                set(tokens) - set(resolved),
+                sources=emotes,
+            ))
+        except Exception as exc:
+            logger.debug(f"正文表情解析失败，回落文本: {exc}")
+        return resolved
+
     @staticmethod
     def _text_card_body(result: ParseResult) -> str:
         override = result.extra.get("text_card_text")
@@ -58,9 +113,16 @@ class CardServiceMixin:
         comments = getattr(self, "config", {}).get("comments", {})
         if isinstance(comments, dict) and not parse_bool(comments.get("enabled", True), True):
             return None
+        result.extra.pop('_video_card_suppressed', None)
         cached_card = result.extra.get("_disk_card_path")
-        if result.platform.name != 'wechat_article' and reusable_card(cached_card):
+        # Persistent results cannot serialize comment factories. A cached card is
+        # reusable for video only when its manifest records actual comments.
+        if (result.platform.name != 'wechat_article' and reusable_card(cached_card)
+                and (not result.has_video or (include_comments and result.extra.get('_disk_has_comments') is True))):
             return _GeneratedCardContent(cached_card)
+        if result.has_video and not result.extra.get('mixed_post_body_card') and (not include_comments or not callable(result.extra.get('text_card_comment_factory'))):
+            result.extra['_video_card_suppressed'] = True
+            return None
         result.extra.pop("_disk_card_path", None)
         for name in ("comment_document_cache", "comment_render_cache"):
             if not hasattr(self, name):
@@ -91,6 +153,8 @@ class CardServiceMixin:
                 result, include_comments=include_comments, cache_key=cache_key
             ),
         )
+        if card is None and result.has_video:
+            result.extra['_video_card_suppressed'] = True
         if complete and card is not None:
             result.extra["_disk_card_path"] = await card.get_path()
         return _GeneratedCardContent(card.path_task) if card is not None else None
@@ -140,7 +204,7 @@ class CardServiceMixin:
             r"[^A-Za-z0-9_-]+", "_", result.platform.name or "text"
         ).strip("_") or "text"
         stable_path = self.cache_dir / f"text_card_{platform_slug}_{cache_key}.png"
-        if reusable_card(stable_path):
+        if not result.has_video and reusable_card(stable_path):
             return ImageContent(stable_path), True
 
         # 评论区：仅支持 text_card_comment_factory（返回 CommentDocument）
@@ -168,8 +232,17 @@ class CardServiceMixin:
                     cache_key, fetch_document,
                 )
             except Exception as exc:
-                logger.warning(f"评论区获取失败，正文卡照常渲染: {exc}")
+                logger.warning(f"评论区获取失败，视频跳过卡片、图文保留正文卡: {exc}")
                 comment_document = None
+
+        if result.has_video and not result.extra.get('mixed_post_body_card'):
+            # A pure video card is a comment card, not a metadata-only fallback.
+            # Count captured entries, never the platform's advertised total.
+            if comment_document is None or not comment_document.entries:
+                result.extra['_video_card_suppressed'] = True
+                return None, False
+            if reusable_card(stable_path):
+                return ImageContent(stable_path), True
 
         if result.platform.name == 'coolapk':
             from .article_images import local_coolapk_images
@@ -177,6 +250,7 @@ class CardServiceMixin:
                 result, self.downloader, content_blocks, media_url, author_avatar,
             )
 
+        card_emotes = await self._resolve_card_emotes(result)
         complete = not callable(comment_factory) or comment_document is not None
         # Publish only complete renders. Temporary fallbacks remain retryable.
         out_path = self.cache_dir / f"text_card_{platform_slug}_temporary_{uuid.uuid4().hex}.png"
@@ -196,7 +270,7 @@ class CardServiceMixin:
             info_items=result.extra.get("card_info"),
             info_title=info_title,
             author_badge=author_badge,
-            emotes=result.extra.get("card_emotes"),
+            emotes=card_emotes,
             content_blocks=content_blocks,
             content_layout=result.extra.get("text_card_layout"),
             author_meta=result.extra.get("text_card_meta"),

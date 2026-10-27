@@ -14,6 +14,7 @@ from .netease import NeteaseParser
 from .nga import NgaParser
 from .zhihu import ZhihuParser
 from .coolapk import CoolapkParser
+from .wechat_channels import WechatChannelsParser
 
 __all__ = [
     "BaseParser",
@@ -34,4 +35,5 @@ __all__ = [
     "NgaParser",
     "ZhihuParser",
     "CoolapkParser",
+    "WechatChannelsParser",
 ]

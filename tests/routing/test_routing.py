@@ -466,7 +466,7 @@ def test_foreign_platform_routes_are_not_registered():
     assert "web_summary" not in schema
 
 
-def test_tieba_is_fully_removed_from_routes_and_configuration():
+def test_tieba_is_registered_without_legacy_platform_configuration():
     keywords = {
         keyword
         for parser in BaseParser.get_all_subclass()
@@ -479,7 +479,11 @@ def test_tieba_is_fully_removed_from_routes_and_configuration():
     assert "tieba.baidu.com" in keywords
     assert "platforms" not in schema
     assert "integrations" not in schema
-    assert (Path(__file__).parents[2] / "core" / "parsers" / "tieba.py").exists()
+    tieba = next(parser for parser in BaseParser.get_all_subclass()
+                 if parser.platform.name == "tieba")
+    keyword, matched = tieba.search_url("https://tieba.baidu.com/p/1234567890")
+    assert keyword == "tieba.baidu.com"
+    assert matched is not None
 
 
 def test_retired_ytdlp_platforms_are_fully_removed():
@@ -650,13 +654,13 @@ def test_xiaohongshu_timestamp_accepts_seconds_and_milliseconds(raw, expected):
     assert XiaoHongShuParser._normalize_timestamp(raw) == expected
 
 
-def test_xiaohongshu_strips_topic_tags_entirely():
-    # 话题标签整体去掉，正文里零散的 [话题] 字样保持原样。
+def test_xiaohongshu_preserves_source_topic_tags():
+    # 保留话题名与普通正文，只清理小红书序列化标记。
     assert (
         XiaoHongShuParser._normalize_note_text(
             "#性能车[话题]# #机车跑山[话题]# 正文[话题]"
         )
-        == "正文[话题]"
+        == "#性能车 #机车跑山 正文[话题]"
     )
 
 
@@ -718,7 +722,7 @@ def test_xiaohongshu_ensure_note_url_copies_token_from_share_text():
     )
 
 
-def test_xiaohongshu_extracts_matching_vue_ref_and_rejects_wrong_map_id():
+def test_xiaohongshu_extracts_note_from_vue_ref_and_empty_map_fallback():
     parser = XiaoHongShuParser({"cache_dir": "."}, object())
     note = _xhs_note_payload()
     wrapped = {
@@ -732,10 +736,6 @@ def test_xiaohongshu_extracts_matching_vue_ref_and_rejects_wrong_map_id():
             }
         }
     }
-    assert not parser._extract_note_from_state(wrapped, "note123")
-    wrapped["value"]["note"]["noteDetailMap"]["value"]["note123"] = (
-        wrapped["value"]["note"]["noteDetailMap"]["value"].pop("other")
-    )
     assert parser._extract_note_from_state(wrapped, "note123") == note
     discovery = {
         "noteData": {
@@ -940,7 +940,7 @@ def test_image_post_parsers_use_shared_cards_and_keep_canonical_urls(tmp_path):
             },
             downloader,
         )
-        douyin_result = douyin._build_result_from_aweme(
+        douyin_result = await douyin._build_result_from_aweme(
             {
                 "aweme_id": "123",
                 "desc": "抖音图文",
@@ -983,12 +983,15 @@ def test_image_post_parsers_use_shared_cards_and_keep_canonical_urls(tmp_path):
     assert douyin_result.url == "https://www.douyin.com/video/123"
     assert xhs_result.url == "https://www.xiaohongshu.com/explore/demo"
     assert xhs_result.timestamp == 1_700_000_000
-    assert xhs_result.text == "小红书正文"
+    assert xhs_result.text == "小红书正文 #性能车"
     for result in (kuaishou_result, douyin_result, xhs_result):
         assert result.contents
         assert result.extra.get("render_text_card") is True
-        # 图文帖默认就把正文卡并进合并转发。
-        assert result.extra.get("image_post_card_in_forward") is True
+        # Delivery now merges image-post cards by default; the old opt-in flag
+        # is not required. Assert the parser supplies the real body/media inputs.
+        assert not result.has_video
+        assert any(block.get("type") == "text" and block.get("text")
+                   for block in result.extra.get("text_card_flow", []))
     # 抖音图文挂评论区；快手暂无评论区实现；小红书该用例未启用评论。
     assert callable(douyin_result.extra.get("text_card_comment_factory"))
     assert kuaishou_result.extra.get("text_card_comment_factory") is None
@@ -1045,7 +1048,7 @@ def test_video_post_parsers_and_ytdlp_use_shared_cards(tmp_path):
             },
             downloader,
         )
-        douyin_result = douyin._build_result_from_aweme(
+        douyin_result = await douyin._build_result_from_aweme(
             {
                 "aweme_id": "123",
                 "desc": "抖音视频",
@@ -2093,7 +2096,10 @@ def test_comment_emoji_sizes_are_relative_to_the_text():
     emote_css = css(bili_html, ".emote")
     assert "height:1.15em" in emote_css
     assert "width:auto" in emote_css
-    assert "px" not in emote_css.replace("max-width:3em", "")
+    # 只允许 padding 用 px：透明底黑色线稿（NGA 小黄脸）必须垫浅色底片，
+    # 否则在黑底卡片上整块看不见；尺寸本身仍然跟随字号缩放。
+    assert "px" not in re.sub(r"(max-width:3em|padding:1px|border-radius:4px)", "", emote_css)
+    assert "background:rgba(255,255,255,.92)" in emote_css
     token_css = css(bili_html, ".emoji-text")
     assert "font-size:.85em" in token_css
     # Badges are flex-centred so their label is dead centre, with square padding.
@@ -2283,7 +2289,10 @@ def test_bilibili_single_image_dynamic_uses_shared_card(tmp_path):
                 **kwargs,
             )
 
-    service = BiliDynamicService(FakeParser())
+    parser = FakeParser()
+    # This fixture isolates the dynamic body; comment fetching is tested separately.
+    parser.enable_comment_card = False
+    service = BiliDynamicService(parser)
 
     async def fake_avatar(*_args, **_kwargs):
         return "data:image/png;base64,YXZhdGFy"
@@ -2564,7 +2573,7 @@ def test_native_parsers_attach_comment_factories(tmp_path):
     async def run():
         downloader = FakeDownloader()
         douyin = DouyinParser(config, downloader)
-        result = douyin._build_result_from_aweme(
+        result = await douyin._build_result_from_aweme(
             {
                 "aweme_id": "7414051930047106342",
                 "desc": "作品[比心]",
@@ -2605,7 +2614,8 @@ def test_native_parsers_attach_comment_factories(tmp_path):
     assert "comment_document_task_factory" not in douyin_extra
     assert callable(douyin_extra["text_card_comment_factory"])
     assert douyin_extra["comment_timeout"] == 90
-    assert "card_emotes" not in douyin_extra
+    # 抖音正文表情现在由解析器按官方目录捕获，卡片才能把 [比心] 换成图片。
+    assert douyin_extra["card_emotes"]["[比心]"].startswith("https://")
     assert douyin_extra.get("render_text_card") is True
     assert "comment_document_task_factory" not in weibo_extra
     assert callable(weibo_extra["text_card_comment_factory"])
@@ -3398,7 +3408,8 @@ def test_comment_layout_cache_versions_invalidate_pre_fix_images():
     assert BiliCommentFeed.CACHE_VERSION == "bili_comment_v18_author_color_reply_pad_font"
     # v18：抖音评论区补抓楼中楼回复，缓存结构变化必须让旧缓存失效。
     assert DouyinCommentFeed.CACHE_VERSION == "douyin_comment_v18_reply_thread"
-    assert WeiboCommentFeed.CACHE_VERSION == "weibo_comment_v17_author_color_reply_pad_font"
+    # v19 includes reply picture links; pre-v19 cached images must not be reused.
+    assert WeiboCommentFeed.CACHE_VERSION == "weibo_comment_v19_reply_picture_links"
 
 
 def test_onebot_message_chain_uses_public_aiocqhttp_conversion():
@@ -3856,31 +3867,12 @@ def test_native_one_image_flow_keeps_video_separate(tmp_path):
     event = Event()
     asyncio.run(plugin._send_parse_result(event, result))
 
-    assert plugin.text_renderer.kwargs is not None
-    assert plugin.text_renderer.kwargs["content_blocks"] == [
-        {"type": "text", "text": "富文本正文"},
-        {"type": "image", "url": "https://img.example.com/body.png"},
-    ]
-    # 视频单独直发 + 一条合并转发承载「正文卡 + 原文 + 原图」；
-    # 卡片不再引用原消息，未消费的批次则降级成独立消息发出。
-    assert len(event.sent) == 2
-    assert any(isinstance(chain[0], MessageVideo) for chain in event.sent)
-
-    forward_chain = next(
-        chain
-        for chain in event.sent
-        if any(isinstance(segment, Nodes) for segment in chain)
-    )
-    nodes = forward_chain[0].nodes
-    node_contents = [node.content[0] for node in nodes]
-    assert isinstance(node_contents[0], MessageImage), "首节点是正文卡"
-    assert Path(node_contents[0].file).name.startswith("text_card_demo_")
-
-    assert not [
-        chain
-        for chain in event.sent
-        if any(isinstance(segment, Reply) for segment in chain)
-    ], "全平台不再引用原消息"
+    assert plugin.text_renderer.kwargs is None
+    # No comments: video is the entire payload, never a body-card/text fallback.
+    assert len(event.sent) == 1
+    assert len(event.sent[0]) == 1
+    assert isinstance(event.sent[0][0], MessageVideo)
+    assert event.sent[0][0].file == str(video_path)
 
 
 @pytest.mark.parametrize("image_count", [1, 2])
@@ -4396,7 +4388,7 @@ def test_single_image_waits_for_card_and_source_before_combined_send(tmp_path):
     assert len([c for c in parts if isinstance(c, MessageImage)]) == 2
 
 
-def test_generic_delivery_plan_preserves_text_images_and_video(tmp_path):
+def test_video_delivery_plan_suppresses_body_text_and_preview_images(tmp_path):
     from astrbot_plugin_parser_x.core.data import (
         DeliveryBatch,
         DeliveryPlan,
@@ -4463,12 +4455,11 @@ def test_generic_delivery_plan_preserves_text_images_and_video(tmp_path):
     event = Event()
     asyncio.run(plugin._send_parse_result(event, result))
 
-    assert len(event.sent) == 3
-    assert isinstance(event.sent[0][0], Plain)
-    assert event.sent[0][0].text == "正文"
-    assert all(isinstance(segment, MessageImage) for segment in event.sent[1])
-    assert len(event.sent[1]) == 2
-    assert isinstance(event.sent[2][0], MessageVideo)
+    # No comments: video is the entire payload, never a body-card/text fallback.
+    assert len(event.sent) == 1
+    assert len(event.sent[0]) == 1
+    assert isinstance(event.sent[0][0], MessageVideo)
+    assert event.sent[0][0].file == str(video_path)
 
 
 def test_delivery_plan_forward_failure_falls_back_in_original_order(tmp_path):
@@ -4747,7 +4738,7 @@ def test_multi_image_result_sends_card_and_all_source_images_in_forward(tmp_path
     ]
 
 
-def test_video_result_sends_body_card_and_video(tmp_path):
+def test_video_result_suppresses_body_card_without_comments(tmp_path):
     from astrbot_plugin_parser_x.core.data import (
         ImageContent as PluginImageContent,
     )
@@ -4823,23 +4814,15 @@ def test_video_result_sends_body_card_and_video(tmp_path):
     ):
         asyncio.run(plugin._send_parse_result(event, result))
 
-    # 视频帖：正文卡进合并转发，视频单独直发，两者不混在一条里。
-    assert len(event.sent) == 2
-    forward_chain = next(
-        chain
-        for chain in event.sent
-        if any(isinstance(segment, Nodes) for segment in chain)
-    )
-    node_contents = [node.content[0] for node in forward_chain[0].nodes]
-    assert len(node_contents) == 1
-    assert isinstance(node_contents[0], MessageImage)
-    assert any(
-        any(isinstance(segment, MessageVideo) for segment in chain)
-        for chain in event.sent
-    )
+    # No comments: video is the entire payload, never a body-card/text fallback.
+    assert len(event.sent) == 1
+    assert len(event.sent[0]) == 1
+    assert isinstance(event.sent[0][0], MessageVideo)
+    assert event.sent[0][0].file == str(video_path)
 
 
-def test_video_delivery_sends_body_card_and_video(tmp_path):
+@pytest.mark.parametrize("has_comments", [False, True])
+def test_video_delivery_keeps_only_video_and_optional_comment_card(tmp_path, has_comments):
     from astrbot_plugin_parser_x.core.data import ParseResult, Platform, VideoContent
     from astrbot_plugin_parser_x.main import ParserXPlugin
 
@@ -4850,7 +4833,11 @@ def test_video_delivery_sends_body_card_and_video(tmp_path):
     plugin.cache_dir = tmp_path
 
     class FakeCardRenderer:
-        async def render_card(self, out_path, **_kwargs):
+        def __init__(self):
+            self.calls = []
+
+        async def render_card(self, out_path, **kwargs):
+            self.calls.append(kwargs)
             _save_render_fixture(out_path, size=(900, 480))
 
     plugin.text_renderer = FakeCardRenderer()
@@ -4887,26 +4874,40 @@ def test_video_delivery_sends_body_card_and_video(tmp_path):
         contents=[VideoContent(video_path)],
         extra={"render_text_card": True},
     )
+    from astrbot_plugin_parser_x.core.comment_canvas import (
+        CommentAuthor, CommentDocument, CommentEntry, CommentRichPart, WEIBO_THEME,
+    )
+    document = CommentDocument(WEIBO_THEME, "视频标题", "", "1", [
+        CommentEntry(CommentAuthor("评论作者"), [CommentRichPart("text", "保留评论")]),
+    ])
+
+    async def comments():
+        return document
+
+    if has_comments:
+        result.extra["text_card_comment_factory"] = comments
     event = Event()
     asyncio.run(plugin._send_parse_result(event, result))
 
-    # 视频帖：正文卡单独一条合并转发，视频独立直发，两者不混在一条里。
-    assert len(event.sent) == 2
-    forward_chain = next(
-        chain
-        for chain in event.sent
-        if any(isinstance(segment, Nodes) for segment in chain)
-    )
-    node_contents = [node.content[0] for node in forward_chain[0].nodes]
-    assert len(node_contents) == 1
-    assert isinstance(node_contents[0], MessageImage)
-    assert any(
-        any(isinstance(segment, MessageVideo) for segment in chain)
-        for chain in event.sent
-    )
+    assert len(event.sent) == (2 if has_comments else 1)
+    assert len(event.sent[0]) == 1
+    assert isinstance(event.sent[0][0], MessageVideo)
+    assert event.sent[0][0].file == str(video_path)
+    if has_comments:
+        assert len(plugin.text_renderer.calls) == 1
+        assert plugin.text_renderer.calls[0]["comment_document"] is document
+        assert len(event.sent[1]) == 1
+        forward = event.sent[1][0]
+        assert isinstance(forward, Nodes)
+        assert isinstance(forward.nodes[0].content[0], Plain)
+        assert forward.nodes[0].content[0].text == "B站 · 热门评论"
+        assert isinstance(forward.nodes[1].content[0], MessageImage)
+        assert len(forward.nodes) == 2
+    else:
+        assert plugin.text_renderer.calls == []
 
 
-def test_native_video_delivery_keeps_text_and_video_without_body_card(tmp_path):
+def test_native_video_delivery_suppresses_body_text_and_card(tmp_path):
     from astrbot_plugin_parser_x.core.data import (
         DeliveryBatch,
         DeliveryPlan,
@@ -4971,14 +4972,14 @@ def test_native_video_delivery_keeps_text_and_video_without_body_card(tmp_path):
     event = Event()
     asyncio.run(plugin._send_parse_result(event, result))
 
-    assert len(event.sent) == 2
-    # Renderer fallback still obeys the video-first contract.
+    # No comments: video is the entire payload, never a body-card/text fallback.
+    assert len(event.sent) == 1
+    assert len(event.sent[0]) == 1
     assert isinstance(event.sent[0][0], MessageVideo)
-    assert isinstance(event.sent[1][0], Plain)
-    assert event.sent[1][0].text == "识别：演示平台\n文章正文"
+    assert event.sent[0][0].file == str(video_path)
 
 
-def test_video_body_card_renderer_failure_keeps_text_and_video(tmp_path):
+def test_video_body_renderer_failure_does_not_resurrect_text(tmp_path):
     from astrbot_plugin_parser_x.core.data import (
         Author,
         ParseResult,
@@ -4994,7 +4995,10 @@ def test_video_body_card_renderer_failure_keeps_text_and_video(tmp_path):
     plugin.cache_dir = tmp_path
 
     class FailingTextRenderer:
+        calls = 0
+
         async def render_card(self, *_args, **_kwargs):
+            self.calls += 1
             raise RuntimeError("renderer unavailable")
 
     plugin.text_renderer = FailingTextRenderer()
@@ -5024,31 +5028,33 @@ def test_video_body_card_renderer_failure_keeps_text_and_video(tmp_path):
         async def send(self, result):
             self.sent.append(result)
 
+    from astrbot_plugin_parser_x.core.comment_canvas import (
+        CommentAuthor, CommentDocument, CommentEntry, CommentRichPart, WEIBO_THEME,
+    )
+
+    async def comments():
+        return CommentDocument(WEIBO_THEME, "视频", "", "1", [
+            CommentEntry(CommentAuthor("读者"), [CommentRichPart("text", "评论")]),
+        ])
+
     event = Event()
     result = ParseResult(
         platform=Platform(name="weibo", display_name="微博"),
         author=Author(name="作者"),
-        text="渲染失败也必须发送正文",
+        text="渲染失败也不能恢复视频正文",
         contents=[VideoContent(video_path)],
         url="https://weibo.com/example",
-        extra={"render_text_card": True},
+        extra={"render_text_card": True, "text_card_comment_factory": comments},
     )
 
     asyncio.run(plugin._send_parse_result(event, result))
 
-    # 渲染失败也要把正文发出去：正文另发一条，视频独立直发，不能丢正文。
-    assert len(event.sent) == 2
-    texts = [
-        segment.text
-        for chain in event.sent
-        for segment in chain
-        if isinstance(segment, Plain)
-    ]
-    assert any("渲染失败也必须发送正文" in text for text in texts)
-    assert any(
-        any(isinstance(segment, MessageVideo) for segment in chain)
-        for chain in event.sent
-    )
+    assert plugin.text_renderer.calls == 1
+    # Comment renderer failed: never resurrect the video body as plain text.
+    assert len(event.sent) == 1
+    assert len(event.sent[0]) == 1
+    assert isinstance(event.sent[0][0], MessageVideo)
+    assert event.sent[0][0].file == str(video_path)
 
 
 def test_plugin_initializes_and_registers_aiocqhttp_parsers(tmp_path):
@@ -5095,14 +5101,11 @@ def test_plugin_initializes_and_registers_aiocqhttp_parsers(tmp_path):
                 assert "b23.tv" in plugin.parser_map
                 assert "miyoushe.com" not in plugin.parser_map
                 assert "xiaoheihe" in plugin.parser_map
-                assert "tieba.baidu.com" not in plugin.parser_map
-                assert "zhihu.com" not in plugin.parser_map
-                for platform_name in ("wechat_article", "netease", "nga", "coolapk"):
-                    assert any(p.platform.name == platform_name for p in plugin.parser_map.values())
+                assert "tieba.baidu.com" in plugin.parser_map
                 assert "y.qq.com" not in plugin.parser_map
                 assert "kugou.com" not in plugin.parser_map
                 assert "qishui.douyin.com" not in plugin.parser_map
-                assert "channels.weixin.qq.com" not in plugin.parser_map
+                assert "channels.weixin.qq.com" in plugin.parser_map
                 assert "tiktok.com" not in plugin.parser_map
                 assert "youtube.com" not in plugin.parser_map
                 assert "ixigua.com" not in plugin.parser_map
@@ -5136,10 +5139,13 @@ def test_plugin_initializes_and_registers_aiocqhttp_parsers(tmp_path):
                     "xiaohongshu",
                     "acfun",
                     "xiaoheihe",
+                    "tieba",
+                    "coolapk",
                     "wechat_article",
                     "netease",
                     "nga",
-                    "coolapk",
+                    "zhihu",
+                    "wechat_channels",
                 }
                 assert "integrations" not in plugin.config
                 assert plugin.parser_map["b23.tv"].enable_comment_card is True
@@ -5378,23 +5384,17 @@ def test_xiaohongshu_video_comment_is_dropped_entirely(tmp_path):
     assert "这个视频真好笑" in joined
 
 
-def test_xiaohongshu_embedded_emote_bitmap_resolves_as_image():
-    """动画表情（[呃R] 等）没有静态地址，靠内嵌 data URI 出图。"""
+def test_xiaohongshu_pag_only_emote_preserves_text_without_embedded_bitmap():
+    """PAG-only 在当前环境无法获得非空像素，不内嵌旧帧也不输出空图。"""
     from core.platform_emotes import fallback_emote_map, resolve_emote_url
-    from core.xiaohongshu_emote_data import XIAOHONGSHU_EMOTE_DATA_URI
 
-    assert len(XIAOHONGSHU_EMOTE_DATA_URI) == 22
     catalog = fallback_emote_map("xiaohongshu")
+    assert not any(url.startswith('data:') for url in catalog.values())
     for token in ("[呃R]", "[完啦R]", "[超喜欢R]"):
-        assert token in catalog
-        url = resolve_emote_url("xiaohongshu", token, catalog)
-        assert url.startswith("data:image/png;base64,"), (token, url[:40])
-
-    # 内嵌底图必须真的渲染成 <img>，而不是退化成纯文本
-    parts = XiaohongshuCommentFeed._rich_text("怪不得[呃R]", catalog)
-    emotes = [p for p in parts if p.kind == "emote"]
-    assert len(emotes) == 1
-    assert emotes[0].url.startswith("data:image")
+        assert resolve_emote_url('xiaohongshu', token, catalog) == ''
+        parts = XiaohongshuCommentFeed._rich_text('怪不得' + token, catalog)
+        assert not any(part.kind == 'emote' for part in parts)
+        assert ''.join(part.text or '' for part in parts) == '怪不得' + token
 
 
 def test_xiaohongshu_remote_payload_cannot_inject_inline_image_source():

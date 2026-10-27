@@ -16,6 +16,7 @@ from ...download import Downloader
 from ...html_renderer import HtmlRenderService
 from ...utils import cookies_str_to_netscape
 from ...nonwork_guard import is_nonwork_url
+from ...platform_emotes import load_platform_emotes, select_text_emotes
 from ...video_codec import codec_preference
 from ..base import BaseParser, ParseException, Platform, SkipParseException, handle
 from ..gallery import (
@@ -609,7 +610,7 @@ class DouyinParser(BaseParser):
 
     async def _parse_video_ssr(self, url: str, vid: str):
         resp = await self._fetch_router_resp(url)
-        return self._process_router_resp(resp, vid)
+        return await self._process_router_resp(resp, vid)
 
     async def parse_video(self, url: str, vid: str):
         try:
@@ -661,7 +662,7 @@ class DouyinParser(BaseParser):
 
             aweme = data.get("aweme_detail") if isinstance(data, dict) else None
             if aweme and isinstance(aweme, dict):
-                return self._build_result_from_aweme(aweme, vid)
+                return await self._build_result_from_aweme(aweme, vid)
 
             filter_reason = ""
             fd = data.get("filter_detail") if isinstance(data, dict) else None
@@ -674,7 +675,7 @@ class DouyinParser(BaseParser):
 
         raise ParseException("detail API 未返回 aweme_detail (图文过滤已绕过仍为空)")
 
-    def _process_router_resp(self, resp, vid: str):
+    async def _process_router_resp(self, resp, vid: str):
         from .video import recursive_collect_videos
 
         try:
@@ -687,7 +688,7 @@ class DouyinParser(BaseParser):
 
         aweme = pick_primary_aweme(targets, vid)
         try:
-            return self._build_result_from_aweme(aweme, vid)
+            return await self._build_result_from_aweme(aweme, vid)
         except msgspec.ValidationError as e:
             raise _SSRDataError("SSR aweme 结构无效") from e
 
@@ -736,7 +737,7 @@ class DouyinParser(BaseParser):
                 )
         return contents
 
-    def _build_result_from_aweme(self, aweme: dict, vid: str, *, media_headers=None):
+    async def _build_result_from_aweme(self, aweme: dict, vid: str, *, media_headers=None):
         """从单个 aweme dict 构建 ParseResult，SSR 与 detail API 共用。"""
         from .video import VideoData
 
@@ -793,11 +794,11 @@ class DouyinParser(BaseParser):
             extra["native_delivery"] = True
         # 图文与视频都出正文卡：媒体本身直发/进投递计划，
         # 卡片作为「头图 + 正文」与评论区一起进合并转发。
-        # 抖音正文是整块描述、图片附在后面，故 flow 为「正文 + 图…」：
-        # 单图升为头图，多图按堆叠处理（图片单独发）。
+        # 抖音配图不是交错正文，原图已由 contents 独立投递。
+        # 封面可能是另一个资产，不能依赖封面/原图 ID 相同来去重。
         extra = build_card_extra(
-            [("text", meta.desc or ""), *[("image", url) for url in image_urls]],
-            cover=meta.cover_url,
+            [("text", meta.desc or "")],
+            cover=comment_cover,
             is_video=bool(meta.video_url),
             extra=extra,
         )
@@ -807,6 +808,14 @@ class DouyinParser(BaseParser):
             avatar=meta.avatar_url,
             timestamp=meta.create_time,
         )
+        # 抖音正文表情是 `[开心]` 这类 token，浅色面板目录只在评论链路里加载过；
+        # 这里按需挂一次，卡片渲染才能把 token 换成官方表情图，取不到就原样保留。
+        description = str(meta.desc or "")
+        if description and "[" in description:
+            emotes = await load_platform_emotes(self, "douyin")
+            selected = select_text_emotes(description, "douyin", emotes)
+            if selected:
+                extra["card_emotes"] = selected
         return self.result(
             title=meta.desc,
             author=author,
@@ -832,7 +841,7 @@ class DouyinParser(BaseParser):
         details = payload.get("aweme_details") if isinstance(payload, dict) else None
         if not details or not isinstance(details[0], dict):
             raise ParseException("图集数据为空")
-        result = self._build_result_from_aweme(
+        result = await self._build_result_from_aweme(
             details[0], video_id, media_headers=self.android_headers
         )
         result.url = f"https://www.douyin.com/note/{video_id}"

@@ -76,8 +76,14 @@ def _flow(node, hosts):
     parts = []
     text = []
     def flush():
-        value = '\n'.join(line.strip() for line in ''.join(text).splitlines() if line.strip())
+        # Same paragraph-collapse fix as the Zhihu body reader: block tags emit
+        # a newline on both sides, so filtering blank lines flattened every
+        # paragraph break into a plain line wrap.
+        raw = ''.join(text).replace('\r\n', '\n').replace('\r', '\n')
         text.clear()
+        value = re.sub(r'[ \t]+', ' ', raw)
+        value = re.sub(r' *\n[ \t]*', '\n', value)
+        value = re.sub(r'\n{3,}', '\n\n', value).strip()
         if value:
             parts.append(('text', value))
     def walk(item):
@@ -87,6 +93,13 @@ def _flow(node, hosts):
         if item.tag in {'script', 'style', 'noscript', 'iframe', 'video', 'audio', 'mp-video', 'mp-audio', 'mpvoice'}:
             return
         if item.tag == 'img':
+            alt = item.attrs.get('alt') or item.attrs.get('title') or ''
+            if 'feed-emoji' in (item.attrs.get('class') or '').split() and alt:
+                text.append(alt if alt.startswith('[') else '[' + alt + ']')
+                return
+            if re.fullmatch(r'\[[^\[\]\n]{1,40}\]', alt):
+                text.append(alt)
+                return
             url = _image_url(item.attrs.get('data-src') or item.attrs.get('src'), hosts)
             if url:
                 flush()
@@ -215,6 +228,26 @@ class CoolapkParser(BaseParser):
             # Keep the pre-layout URL/task association: hero de-duplication may
             # remove images from the card flow without removing source tasks.
             extra['text_card_source_images'] = images
+        if self.platform.name == 'coolapk':
+            # 只带官方来源表（表情名 -> 官方 CDN 文件名），图片运行时再下载，
+            # 不把表情字节放进仓库或安装包。
+            from ..emote_sources import load_coolapk_sources
+            from pathlib import Path
+            # 来源表只跟着插件包走（core/coolapk_emote_files.json），无需外部数据目录。
+            sources = load_coolapk_sources(Path(__file__).parents[1])
+            if sources is not None and sources.static:
+                extra['card_emotes'] = dict(sources.static)
+                extra['card_emotes_pending'] = True
+                # 正文里真正出现的表情交给运行时按需下载，其余不动。
+                from ..platform_emotes import iter_emote_matches
+                plain = '\n'.join(value for kind, value in flow if kind == 'text') + '\n' + str(title or '')
+                shown = sorted({
+                    token for _, _, token, url in iter_emote_matches(
+                        plain, 'coolapk', sources.static
+                    ) if url
+                })
+                if shown:
+                    extra['card_emote_captures'] = shown
         if avatar:
             extra['text_card_avatar'] = avatar
         return self.result(title=title, author=author,

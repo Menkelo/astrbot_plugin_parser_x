@@ -61,7 +61,10 @@ def test_disabled_comments_preserve_source_and_native_text(tmp_path, native, kin
     event = CaptureEvent()
     asyncio.run(obj._send_parse_result(event, parsed))
     parts = [part for chain in event.sent for part in chain] + forwarded_parts(event)
-    assert any(isinstance(part, Plain) and 'native body survives' in part.text for part in parts)
+    body_parts = [part for part in parts if isinstance(part, Plain) and 'native body survives' in part.text]
+    # Card-off preserves image-post source text, but pure videos never resurrect
+    # body text alongside their media (the same contract as card-on delivery).
+    assert bool(body_parts) is (kind == 'image')
     expected = Image if kind == 'image' else Video
     assert any(isinstance(part, expected) and str(source_path) in part.file for part in parts)
     assert obj.text_renderer.calls == []

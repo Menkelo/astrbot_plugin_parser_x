@@ -1,7 +1,6 @@
-"""Independent anonymous NetEase single-song parser; no unlock or fallback source."""
+"""Official NetEase single-song parser with optional user-owned login credentials."""
 from __future__ import annotations
 
-from ..card_flow import build_card_extra
 from ..data import Author, Platform
 from .base import BaseParser, ParseException, handle
 
@@ -9,7 +8,31 @@ from .base import BaseParser, ParseException, handle
 class NeteaseParser(BaseParser):
     platform = Platform("netease", "网易云音乐")
 
-    @handle("music.163.com", r"https?://music\.163\.com/(?:\#/)?(?:m/)?song\?[^\s<>]*")
+    @handle("163cn.tv", r"https?://163cn\.tv/[A-Za-z0-9]+(?=[\s/?#<>，。；！？）)]|$)")
+    async def parse_short_link(self, searched):
+        import aiohttp
+        from urllib.parse import urljoin, urlsplit
+
+        # Resolve only the official shortener; never follow arbitrary redirect hosts.
+        async with aiohttp.ClientSession(cookie_jar=aiohttp.DummyCookieJar(), trust_env=False) as session:
+            async with session.get(
+                searched.group(0), allow_redirects=False,
+                timeout=aiohttp.ClientTimeout(total=12),
+            ) as response:
+                if response.status not in {301, 302, 303, 307, 308}:
+                    raise ParseException("网易云分享短链未返回有效跳转")
+                target = urljoin(searched.group(0), response.headers.get("Location", ""))
+        parsed = urlsplit(target)
+        if (parsed.scheme not in {"http", "https"}
+                or parsed.hostname not in {"music.163.com", "y.music.163.com"}
+                or parsed.username or parsed.password or parsed.port not in {None, 80, 443}):
+            raise ParseException("网易云分享短链跳转目标无效")
+        keyword, matched = self.search_url(target)
+        if keyword != "music.163.com":
+            raise ParseException("网易云分享短链不是歌曲链接")
+        return await self.parse(keyword, matched)
+
+    @handle("music.163.com", r"https?://(?:y\.)?music\.163\.com/(?:\#/)?(?:m/)?song\?[^\s<>]*")
     async def parse_song(self, searched):
         from urllib.parse import parse_qs
         query = searched.group(0).split("?", 1)[1]
@@ -25,7 +48,8 @@ class NeteaseParser(BaseParser):
         album = song.get("album") or song.get("al") or {}
         artists = song.get("artists") or song.get("ar") or []
         author = " / ".join(str(item.get("name")) for item in artists if isinstance(item, dict) and item.get("name"))
-        extra = build_card_extra([], cover=self._media_url(album.get("picUrl")))
+        # NetEase delivery is audio-only: no cover card or comment fetch/render.
+        extra = {"render_text_card": False}
         extra["audio_status"] = "unavailable"
         extra["info"] = "音频暂不可用（权限、地区或接口限制）；未解锁或寻找替代音源"
         # Cards must never consume AudioContent: shared delivery sends it as File.
@@ -50,22 +74,17 @@ class NeteaseParser(BaseParser):
                     extra["info"] = "仅官方试听片段（非完整音频）"
                 else:
                     extra["audio_status"] = "available"
-                    extra["info"] = "官方匿名接口提供的可用音频"
-                contents.append(self.create_audio_content(url, duration))
+                    extra["info"] = "官方接口提供的可用音频"
+                audio_content = self.create_audio_content(url, duration)
+                audio_content.name = self._audio_filename(author, str(song.get("name") or "未知歌曲"),
+                                                          preview=extra["audio_status"] == "preview")
+                contents.append(audio_content)
                 break
         except Exception:
             # Permission, region, malformed/changed API: detail remains useful.
             pass
-        from ..comment_settings import CommentSettings
-        from .netease_comment import NeteaseCommentFeed
-        settings = CommentSettings.from_config(self.config, "netease")
-        if settings.enabled:
-            feed = NeteaseCommentFeed(self, limit=settings.display_count)
-            extra["text_card_comment_factory"] = lambda: feed.fetch_document(
-                song_id, str(song.get("name") or ""), str(extra.get("text_card_media") or ""))
-            extra["comment_timeout"] = settings.timeout
         return self.result(title=song.get("name"), author=Author(author or "未知歌手"),
-                           text=str(album.get("name") or ""), contents=contents,
+                           text="" if contents else str(extra["info"]), contents=contents,
                            url=f"https://music.163.com/song?id={song_id}", extra=extra)
 
     async def _request_json(self, path, params=None):
@@ -77,12 +96,20 @@ class NeteaseParser(BaseParser):
                 or re.fullmatch(r"/api/v1/resource/hotcomments/R_SO_4_[1-9][0-9]*", path)):
             raise ParseException("网易云 API 路径不允许")
         url = "https://music.163.com" + path
-        # Never reuse user cookies or globally configured proxy authentication.
+        # Credentials are scoped to these official song endpoints only. Redirects
+        # are disabled; the shortener and audio downloader never see this header.
+        headers = {"Referer": "https://music.163.com/", "User-Agent": "Mozilla/5.0"}
+        cookies = self.config.get("cookies", {})
+        cookie = cookies.get("netease_cookie", "") if isinstance(cookies, dict) else ""
+        if isinstance(cookie, str) and not any(ord(ch) < 32 or ord(ch) == 127 for ch in cookie):
+            cookie = cookie.strip()
+            if cookie:
+                headers["Cookie"] = cookie
         try:
             async with aiohttp.ClientSession(cookie_jar=aiohttp.DummyCookieJar(), trust_env=False) as session:
                 async with session.get(url, params=params, allow_redirects=False,
                         timeout=aiohttp.ClientTimeout(total=12),
-                        headers={"Referer": "https://music.163.com/", "User-Agent": "Mozilla/5.0"}) as response:
+                        headers=headers) as response:
                     final = urlsplit(str(response.url))
                     if response.status != 200 or final.scheme != "https" or final.hostname != "music.163.com" or final.path != path:
                         raise ParseException("网易云 API 响应身份或状态异常")
@@ -98,7 +125,21 @@ class NeteaseParser(BaseParser):
         except ParseException:
             raise
         except Exception as error:
-            raise ParseException("网易云 API 匿名请求失败") from error
+            raise ParseException("网易云 API 请求失败") from error
+
+    @staticmethod
+    def _audio_filename(author: str, title: str, *, preview: bool = False) -> str:
+        import re
+        import unicodedata
+
+        def clean(value, fallback):
+            value = "".join(ch for ch in value if not unicodedata.category(ch).startswith("C"))
+            value = re.sub(r'[<>:"/\\|?*]', "_", value)
+            value = re.sub(r"\s+", " ", value).strip(" .")
+            return (value or fallback)[:60].rstrip(" .")
+
+        suffix = "（试听）" if preview else ""
+        return f"{clean(author, '未知歌手')} - {clean(title, '未知歌曲')}{suffix}.mp3"
 
     @staticmethod
     def _media_url(value):

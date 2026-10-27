@@ -37,6 +37,7 @@ class AudioContent(MediaContent):
     """音频内容"""
 
     duration: float = 0.0
+    name: str | None = None
 
 
 @dataclass(repr=False, slots=True)

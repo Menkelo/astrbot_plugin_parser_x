@@ -65,8 +65,11 @@ def test_wheel_namespace_runtime_resources_and_dependencies(archives):
             "core/parsers/bilibili/__init__.py", "core/parsers/douyin/__init__.py",
             "core/parsers/xiaoheihe/__init__.py", "pages/debug/index.html",
             "pages/debug/app.js", "pages/debug/style.css", "THIRD_PARTY_NOTICES.md",
+            "core/coolapk_emote_files.json", "core/parsers/kuaishou_emotes.json",
+            "core/emote_sources.py", "core/emote_runtime.py",
         }
         assert {f"{PACKAGE}/{name}" for name in required} <= names
+        assert not any(name.endswith(('xiaohongshu_emote_data.py', 'coolapk_emotes.json')) for name in names)
         for pattern in ("core/**/*.py", "assets/fonts/*.woff2"):
             paths = list(source.glob(pattern))
             assert paths, pattern
@@ -87,6 +90,7 @@ def test_wheel_namespace_runtime_resources_and_dependencies(archives):
         }
         assert actual == _requirements((source / "requirements.txt").read_text().splitlines())
         assert "playwright<2,>=1.58" in actual
+        assert "cryptography>=41.0.0" in actual
         assert not any("chromium" in n.lower() or "ms-playwright" in n.lower() for n in names)
 
 

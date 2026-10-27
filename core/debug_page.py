@@ -240,7 +240,7 @@ class DebugMessageSerializer:
                 self._component_source(component),
                 owner=self.owner,
             )
-            media.setdefault("name", component.name or "file")
+            media["name"] = component.name or media.get("name") or "file"
             return {"type": "file", "media": media}
         if isinstance(component, Node):
             return await self.serialize_node(component)

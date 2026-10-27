@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "astrbot_plugin_parser_x"
-version = "0.0.2"
+version = "0.0.1"
 description = "AstrBot 国内平台链接解析插件"
 readme = "README.md"
 license = {text = "MIT"}
@@ -42,6 +42,11 @@ astrbot_plugin_parser_x = [
     "LICENSE", "THIRD_PARTY_NOTICES.md",
     "pages/debug/*.html", "pages/debug/*.js", "pages/debug/*.css",
     "assets/fonts/*.woff2",
+    "core/parsers/kuaishou_emotes.json",
+    "core/parsers/nga_emotes.json",
+    "core/parsers/netease_emotes.json",
+    "core/coolapk_emote_files.json",
+    "core/xiaohongshu_emote_pag.json",
 ]
 
 [tool.ruff]

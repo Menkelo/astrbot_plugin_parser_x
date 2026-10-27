@@ -63,6 +63,12 @@ class CommentEntry:
     creator_liked: bool = False
     meta_items: list[str] = field(default_factory=list)
     first_reply: CommentEntry | None = None
+    # Full nested-reply list (楼中楼). Platforms that expose more than one child
+    # reply per root fill this; ``first_reply`` stays for single-reply payloads
+    # and is treated as the first element when both are present.
+    replies: list[CommentEntry] = field(default_factory=list)
+    # Source-side comment id, kept so a feed can fetch nested replies lazily.
+    comment_id: str = ""
 
 
 @dataclass(slots=True)

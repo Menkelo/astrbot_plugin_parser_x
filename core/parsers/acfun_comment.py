@@ -187,7 +187,7 @@ class AcFunCommentFeed(SocialCommentFeedBase):
                     entry.pinned = entry.pinned or section == "stickyComments"
                     candidates.append(entry)
                     roots[id(entry)] = (identity, item)
-            entries = await self.comment_filter.apply(candidates, limit=self.limit)
+            entries = await self.comment_filter.apply_keeping_pinned(candidates, limit=self.limit)
             if (len(entries) >= self.limit or page >= int(data.get("totalPage") or 1)
                     or data.get("pcursor") == "no_more"):
                 break
