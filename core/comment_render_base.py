@@ -55,7 +55,7 @@ html::-webkit-scrollbar{width:0;height:0}
 .comment-content{margin-top:14px;font-size:34px;line-height:1.6;color:#f2f3f5;word-break:break-word}
 .highlight{color:#7f8cff}
 .emoji-text{display:inline-block;margin:0 .15em;padding:0 .32em;border-radius:.32em;background:#262a3d;color:#c9cdd4;font-size:.85em;line-height:1.35;font-family:"Noto Color Emoji","Apple Color Emoji","Segoe UI Emoji","Noto Emoji",sans-serif;font-variant-emoji:emoji}
-.emote{display:inline-block;height:1.15em;width:auto;max-width:3em;margin:0 .1em;object-fit:contain;vertical-align:-.2em;background:rgba(255,255,255,.92);border-radius:4px;padding:1px;box-sizing:content-box}
+.emote{display:inline-block;height:1.15em;width:auto;max-width:3em;margin:0 .1em;object-fit:contain;vertical-align:-.2em;}
 .comment-image-wrap,.sticker-image-wrap{display:block;width:fit-content;max-width:100%;margin-top:16px;overflow:hidden;border-radius:16px;background:#202228}
 .comment-image{display:block;width:auto;height:auto;max-width:640px;object-fit:contain}
 .sticker-image{display:block;width:auto;height:auto;max-width:320px;max-height:320px;object-fit:contain}

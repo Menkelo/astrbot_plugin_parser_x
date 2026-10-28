@@ -7,7 +7,7 @@
 2026-10-27 对当前源码副本的审计记录以下**许可边界与未解决审查项**。维护者在知悉下述文件级额外声明及许可疑点后，选择保留现有抖音签名实现并完整披露，不将候选签名替换为未经验证的其他实现。该维护决定不是权利人授权，也不代表法律审查通过；补充本声明本身不会取得授权，不能据此声称 0.0.2 已通过许可验收：
 
 1. **A-Bogus 文件级限制与仓库许可证冲突。** `core/parsers/douyin/a_bogus.py` 明确是下述 rconsole-plugin 模块的修改后 Python 实现。上游仓库根许可证为 Mulan PSL v2，但 `utils/a-bogus.cjs` 首行另有禁止商用等限制（下文逐字保留）。未取得权利人澄清前，不应把该移植模块无条件表述为仅受 Mulan PSL v2 或插件 MIT 许可；需取得适用于该文件的明确授权，或移除/合法替换后重新审查。
-2. **平台表情已改为运行时取回，不再随包分发图像。** 旧的 `core/xiaohongshu_emote_data.py` 与 `core/coolapk_emotes.json` 已从候选发布副本移除；现在仅带官方 URL/文件名来源表。首次使用时下载静态图并缓存，失败保留表情名；PAG-only 表情当前保留文本，不带 libpag 二进制或生成帧。此变更移除了上述内嵌图像的再分发问题，但不表示平台已授予图像、目录或运行时使用的开放许可。
+2. **平台表情不是插件原创，恢复的静态首帧仍需审查分发权利。** 2026-10-28 按维护者要求恢复 GitHub v0.0.1 中 `core/xiaohongshu_emote_data.py` 的 22 张内嵌 PNG 首帧，来源为官方 PAG 动画（文件头保留来源及生成方式）；这些图像并未取得已知开放再分发许可，恢复旧资源不等于取得授权。酷安继续仅带 URL/文件名并在运行时取回；各平台内容、目录及运行时使用均不因公开可访问而自动获得开放许可。
 3. **GPL 运行依赖的组合分发边界需审查。** `bilibili-api-python` 是实际直接导入的依赖，其当前上游许可为 GPL-3.0-or-later。原创文件保留 MIT 许可并不自动满足结合分发时的 GPL 条件；发布者应核实实际解析版本、插件与依赖的组合方式及对应源码/许可义务，不能将组合物一概宣传为“全部 MIT”。本文件不是法律意见，亦不自行改变根许可证。
 4. **小黑盒来源的额外文件声明需保留并核清。** 下文列明 MIT 许可链及 `encrypt.py` 的禁止渗透测试声明；仓库级 MIT 与文件附加限制的适用范围仍应向上游确认，不把该声明删减为单纯致谢。
 
@@ -67,12 +67,14 @@ SOFTWARE.
 
 | 文件/素材 | 来源与随包形式 | 授权边界 |
 | --- | --- | --- |
-| `core/emote_sources.py` | 小红书官方静态图 URL 及 PAG 来源 URL 元数据；无图像字节 | 静态图运行时下载，PAG-only 当前回落文本；来源表不表示图像开放授权 |
+| `core/emote_sources.py`、`core/xiaohongshu_emote_pag.json` | 小红书官方静态图 URL 及 PAG 来源 URL 元数据；这些来源表本身无图像字节 | 静态图运行时下载；除已恢复的 22 张内置首帧外，无可用静态来源的 PAG 表情回落文本；来源表不表示图像开放授权 |
+| `core/xiaohongshu_emote_data.py` | 从历史提交 2240950 恢复的 22 张官方 PAG 衍生 PNG 首帧，以 data URI 随源码携带；精确历史链接及生成记录见下文 | 图形归平台/原作者，不受插件 MIT 重新授权；未确认开放再分发许可，恢复资源及注明出处不等于取得授权 |
+| `core/parsers/nga_emotes.json` | 根据 NGA 官方 `https://img4.nga.cn/common_res/js_bbscode_core.js` 的 smile 表整理 203 个表情及 CDN URL；含带括号/不带括号别名，不含图像字节 | 官方公开脚本/图片可访问不等于取得目录或图像的开放再分发许可；图片运行时取回，权利归原权利人 |
 | `core/coolapk_emote_files.json` | 141 个表情 token → 酷安官方 CDN 文件名，无 PNG/data URI | 运行时按正文实际 token 下载；权利归平台/原作者，不宣称为插件原创素材 |
 | `core/parsers/kuaishou_emotes.json` | 文件自带来源 `https://www.kuaishou.com/graphql`、操作 `query visionBaseEmoticons { visionBaseEmoticons { iconUrls } }`、采集日期 2026-10-27；表情 token → 第一方 CDN URL | 随包是目录快照，不含图像字节；未发现平台授予目录/图像的开放许可。公开接口不等于再许可；目录与运行时取回图像均不宣称 MIT |
 | 运行时取回的作品、封面、头像、评论及平台表情 | 各平台官方接口、公开页面或内容 CDN，按解析结果下载/缓存 | 权利归平台/原作者；不属于插件代码许可范围。平台商标不构成对插件的支持/背书 |
 
-旧内嵌小红书图像曾由 `libpag` 离线生成，现已移除。候选副本保留默认禁用的 PAG 实验入口，但不带 libpag JS/WASM、图像或生成帧；常规运行不下载 libpag。工具许可证不会自动许可输入/输出的第三方图形。
+小红书 22 张内嵌 PNG 首帧已于 2026-10-28 恢复，数据逐项核对等同于[历史提交 2240950 的原文件](https://github.com/Menkelo/astrbot_plugin_parser_x/blob/2240950c6c2850b611052d34f5784a45d8a8f0f9/core/xiaohongshu_emote_data.py)。该历史文件注明由 `libpag` 离线生成、裁边并统一到 96px；提及的 `tools/render_xhs_emotes.py` 不随当前副本提供，未记录的 libpag 精确版本和生成命令不作推定。官方目录来源为 [emoji/config](https://edith.xiaohongshu.com/api/im/web/emoji/config) 的 `red_moji_pag` bundle，现有 PAG 来源 URL 另见 `core/xiaohongshu_emote_pag.json`。当前不附带 libpag JS/WASM，PAG 在线渲染实验默认禁用，常规运行不下载 libpag；已恢复的 22 张 PNG 不依赖该实验。生成工具的许可证不会自动授予输入/输出图形的再分发许可；这些平台图像的开放再分发授权仍未确认。
 
 ## Python 运行依赖与外部程序（非插件重新授权）
 

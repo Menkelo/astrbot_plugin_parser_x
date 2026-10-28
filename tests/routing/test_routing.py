@@ -2096,10 +2096,8 @@ def test_comment_emoji_sizes_are_relative_to_the_text():
     emote_css = css(bili_html, ".emote")
     assert "height:1.15em" in emote_css
     assert "width:auto" in emote_css
-    # 只允许 padding 用 px：透明底黑色线稿（NGA 小黄脸）必须垫浅色底片，
-    # 否则在黑底卡片上整块看不见；尺寸本身仍然跟随字号缩放。
-    assert "px" not in re.sub(r"(max-width:3em|padding:1px|border-radius:4px)", "", emote_css)
-    assert "background:rgba(255,255,255,.92)" in emote_css
+    assert "px" not in emote_css
+    assert "background:" not in emote_css
     token_css = css(bili_html, ".emoji-text")
     assert "font-size:.85em" in token_css
     # Badges are flex-centred so their label is dead centre, with square padding.
@@ -5384,16 +5382,14 @@ def test_xiaohongshu_video_comment_is_dropped_entirely(tmp_path):
     assert "这个视频真好笑" in joined
 
 
-def test_xiaohongshu_pag_only_emote_preserves_text_without_embedded_bitmap():
-    """PAG-only 在当前环境无法获得非空像素，不内嵌旧帧也不输出空图。"""
+def test_xiaohongshu_pag_only_emote_uses_v001_trusted_static_frame():
     from core.platform_emotes import fallback_emote_map, resolve_emote_url
 
     catalog = fallback_emote_map("xiaohongshu")
-    assert not any(url.startswith('data:') for url in catalog.values())
     for token in ("[呃R]", "[完啦R]", "[超喜欢R]"):
-        assert resolve_emote_url('xiaohongshu', token, catalog) == ''
+        assert resolve_emote_url('xiaohongshu', token, catalog).startswith('data:image/png;')
         parts = XiaohongshuCommentFeed._rich_text('怪不得' + token, catalog)
-        assert not any(part.kind == 'emote' for part in parts)
+        assert any(part.kind == 'emote' for part in parts)
         assert ''.join(part.text or '' for part in parts) == '怪不得' + token
 
 

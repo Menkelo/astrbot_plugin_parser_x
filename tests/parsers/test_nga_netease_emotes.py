@@ -1,7 +1,6 @@
-"""NGA/网易云表情库回归：token 不能丢，也不能变成裸文本。"""
+"""NGA 表情库回归：token 不能丢，也不能变成裸文本。"""
 from core.parsers.nga import bbcode_flow
 from core.parsers.nga_comment import _rich_parts
-from core.parsers.netease_comment import _comment_parts
 from core.platform_emotes import contains_platform_emotes, fallback_emote_map, resolve_emote_url
 
 
@@ -31,13 +30,3 @@ def test_nga_comment_keeps_emotes_as_images():
     assert [part.kind for part in parts] == ["text", "emote", "text"]
     assert parts[1].text == "[s:ac:汗]"
     assert parts[1].url.endswith("/ac34.png")
-
-
-def test_netease_catalog_resolves_emotes_and_ignores_copyright_tag():
-    catalog = fallback_emote_map("netease")
-    assert catalog["[爱心]"].startswith("https://s1.music.126.net/style/web2/emt/emoji_")
-    parts = _comment_parts("好听[爱心][cp]", catalog)
-    assert [part.kind for part in parts] == ["text", "emote", "text"]
-    assert parts[1].url.endswith(".png")
-    # [cp] 是网易云的版权标记，不是表情，必须保持纯文本。
-    assert parts[2].text == "[cp]"

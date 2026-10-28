@@ -44,7 +44,6 @@ astrbot_plugin_parser_x = [
     "assets/fonts/*.woff2",
     "core/parsers/kuaishou_emotes.json",
     "core/parsers/nga_emotes.json",
-    "core/parsers/netease_emotes.json",
     "core/coolapk_emote_files.json",
     "core/xiaohongshu_emote_pag.json",
 ]

@@ -42,10 +42,11 @@ class Resolver:
     def known_tokens(self, platform):
         return self.known
 
-    async def resolve(self, platform, tokens):
+    async def resolve(self, platform, tokens, sources=None):
         if self.delay:
             await asyncio.sleep(self.delay)
         self.calls.append(("resolve", platform, set(tokens)))
+        self.last_sources = dict(sources or {})
         return {token: self.resolved[token] for token in tokens if token in self.resolved}
 
     async def resolve_urls(self, platform, sources):
@@ -69,6 +70,7 @@ def test_warm_uses_explicit_platform_and_resolves_emoji_text_and_directory_url(t
     )
     asyncio.run(renderer.render_card(tmp_path / "x.png", platform_name="小红书", platform_key="xiaohongshu", author_name="a", text="", comment_document=doc))
     assert ("resolve", "xiaohongshu", {"[笑R]", "[目录]"}) in resolver.calls
+    assert resolver.last_sources == {"[目录]": "https://cdn.example/dir.png"}
     assert not any(call[0] == "resolve_urls" for call in resolver.calls)
     assert 'src="data:image/png;base64,known"' in service.html
     assert 'src="data:image/png;base64,dir"' in service.html

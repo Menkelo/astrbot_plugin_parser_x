@@ -29,8 +29,6 @@ _SQUARE_TOKEN_PLATFORMS = {
     "coolapk",
     # NGA 的表情是 [s:ac:汗] 这种方括号 token，历史实现直接把它们从正文里删掉了
     "nga",
-    # 网易云评论里的 [爱心] [大哭] 之前一律当纯文本显示
-    "netease",
 }
 
 # The official catalog APIs are the primary source. These small fallbacks keep the
@@ -239,13 +237,10 @@ def fallback_emote_map(platform_key: str) -> dict[str, str]:
         return dict(_BILIBILI_FALLBACK)
     if platform_key == "nga":
         return _load_bundled_map(__file__, "parsers/nga_emotes.json")
-    if platform_key == "netease":
-        return _load_bundled_map(__file__, "parsers/netease_emotes.json")
     if platform_key == "xiaohongshu":
-        # [R] 动画表情只有官方 PAG 动画，没有静态地址；它们不进目录，由
-        # EmoteResolver 在渲染期按需下载并渲染（见 core/emote_runtime.py）。
-        # 这里只返回官方静态表情的兜底表。
-        return dict(_XIAOHONGSHU_FALLBACK)
+        from .xiaohongshu_emote_data import XIAOHONGSHU_EMOTE_DATA_URI
+
+        return {**_XIAOHONGSHU_FALLBACK, **XIAOHONGSHU_EMOTE_DATA_URI}
     return {}
 
 

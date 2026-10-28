@@ -95,8 +95,15 @@ class EmoteResolver:
         elif platform_key == "xiaohongshu":
             data_dir = Path(getattr(self.plugin, "data_dir", self.root))
             value = load_xiaohongshu_sources(data_dir)
-        elif platform_key in {"nga", "netease"}:
-            # 这两个平台的表情是随插件分发的官方静态表，直接按目录下载。
+            from .platform_emotes import fallback_emote_map
+
+            # v0.0.1 的可信静态首帧是 PAG-only 表情的离线兜底。
+            value = EmoteSources(
+                static={**value.static, **fallback_emote_map(platform_key)},
+                pag_pages=value.pag_pages,
+            )
+        elif platform_key == "nga":
+            # NGA 的表情是随插件分发的官方静态表，直接按目录下载。
             from .platform_emotes import fallback_emote_map
 
             value = EmoteSources(static=fallback_emote_map(platform_key))
@@ -252,7 +259,7 @@ class EmoteResolver:
     def known_tokens(self, platform_key: str) -> set[str]:
         sources = self.sources(platform_key)
         tokens = set(sources.static) | set(sources.pag_pages)
-        if platform_key in {"nga", "netease"}:
+        if platform_key == "nga":
             from .platform_emotes import fallback_emote_map
 
             tokens |= set(fallback_emote_map(platform_key))
@@ -271,6 +278,9 @@ class EmoteResolver:
         output: dict[str, str] = {}
         for token in tokens:
             url = str(sources.static.get(token) or "")
+            if url.startswith("data:image/"):
+                output[token] = url
+                continue
             if url:
                 uri = await self._static_uri(platform_key, token, url)
                 if uri:

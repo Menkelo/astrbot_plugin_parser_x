@@ -59,7 +59,7 @@ DOUYIN_RICH_TEXT_RE = re.compile(
 
 # B站视频评论中的分:秒 / 时:分:秒；先匹配完整链接，避免拆开 URL。
 BILI_RICH_TEXT_RE = re.compile(
-    RICH_TEXT_RE.pattern
+    DOUYIN_RICH_TEXT_RE.pattern
     + r"|(?P<timestamp>(?<![0-9A-Za-z_:])[0-9]{1,3}:(?:[0-5][0-9]:)?[0-5][0-9](?![0-9A-Za-z_:]))"
 )
 
@@ -136,7 +136,7 @@ body{padding:0;overflow-x:hidden;font-family:'Noto Sans SC','Noto Sans CJK SC','
 .comment-content{margin-top:11.25px;font-size:31.5px;line-height:1.5;color:#FFFFFF;word-break:break-word;overflow-wrap:anywhere}
 .comment-highlight{color:#7B9CD3}
 .comment-emoji-text{display:inline-block;margin:0 .15em;padding:0 .32em;border-radius:.32em;background:#262a3d;color:#c9cdd4;font-size:.85em;line-height:1.35;font-family:"Noto Color Emoji","Apple Color Emoji","Segoe UI Emoji","Noto Emoji",sans-serif;font-variant-emoji:emoji}
-.comment-emote{display:inline-block;height:1.15em;width:auto;max-width:3em;margin:0 .1em;object-fit:contain;vertical-align:-.2em;background:rgba(255,255,255,.92);border-radius:4px;padding:1px;box-sizing:content-box}
+.comment-emote{display:inline-block;height:1.15em;width:auto;max-width:3em;margin:0 .1em;object-fit:contain;vertical-align:-.2em;}
 .comment-image-wrap,.comment-sticker-wrap{display:block;width:fit-content;max-width:100%;margin-top:16px;overflow:hidden;border-radius:16px;background:#202228}
 .comment-image{display:block;width:auto;height:auto;max-width:640px;object-fit:contain}
 .comment-sticker{display:block;width:auto;height:auto;max-width:320px;max-height:320px;object-fit:contain}
@@ -264,7 +264,7 @@ class UnifiedCardRenderer:
         last = 0
         pattern = (
             BILI_RICH_TEXT_RE if bili_timestamps
-            else DOUYIN_RICH_TEXT_RE if platform_key == 'douyin'
+            else DOUYIN_RICH_TEXT_RE if platform_key in {'douyin', 'bilibili'}
             else RICH_TEXT_RE
         )
         for match in pattern.finditer(text or ""):
@@ -486,7 +486,9 @@ class UnifiedCardRenderer:
             if managed and callable(resolve):
                 selected = set(sorted(managed)[:MAX_WARM_EMOTES])
                 state["urls"].update(await asyncio.wait_for(
-                    resolve(platform_key or "", selected), timeout=EMOTE_WARMUP_SECONDS,
+                    resolve(platform_key or "", selected, sources={
+                        token: sources[token] for token in selected if token in sources
+                    }), timeout=EMOTE_WARMUP_SECONDS,
                 ))
         except Exception:
             logger.debug("评论区表情解析失败", exc_info=True)

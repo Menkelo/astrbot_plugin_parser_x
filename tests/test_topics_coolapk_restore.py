@@ -27,7 +27,7 @@ def test_douyin_adjacent_topics_from_screenshot_are_all_highlighted():
     )
 
 
-@pytest.mark.parametrize('platform', [None, 'weibo', 'coolapk', 'bilibili', 'xiaohongshu'])
+@pytest.mark.parametrize('platform', [None, 'weibo', 'coolapk', 'xiaohongshu'])
 def test_other_platforms_keep_closed_topic_and_rich_text_semantics(platform):
     text = '#话题#正文 #小红书# @同学 https://example.com/#片段 查看链接 <正文>'
     assert UnifiedCardRenderer._render_text_html(text, platform_key=platform) == (
