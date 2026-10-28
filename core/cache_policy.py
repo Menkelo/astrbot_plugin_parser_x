@@ -7,7 +7,7 @@ from pathlib import Path
 # parser/card behavior changes make existing results unsafe or semantically stale;
 # ordinary releases and changes already captured by config/input keys need no bump.
 # This is not DiskResultCache.VERSION, which describes the JSON storage schema.
-CACHE_BEHAVIOR_VERSION = "parser_x_behavior_v23_bili_adjacent_topics"
+CACHE_BEHAVIOR_VERSION = "parser_x_behavior_v25_douyin_mixed_media_forward"
 CACHE_RETENTION_SECONDS = 24 * 60 * 60
 
 

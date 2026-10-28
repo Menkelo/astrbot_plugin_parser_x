@@ -495,6 +495,18 @@ class XiaoHongShuParser(BaseParser):
         err = str(info.get("errMsg") or "").strip()
         code = info.get("errorCode")
         if code not in (0, "0", None, "") and err:
+            if str(code) == "-510001":
+                return "小红书当前内容无法展示（错误码 -510001），请在官方 App 内确认笔记是否仍可访问"
+            # SSR may serialize an HTTPBizError into errMsg. Never expose its
+            # entire JSON payload as a user-facing error.
+            try:
+                detail = json.loads(err)
+            except (ValueError, TypeError):
+                detail = None
+            if isinstance(detail, dict):
+                payload = detail.get("data")
+                message = payload.get("msg") if isinstance(payload, dict) else None
+                return f"小红书：{message or '笔记请求失败'}（错误码 {code}）"
             return err
         note_data = json_obj.get("noteData")
         if isinstance(note_data, dict) and note_data.get("hasError"):
@@ -624,7 +636,17 @@ class XiaoHongShuParser(BaseParser):
         # Login-only notes never reach the anonymous page: retry once with the
         # configured Cookie and only accept it when it actually beats the
         # anonymous result. The anonymous page is never replaced by a worse one.
-        if self.comment_cookie and self._blocked_page_reason(final_url, html):
+        # The anonymous-restricted signal (business error such as -510001) lives
+        # in the SSR state blob's serverRequestInfo, so include the parsed JSON
+        # when deciding whether the configured Cookie is worth trying.
+        anonymous_state: dict[str, Any] = {}
+        try:
+            anonymous_state = self._extract_initial_state_json(html, final_url)
+        except ParseException:
+            anonymous_state = {}
+        if self.comment_cookie and self._blocked_page_reason(
+            final_url, html, anonymous_state
+        ):
             try:
                 cookie_final, cookie_html = await self._request_html(
                     url, headers=headers, timeout=timeout, with_cookie=True
@@ -649,12 +671,26 @@ class XiaoHongShuParser(BaseParser):
 
         final_url = self._cache_get_redirect(url)
         if not final_url:
-            final_url = await self.get_final_url(url, headers=self.ios_headers)
-            final_url = self._ensure_note_url(final_url)
+            # The shared redirect helper rejects /explore as a non-work URL
+            # before we can inspect XHS's unavailable-note landing parameters.
+            response = await self.http_get(
+                url, headers=self.ios_headers, allow_redirects=True,
+                timeout=15, retries=3,
+            )
+            final_url = self._ensure_note_url(str(response.url))
             self._cache_set_redirect(url, final_url)
 
         if self._is_live_url(final_url):
             raise SkipParseException()
+
+        # Unavailable shares can land on /explore?target_note_id=... instead
+        # of /explore/<id>. That path has no registered note handler.
+        if (self._trusted_document_url(final_url)
+                and urlparse(final_url).path.rstrip('/') == '/explore'
+                and self._query_value(final_url, 'undertake_note_error')):
+            raise ParseException(
+                "小红书当前内容无法展示，请在官方 App 内确认笔记是否仍可访问，或重新复制分享链接"
+            )
 
         if final_url == url:
             raise ParseException(f"小红书短链跳转失败: {url}")

@@ -11,7 +11,7 @@ from astrbot.core.config.astrbot_config import AstrBotConfig
 
 from ...card_flow import apply_author_block, build_card_extra
 from ...comment_settings import CommentSettings
-from ...data import DynamicContent
+from ...data import DynamicContent, GraphicsContent, ImageContent, VideoContent
 from ...download import Downloader
 from ...html_renderer import HtmlRenderService
 from ...utils import cookies_str_to_netscape
@@ -32,6 +32,42 @@ from .extractor import (
 
 if TYPE_CHECKING:
     from ...data import ParseResult
+
+
+# 图文作品里单条幻灯片的类型：2=静态图，4=视频。
+# 注意：实况图（Live Photo）的 clip_type 也可能是 4，所以判定视频幻灯片
+# 不能只看 clip_type，必须以 video.duration 作为硬门槛。
+_CLIP_TYPE_VIDEO = 4
+# 视频幻灯片最小时长（毫秒）。低于此值视为实况图（Live Photo），仍按静态图交付，
+# 因为 QQ 侧没有实况图消息类型，动态片段单独发出去反而破坏"图 + 动图"的配对。
+_VIDEO_SLIDE_MIN_MS = 3000
+
+
+def _slide_duration(item: dict) -> int:
+    video = item.get("video")
+    if not isinstance(video, dict):
+        return 0
+    try:
+        return int(video.get("duration") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _is_video_slide(item: dict) -> bool:
+    """判断图文里的一条媒体是不是真正的视频幻灯片。
+
+    抖音 slidesinfo 接口对视频幻灯片会给出带 `duration` 的完整 video 对象，
+    `clip_type` 为 4；实况图（Live Photo）同样带 video 对象且 clip_type 也可能是 4，
+    但时长只有 1~3 秒，必须按静态图交付，否则会把实况图误当视频发出去。
+    因此时长是唯一的硬门槛，clip_type 只作为补充证据。
+    """
+    if not isinstance(item, dict) or not isinstance(item.get("video"), dict):
+        return False
+    duration = _slide_duration(item)
+    if duration < _VIDEO_SLIDE_MIN_MS:
+        # 实况图或无时长信息：一律按静态图交付。
+        return False
+    return True
 
 
 class _SSRDataError(ParseException):
@@ -476,7 +512,7 @@ class DouyinParser(BaseParser):
         # 最坏可累计 ~24s。现改为三域名并发竞速：谁先成功用谁、取消其余，
         # 总耗时≈最快可用域名的单次耗时。
         try:
-            return await self._race_parse_video(
+            result = await self._race_parse_video(
                 [
                     self._build_m_douyin_url(ty, vid),
                     self._build_iesdouyin_url(ty, vid),
@@ -489,6 +525,8 @@ class DouyinParser(BaseParser):
         except Exception as last_err:
             logger.warning(f"[Douyin] 直连解析失败，切换 ytdlp 兜底: {last_err}")
             return await self._ytdlp_fallback(vid)
+
+        return await self._enrich_gallery_video_slides(result, vid)
 
     async def _parse_by_id_fallback(self, vid: str):
         # video / note 两种类型 × m / iesdouyin 两个域名，共 4 个候选。
@@ -729,7 +767,21 @@ class DouyinParser(BaseParser):
             if not key[1] or key in seen:
                 continue
             seen.add(key)
-            if motion:
+            if motion and _is_video_slide(item):
+                # 图文作品里的「视频幻灯片」（clip_type=4，时长通常十几秒）是一段
+                # 独立短视频，不是实况图。slidesinfo 接口会给出完整 video 对象，
+                # 但 SSR 回流数据会把它剥掉；这里必须按视频交付，否则会被
+                # live_photo() 压成封面静图，看起来像"视频被解析成图片"。
+                cover = first_media_url((item.get("video") or {}).get("cover"))
+                contents.append(
+                    self.create_video_content(
+                        motion,
+                        cover_url=cover,
+                        duration=_slide_duration(item) / 1000.0,
+                        ext_headers=headers,
+                    )
+                )
+            elif motion:
                 contents.append(live_photo(self, motion, still, headers=headers))
             elif still:
                 contents.extend(
@@ -802,6 +854,14 @@ class DouyinParser(BaseParser):
             is_video=bool(meta.video_url),
             extra=extra,
         )
+        # 图文作品里既有静图又有视频幻灯片时属于「混合媒体作品」：正文卡是内容卡，
+        # 不是纯视频的评论卡；原图也必须保留，不能被投递层以
+        # "视频预览自带封面，别重发原图"为由整批丢弃。
+        # 标记语义与微博 mixed_post_body_card 完全一致，共用同一条投递链路。
+        if any(isinstance(item, (ImageContent, GraphicsContent)) for item in contents) and any(
+            isinstance(item, (VideoContent, DynamicContent)) for item in contents
+        ):
+            extra["mixed_post_body_card"] = True
         # 卡片署名行：头像 + 发布日期（抖音接口不返回归属地）
         extra = apply_author_block(
             extra,
@@ -846,6 +906,82 @@ class DouyinParser(BaseParser):
         )
         result.url = f"https://www.douyin.com/note/{video_id}"
         return result
+
+    async def _fetch_slides_aweme(self, video_id: str) -> dict | None:
+        """取 slidesinfo 里的 aweme（失败返回 None，调用方按原结果继续）。"""
+        try:
+            resp = await self.http_get(
+                "https://www.iesdouyin.com/web/api/v2/aweme/slidesinfo/",
+                params={"aweme_ids": f"[{video_id}]", "request_source": "200"},
+                headers=self.android_headers,
+                allow_redirects=True,
+                timeout=10,
+                retries=1,
+            )
+        except Exception as exc:  # 网络问题不应影响已经解析成功的结果
+            logger.debug(f"[Douyin] slidesinfo 请求失败 {video_id}: {exc}")
+            return None
+        if resp.status_code >= 400:
+            logger.debug(f"[Douyin] slidesinfo 状态异常 {video_id}: {resp.status_code}")
+            return None
+        try:
+            payload = msgspec.json.decode(resp.content)
+        except Exception:
+            return None
+        details = payload.get("aweme_details") if isinstance(payload, dict) else None
+        if not details or not isinstance(details[0], dict):
+            return None
+        return details[0]
+
+    @staticmethod
+    def _has_video_slide(aweme: dict) -> bool:
+        if not isinstance(aweme, dict):
+            return False
+        post = aweme.get("image_post_info")
+        post = post if isinstance(post, dict) else {}
+        items = (
+            post.get("images")
+            or post.get("image_list")
+            or aweme.get("images")
+            or aweme.get("image_list")
+            or aweme.get("image_infos")
+            or []
+        )
+        return any(_is_video_slide(item) for item in items if isinstance(item, dict))
+
+    async def _enrich_gallery_video_slides(self, result, vid: str):
+        """图文作品的 SSR 回流数据会剥掉视频幻灯片的 video 对象。
+
+        `https://www.douyin.com/note/<id>` 这类地址不会走 parse_slides，
+        拿到的是降级后的 SSR 数据：视频幻灯片只留下封面静图，
+        用户看到的结果就是"本该是视频的被解析成了图片"。
+        slidesinfo 接口保留完整 video 对象，这里按需补一次：
+        仅当结果里没有视频、且有图片时才请求，避免给纯视频作品多打一次请求。
+        """
+        if result is None or getattr(result, "has_video", False):
+            return result
+        images = [
+            content
+            for content in getattr(result, "contents", []) or []
+            if isinstance(content, ImageContent)
+        ]
+        if not images:
+            return result
+        aweme = await self._fetch_slides_aweme(vid)
+        if not aweme or not self._has_video_slide(aweme):
+            return result
+        try:
+            enriched = await self._build_result_from_aweme(
+                aweme, vid, media_headers=self.android_headers
+            )
+        except Exception as exc:
+            logger.debug(f"[Douyin] slidesinfo 结果构建失败 {vid}: {exc}")
+            return result
+        if not getattr(enriched, "has_video", False):
+            return result
+        logger.debug(f"[Douyin] 已用 slidesinfo 补回视频幻灯片: {vid}")
+        enriched.url = result.url or f"https://www.douyin.com/note/{vid}"
+        return enriched
 
     async def _parse_with_ytdlp(self, vid: str):
         if not self.cookies:

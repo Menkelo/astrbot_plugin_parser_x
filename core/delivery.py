@@ -663,11 +663,10 @@ class DeliveryMixin:
             seen_media.add(id(content))
             media_contents.append(content)
 
-        # A mixed Weibo gallery contains actual source images, not video covers.
-        # Preserve its ordered media plan and deliver the whole work as one forward.
+        # 混合媒体作品（如微博九宫格配视频、抖音图文里的视频幻灯片）里的图片是
+        # 作品自身的原图，不是视频封面。整条作品按原顺序装进一条合并转发。
         mixed_media_forward = (
-            result.platform.name == 'weibo'
-            and result.has_video
+            result.has_video
             and result.extra.get('mixed_post_body_card') is True
             and any(isinstance(content, (ImageContent, GraphicsContent))
                     for content in media_contents)
@@ -799,7 +798,7 @@ class DeliveryMixin:
                 tips = [Plain(error) for error in errors] if show_download_fail_tip else []
                 await send_forward_segments(
                     [*leading, *segments, *tips],
-                    failure_label='微博混合媒体合并转发失败',
+                    failure_label=f'{result.platform.display_name}混合媒体合并转发失败',
                 )
             finally:
                 if card_task is not None and not card_task.done():
