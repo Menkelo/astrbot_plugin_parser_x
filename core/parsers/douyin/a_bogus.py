@@ -5,10 +5,14 @@ import random
 import time
 from collections.abc import Iterable
 
-# Modified Python adaptation of the A-Bogus behavior tracked in
-# rconsole-plugin/utils/a-bogus.cjs, distributed under Mulan PSL v2.
-# See THIRD_PARTY_NOTICES.md for the complete bilingual Mulan PSL v2 license.
-# The upstream module states that it is for learning and communication use.
+# Modified Python adaptation of rconsole-plugin/utils/a-bogus.cjs.
+# Source: https://github.com/zhiyu1998/rconsole-plugin/blob/master/utils/a-bogus.cjs
+# Upstream repository license: Mulan PSL v2. The file also carries this notice:
+# All the content in this article is only for learning and communication use, not for any other purpose, strictly prohibited for commercial use and illegal use, otherwise all the consequences are irrelevant to the author!
+# 中文说明：上游声明仅供学习交流，禁止商用及非法使用。
+# 仓库许可证与该文件额外声明的适用关系尚未澄清；此处保留原文，
+# 不据此宣称已取得额外授权，也不以插件 MIT 许可覆盖本模块的上游条款。
+# See THIRD_PARTY_NOTICES.md for attribution, unresolved scope, and full license.
 
 _S3 = "ckdp1h4ZKsUB80/Mfvw36XIgR25+WQAlEi7NLboqYTOPuzmFjJnryx9HVGDaStCe"
 _S4 = "Dkdpgh2ZmsQB80/MfvV36XI1R45-WUAlEixNLwoqYTOPuzKFjJnry79HbGcaStCe"

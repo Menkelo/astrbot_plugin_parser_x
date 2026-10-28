@@ -3,6 +3,16 @@
 逆向自 https://www.xiaoheihe.cn 前端 ``hkey&nonce.js``，与社区实现
 (nonebot-plugin-parser-lite / 焦化葱葱) 的等价变换保持一致。
 
+来源：https://github.com/sokoko-org/nonebot-plugin-parser-lite/blob/main/src/nonebot_plugin_parser_lite/parsers/heybox/encrypt.py
+上游仓库采用 MIT；保留上游文件声明原文：
+本脚本由 焦化葱葱(negichan) 提供
+感谢 焦化葱葱(negichan) 的逆向工程
+感谢群友们的积极测试和为逆向付出的努力
+严禁非法滥用或用于渗透测试
+
+上述为对应模块的上游声明，不扩大为全项目限制，也不代表获得平台授权。
+完整许可、版权及文件声明适用范围待澄清事项见 THIRD_PARTY_NOTICES.md。
+
 算法要点：
 - ``nonce = md5(str(ts)).hexdigest().upper()``
 - ``hkey`` 由路径、``ts + 1``、``nonce`` 三者交织后 MD5 得到
